@@ -1,56 +1,208 @@
-import * as React from 'react';
-import { View, Text, FlatList, Image, TouchableOpacity, TextInput } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, FlatList, TouchableOpacity, TextInput, ScrollView, Linking, StyleSheet, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
-const PRODUCTS = [
-  { id: 'BRQ-001', name_fr: 'Brique en bloc ciment', name_en: 'Cement block brick', unit: 'pcs', price: 0.45, img: 'https://images.unsplash.com/photo-1496247749665-49cf5b1022e9?q=80&w=1200&auto=format&fit=crop' },
-  { id: 'SAB-001', name_fr: 'Sable concassé (m³)', name_en: 'Crushed sand (m³)', unit: 'm3', price: 18.00, img: 'https://images.unsplash.com/photo-1509099836639-18ba1795216d?q=80&w=1200&auto=format&fit=crop' },
-  { id: 'MOL-001', name_fr: 'Moellon', name_en: 'Rubble stone', unit: 'ton', price: 22.00, img: 'https://images.unsplash.com/photo-1606761568499-6d2451b23c85?q=80&w=1200&auto=format&fit=crop' },
-  { id: 'PAV-001', name_fr: 'Pavé', name_en: 'Paver', unit: 'sqm', price: 14.00, img: 'https://images.unsplash.com/photo-1599842055622-5b164b4a9490?q=80&w=1200&auto=format&fit=crop' },
-  { id: 'CIM-001', name_fr: 'Ciment (sac 50kg)', name_en: 'Cement (50kg)', unit: 'bag', price: 11.50, img: 'https://images.unsplash.com/photo-1561070791-2526d30994b5?q=80&w=1200&auto=format&fit=crop' },
-  { id: 'CAR-001', name_fr: 'Carreaux (m²)', name_en: 'Tiles (sqm)', unit: 'sqm', price: 19.00, img: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=1200&auto=format&fit=crop' }
-];
-
 const Stack = createNativeStackNavigator();
 
-function HomeScreen({ navigation }) {
-  const [q, setQ] = React.useState('');
-  const [lang, setLang] = React.useState<'fr'|'en'>('fr');
-  const data = PRODUCTS.filter(p => (p.name_fr + ' ' + p.name_en).toLowerCase().includes(q.toLowerCase()));
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 16, backgroundColor: '#F8FAFC' },
+  header: { fontWeight: '800', fontSize: 24, marginBottom: 8 },
+  description: { marginBottom: 12, color: '#666' },
+  input: { backgroundColor: 'white', padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#ddd' },
+  button: { padding: 14, borderRadius: 8, marginTop: 12, alignItems: 'center' },
+  buttonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+  productCard: { backgroundColor: 'white', borderRadius: 8, padding: 12, marginBottom: 12 },
+  productName: { fontWeight: '700', fontSize: 16 },
+  productPrice: { fontWeight: '700', color: '#22C55E', marginTop: 4 },
+  link: { color: '#3B82F6', textDecorationLine: 'underline', marginTop: 12, textAlign: 'center' },
+});
+
+const PRODUCTS = [
+  { id: '1', name_fr: 'Brique', name_en: 'Brick', unit: 'pcs', price: 0.45 },
+  { id: '2', name_fr: 'Sable', name_en: 'Sand', unit: 'm3', price: 18.00 },
+  { id: '3', name_fr: 'Moellon', name_en: 'Stone', unit: 'ton', price: 22.00 },
+  { id: '4', name_fr: 'Ciment', name_en: 'Cement', unit: 'bag', price: 11.50 },
+  { id: '5', name_fr: 'Pavé', name_en: 'Paver', unit: 'sqm', price: 14.00 },
+];
+
+// Écran de connexion
+function LoginScreen({ navigation, onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+
+  const handleLogin = () => {
+    if (!email || !password) {
+      Alert.alert('Erreur', 'Veuillez remplir tous les champs');
+      return;
+    }
+    onLogin({ email, name: email.split('@')[0] });
+  };
+
   return (
-    <View style={{ flex: 1, padding: 16, backgroundColor: '#F8FAFC' }}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Text style={{ fontWeight: '800', fontSize: 24 }}>MonChantier</Text>
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <TouchableOpacity onPress={() => setLang('fr')}><Text>FR</Text></TouchableOpacity>
-          <TouchableOpacity onPress={() => setLang('en')}><Text>EN</Text></TouchableOpacity>
-        </View>
+    <ScrollView style={styles.container}>
+      <View style={{ marginTop: 40 }}>
+        <Text style={styles.header}>MonChantier</Text>
+        <Text style={styles.description}>Connectez-vous à votre compte</Text>
       </View>
 
-      <Text style={{ marginTop: 8, color: '#475569' }}>
-        {lang==='fr' ? 'Achetez agrégats et matériaux, livrés à votre chantier.' : 'Buy aggregates and materials, delivered to your site.'}
-      </Text>
+      <TextInput
+        placeholder="Email"
+        value={email}
+        onChangeText={setEmail}
+        keyboardType="email-address"
+        style={styles.input}
+      />
 
       <TextInput
-        placeholder={lang==='fr'?'Rechercher...':'Search...'}
-        value={q}
-        onChangeText={setQ}
-        style={{ backgroundColor: 'white', padding: 12, borderRadius: 12, marginTop: 12, borderWidth: 1, borderColor: '#E2E8F0' }}
+        placeholder="Mot de passe"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+        style={styles.input}
+      />
+
+      <TouchableOpacity
+        style={[styles.button, { backgroundColor: '#3B82F6' }]}
+        onPress={handleLogin}
+      >
+        <Text style={styles.buttonText}>Se connecter</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={() => navigation.navigate('Register')}>
+        <Text style={styles.link}>Créer un compte</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[styles.button, { backgroundColor: '#6B7280', marginTop: 30 }]}
+        onPress={() => {
+          // Accès en tant que visiteur
+          onLogin({ email: 'guest@monchantier.com', name: 'Visiteur' });
+        }}
+      >
+        <Text style={styles.buttonText}>Continuer en tant que visiteur</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+// Écran d'inscription
+function RegisterScreen({ navigation, onLogin }) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [phone, setPhone] = useState('');
+
+  const handleRegister = () => {
+    if (!name || !email || !password || !phone) {
+      Alert.alert('Erreur', 'Veuillez remplir tous les champs');
+      return;
+    }
+    Alert.alert('Succès', 'Compte créé avec succès!');
+    onLogin({ email, name });
+  };
+
+  return (
+    <ScrollView style={styles.container}>
+      <View style={{ marginTop: 20 }}>
+        <Text style={styles.header}>Créer un compte</Text>
+        <Text style={styles.description}>Rejoignez MonChantier</Text>
+      </View>
+
+      <TextInput
+        placeholder="Nom complet"
+        value={name}
+        onChangeText={setName}
+        style={styles.input}
+      />
+
+      <TextInput
+        placeholder="Email"
+        value={email}
+        onChangeText={setEmail}
+        keyboardType="email-address"
+        style={styles.input}
+      />
+
+      <TextInput
+        placeholder="Téléphone"
+        value={phone}
+        onChangeText={setPhone}
+        keyboardType="phone-pad"
+        style={styles.input}
+      />
+
+      <TextInput
+        placeholder="Mot de passe"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+        style={styles.input}
+      />
+
+      <TouchableOpacity
+        style={[styles.button, { backgroundColor: '#10B981' }]}
+        onPress={handleRegister}
+      >
+        <Text style={styles.buttonText}>S'inscrire</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={() => navigation.navigate('Login')}>
+        <Text style={styles.link}>Déjà inscrit? Se connecter</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  );
+}
+
+// Écran d'accueil (Liste des produits)
+function HomeScreen({ navigation, user }) {
+  const [searchText, setSearchText] = useState('');
+  const [language, setLanguage] = useState('fr');
+
+  const filteredProducts = PRODUCTS.filter(p =>
+    (p.name_fr + ' ' + p.name_en).toLowerCase().includes(searchText.toLowerCase())
+  );
+
+  return (
+    <View style={styles.container}>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <View>
+          <Text style={styles.header}>MonChantier</Text>
+          <Text style={{ color: '#666' }}>Bienvenue, {user.name}!</Text>
+        </View>
+        <TouchableOpacity style={{ backgroundColor: '#EF4444', padding: 8, borderRadius: 6 }}>
+          <Text style={{ color: 'white', fontWeight: '600' }}>Déconnexion</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
+        <TouchableOpacity onPress={() => setLanguage('fr')}>
+          <Text style={{ fontWeight: language === 'fr' ? 'bold' : 'normal' }}>FR</Text>
+        </TouchableOpacity>
+        <TouchableOpacity onPress={() => setLanguage('en')}>
+          <Text style={{ fontWeight: language === 'en' ? 'bold' : 'normal' }}>EN</Text>
+        </TouchableOpacity>
+      </View>
+
+      <TextInput
+        placeholder={language === 'fr' ? 'Rechercher...' : 'Search...'}
+        value={searchText}
+        onChangeText={setSearchText}
+        style={styles.input}
       />
 
       <FlatList
-        style={{ marginTop: 12 }}
-        data={data}
+        data={filteredProducts}
         keyExtractor={item => item.id}
+        scrollEnabled={false}
         renderItem={({ item }) => (
-          <TouchableOpacity onPress={() => navigation.navigate('Product', { item, lang })} style={{ backgroundColor: 'white', borderRadius: 16, padding: 12, marginBottom: 12, flexDirection: 'row', gap: 12 }}>
-            <Image source={{ uri: item.img }} style={{ width: 64, height: 64, borderRadius: 12 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontWeight: '700' }}>{lang==='fr'?item.name_fr:item.name_en}</Text>
-              <Text style={{ color: '#64748B' }}>{item.id} · {item.unit}</Text>
-              <Text style={{ marginTop: 4, fontWeight: '700' }}>${item.price.toFixed(2)}</Text>
-            </View>
+          <TouchableOpacity
+            style={styles.productCard}
+            onPress={() => navigation.navigate('Product', { product: item, lang: language })}
+          >
+            <Text style={styles.productName}>{language === 'fr' ? item.name_fr : item.name_en}</Text>
+            <Text style={{ color: '#999' }}>{item.unit}</Text>
+            <Text style={styles.productPrice}>${item.price.toFixed(2)}</Text>
           </TouchableOpacity>
         )}
       />
@@ -58,30 +210,108 @@ function HomeScreen({ navigation }) {
   );
 }
 
-function ProductScreen({ route }) {
-  const { item, lang } = route.params;
-  const message = encodeURIComponent((lang==='fr'?'Bonjour, je souhaite commander: ':'Hello, I want to order: ') + `${item.id} ${lang==='fr'?item.name_fr:item.name_en}`);
-  const wa = `https://wa.me/243999972466?text=${message}`;
+// Écran détail du produit
+function ProductScreen({ route, navigation }) {
+  try {
+    const { product, lang } = route.params;
+
+    const handleWhatsApp = () => {
+      const message = encodeURIComponent(
+        (lang === 'fr' ? 'Bonjour, je veux commander: ' : 'Hello, I want to order: ') +
+        (lang === 'fr' ? product.name_fr : product.name_en)
+      );
+      const wa = `https://wa.me/243999972466?text=${message}`;
+      Linking.openURL(wa).catch(() => Alert.alert('Erreur', 'WhatsApp non disponible'));
+    };
+
+    return (
+      <ScrollView style={styles.container}>
+        <Text style={styles.header}>{lang === 'fr' ? product.name_fr : product.name_en}</Text>
+        <Text style={{ color: '#999', marginBottom: 12 }}>{product.unit}</Text>
+        <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#22C55E' }}>${product.price.toFixed(2)}</Text>
+
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#25D366' }]}
+          onPress={handleWhatsApp}
+        >
+          <Text style={styles.buttonText}>
+            {lang === 'fr' ? 'Commander via WhatsApp' : 'Order via WhatsApp'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#666' }]}
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.buttonText}>{lang === 'fr' ? 'Retour' : 'Back'}</Text>
+        </TouchableOpacity>
+      </ScrollView>
+    );
+  } catch (error) {
+    return (
+      <View style={styles.container}>
+        <Text style={{ color: 'red' }}>Erreur: {error.message}</Text>
+      </View>
+    );
+  }
+}
+
+// Navigation principale
+function AuthStack({ onLogin }) {
   return (
-    <View style={{ flex: 1, padding: 16, backgroundColor: '#F8FAFC' }}>
-      <Image source={{ uri: item.img }} style={{ width: '100%', height: 220, borderRadius: 16 }} />
-      <Text style={{ fontWeight: '800', fontSize: 22, marginTop: 12 }}>{lang==='fr'?item.name_fr:item.name_en}</Text>
-      <Text style={{ color: '#64748B' }}>{item.id} · {item.unit}</Text>
-      <Text style={{ marginTop: 8, fontWeight: '800', fontSize: 18 }}>${item.price.toFixed(2)}</Text>
-      <TouchableOpacity onPress={() => { /* Linking.openURL(wa) would be used in a real app */ }} style={{ backgroundColor: '#DC2626', padding: 14, borderRadius: 14, marginTop: 16 }}>
-        <Text style={{ textAlign: 'center', color: 'white', fontWeight: '700' }}>{lang==='fr'?'Commander via WhatsApp':'Order via WhatsApp'}</Text>
-      </TouchableOpacity>
-    </View>
+    <Stack.Navigator
+      screenOptions={{ headerShown: false }}
+    >
+      <Stack.Screen name="Login">
+        {props => <LoginScreen {...props} onLogin={onLogin} />}
+      </Stack.Screen>
+      <Stack.Screen name="Register">
+        {props => <RegisterScreen {...props} onLogin={onLogin} />}
+      </Stack.Screen>
+    </Stack.Navigator>
   );
 }
 
+function AppStack({ user, onLogout }) {
+  return (
+    <Stack.Navigator
+      screenOptions={{
+        headerStyle: { backgroundColor: '#f5f5f5' },
+        headerTintColor: '#000',
+        headerTitleStyle: { fontWeight: 'bold' },
+      }}
+    >
+      <Stack.Screen name="Home" options={{ headerShown: false }}>
+        {props => <HomeScreen {...props} user={user} />}
+      </Stack.Screen>
+      <Stack.Screen
+        name="Product"
+        component={ProductScreen}
+        options={{ title: 'Détails du produit' }}
+      />
+    </Stack.Navigator>
+  );
+}
+
+// App principale
 export default function App() {
+  const [user, setUser] = useState(null);
+
+  const handleLogin = (userData) => {
+    setUser(userData);
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+  };
+
   return (
     <NavigationContainer>
-      <Stack.Navigator>
-        <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: false }} />
-        <Stack.Screen name="Product" component={ProductScreen} options={{ title: 'Produit' }} />
-      </Stack.Navigator>
+      {user ? (
+        <AppStack user={user} onLogout={handleLogout} />
+      ) : (
+        <AuthStack onLogin={handleLogin} />
+      )}
     </NavigationContainer>
   );
 }
