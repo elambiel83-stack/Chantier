@@ -5,14 +5,26 @@
     "scheme": "monchantier",
     "version": "0.1.0",
     "orientation": "portrait",
-    "icon": "../assets/monchantier_logo.png",
+    "icon": "./assets/icon.png",
     "splash": {
-      "image": "../assets/monchantier_logo.png",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#111827"
     },
     "assetBundlePatterns": [
       "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#111827"
+      }
+    },
+    "plugins": [
+      "expo-web-browser"
     ]
   }
 }

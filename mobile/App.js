@@ -2,6 +2,10 @@ import React, { useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, TextInput, ScrollView, Linking, StyleSheet, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import * as WebBrowser from 'expo-web-browser';
+import * as Google from 'expo-auth-session/providers/google';
+
+WebBrowser.maybeCompleteAuthSession();
 
 const Stack = createNativeStackNavigator();
 
@@ -12,10 +16,15 @@ const styles = StyleSheet.create({
   input: { backgroundColor: 'white', padding: 12, borderRadius: 8, marginBottom: 12, borderWidth: 1, borderColor: '#ddd' },
   button: { padding: 14, borderRadius: 8, marginTop: 12, alignItems: 'center' },
   buttonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+  socialButton: { padding: 12, borderRadius: 8, marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'white', borderWidth: 1, borderColor: '#ddd' },
+  socialButtonText: { fontWeight: '600', marginLeft: 8, color: '#333' },
   productCard: { backgroundColor: 'white', borderRadius: 8, padding: 12, marginBottom: 12 },
   productName: { fontWeight: '700', fontSize: 16 },
   productPrice: { fontWeight: '700', color: '#22C55E', marginTop: 4 },
   link: { color: '#3B82F6', textDecorationLine: 'underline', marginTop: 12, textAlign: 'center' },
+  divider: { flexDirection: 'row', alignItems: 'center', marginVertical: 16 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: '#ddd' },
+  dividerText: { marginHorizontal: 8, color: '#999' },
 });
 
 const PRODUCTS = [
@@ -30,13 +39,47 @@ const PRODUCTS = [
 function LoginScreen({ navigation, onLogin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com', // À remplacer
+    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
+    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
+  });
+
+  React.useEffect(() => {
+    if (response?.type === 'success') {
+      const { authentication } = response;
+      handleGoogleLogin(authentication);
+    }
+  }, [response]);
 
   const handleLogin = () => {
     if (!email || !password) {
       Alert.alert('Erreur', 'Veuillez remplir tous les champs');
       return;
     }
-    onLogin({ email, name: email.split('@')[0] });
+    onLogin({ email, name: email.split('@')[0], loginMethod: 'email' });
+  };
+
+  const handleGoogleLogin = (authentication) => {
+    if (authentication?.accessToken) {
+      // En production, vérifier le token avec le backend
+      onLogin({ 
+        email: 'user@gmail.com', 
+        name: 'Google User',
+        loginMethod: 'google'
+      });
+    }
+  };
+
+  const handleGooglePress = async () => {
+    try {
+      const result = await promptAsync();
+      if (result?.type !== 'success') {
+        Alert.alert('Erreur', 'Connexion Google annulée');
+      }
+    } catch (err) {
+      Alert.alert('Erreur', 'Erreur de connexion Google');
+    }
   };
 
   return (
@@ -46,6 +89,7 @@ function LoginScreen({ navigation, onLogin }) {
         <Text style={styles.description}>Connectez-vous à votre compte</Text>
       </View>
 
+      {/* Connexion classique */}
       <TextInput
         placeholder="Email"
         value={email}
@@ -69,15 +113,52 @@ function LoginScreen({ navigation, onLogin }) {
         <Text style={styles.buttonText}>Se connecter</Text>
       </TouchableOpacity>
 
+      {/* Divider */}
+      <View style={styles.divider}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>OU</Text>
+        <View style={styles.dividerLine} />
+      </View>
+
+      {/* Google Sign In */}
+      <TouchableOpacity
+        style={styles.socialButton}
+        onPress={handleGooglePress}
+        disabled={!request}
+      >
+        <Text style={{ fontSize: 20 }}>🔵</Text>
+        <Text style={styles.socialButtonText}>Se connecter avec Google</Text>
+      </TouchableOpacity>
+
+      {/* Gmail Sign In (alias Google) */}
+      <TouchableOpacity
+        style={styles.socialButton}
+        onPress={handleGooglePress}
+        disabled={!request}
+      >
+        <Text style={{ fontSize: 20 }}>📧</Text>
+        <Text style={styles.socialButtonText}>Se connecter avec Gmail</Text>
+      </TouchableOpacity>
+
+      {/* Facebook */}
+      <TouchableOpacity
+        style={styles.socialButton}
+        onPress={() => Alert.alert('Info', 'Facebook login à venir')}
+      >
+        <Text style={{ fontSize: 20 }}>f</Text>
+        <Text style={styles.socialButtonText}>Se connecter avec Facebook</Text>
+      </TouchableOpacity>
+
+      {/* Inscription */}
       <TouchableOpacity onPress={() => navigation.navigate('Register')}>
         <Text style={styles.link}>Créer un compte</Text>
       </TouchableOpacity>
 
+      {/* Visiteur */}
       <TouchableOpacity
         style={[styles.button, { backgroundColor: '#6B7280', marginTop: 30 }]}
         onPress={() => {
-          // Accès en tant que visiteur
-          onLogin({ email: 'guest@monchantier.com', name: 'Visiteur' });
+          onLogin({ email: 'guest@monchantier.com', name: 'Visiteur', loginMethod: 'guest' });
         }}
       >
         <Text style={styles.buttonText}>Continuer en tant que visiteur</Text>
@@ -92,6 +173,24 @@ function RegisterScreen({ navigation, onLogin }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com',
+    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
+    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
+  });
+
+  React.useEffect(() => {
+    if (response?.type === 'success') {
+      const { authentication } = response;
+      if (authentication?.accessToken) {
+        onLogin({ 
+          email: 'user@gmail.com', 
+          name: 'Google User',
+          loginMethod: 'google'
+        });
+      }
+    }
+  }, [response]);
 
   const handleRegister = () => {
     if (!name || !email || !password || !phone) {
@@ -99,7 +198,18 @@ function RegisterScreen({ navigation, onLogin }) {
       return;
     }
     Alert.alert('Succès', 'Compte créé avec succès!');
-    onLogin({ email, name });
+    onLogin({ email, name, loginMethod: 'email' });
+  };
+
+  const handleGooglePress = async () => {
+    try {
+      const result = await promptAsync();
+      if (result?.type !== 'success') {
+        Alert.alert('Erreur', 'Connexion Google annulée');
+      }
+    } catch (err) {
+      Alert.alert('Erreur', 'Erreur de connexion Google');
+    }
   };
 
   return (
@@ -109,6 +219,7 @@ function RegisterScreen({ navigation, onLogin }) {
         <Text style={styles.description}>Rejoignez MonChantier</Text>
       </View>
 
+      {/* Inscription classique */}
       <TextInput
         placeholder="Nom complet"
         value={name}
@@ -147,6 +258,34 @@ function RegisterScreen({ navigation, onLogin }) {
         <Text style={styles.buttonText}>S'inscrire</Text>
       </TouchableOpacity>
 
+      {/* Divider */}
+      <View style={styles.divider}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>OU</Text>
+        <View style={styles.dividerLine} />
+      </View>
+
+      {/* Google Sign Up */}
+      <TouchableOpacity
+        style={styles.socialButton}
+        onPress={handleGooglePress}
+        disabled={!request}
+      >
+        <Text style={{ fontSize: 20 }}>🔵</Text>
+        <Text style={styles.socialButtonText}>S'inscrire avec Google</Text>
+      </TouchableOpacity>
+
+      {/* Gmail Sign Up */}
+      <TouchableOpacity
+        style={styles.socialButton}
+        onPress={handleGooglePress}
+        disabled={!request}
+      >
+        <Text style={{ fontSize: 20 }}>📧</Text>
+        <Text style={styles.socialButtonText}>S'inscrire avec Gmail</Text>
+      </TouchableOpacity>
+
+      {/* Connexion */}
       <TouchableOpacity onPress={() => navigation.navigate('Login')}>
         <Text style={styles.link}>Déjà inscrit? Se connecter</Text>
       </TouchableOpacity>
@@ -154,7 +293,7 @@ function RegisterScreen({ navigation, onLogin }) {
   );
 }
 
-// Écran d'accueil (Liste des produits)
+// Écran d'accueil
 function HomeScreen({ navigation, user }) {
   const [searchText, setSearchText] = useState('');
   const [language, setLanguage] = useState('fr');
@@ -169,6 +308,7 @@ function HomeScreen({ navigation, user }) {
         <View>
           <Text style={styles.header}>MonChantier</Text>
           <Text style={{ color: '#666' }}>Bienvenue, {user.name}!</Text>
+          <Text style={{ color: '#999', fontSize: 12 }}>({user.loginMethod})</Text>
         </View>
         <TouchableOpacity style={{ backgroundColor: '#EF4444', padding: 8, borderRadius: 6 }}>
           <Text style={{ color: 'white', fontWeight: '600' }}>Déconnexion</Text>
@@ -256,12 +396,10 @@ function ProductScreen({ route, navigation }) {
   }
 }
 
-// Navigation principale
+// Navigation
 function AuthStack({ onLogin }) {
   return (
-    <Stack.Navigator
-      screenOptions={{ headerShown: false }}
-    >
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="Login">
         {props => <LoginScreen {...props} onLogin={onLogin} />}
       </Stack.Screen>
@@ -272,7 +410,7 @@ function AuthStack({ onLogin }) {
   );
 }
 
-function AppStack({ user, onLogout }) {
+function AppStack({ user }) {
   return (
     <Stack.Navigator
       screenOptions={{
@@ -293,24 +431,15 @@ function AppStack({ user, onLogout }) {
   );
 }
 
-// App principale
 export default function App() {
   const [user, setUser] = useState(null);
-
-  const handleLogin = (userData) => {
-    setUser(userData);
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-  };
 
   return (
     <NavigationContainer>
       {user ? (
-        <AppStack user={user} onLogout={handleLogout} />
+        <AppStack user={user} />
       ) : (
-        <AuthStack onLogin={handleLogin} />
+        <AuthStack onLogin={setUser} />
       )}
     </NavigationContainer>
   );
