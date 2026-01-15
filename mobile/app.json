@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "MonChantier",
+    "slug": "monchantier",
+    "scheme": "monchantier",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "../assets/monchantier_logo.png",
+    "splash": {
+      "image": "../assets/monchantier_logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#111827"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ]
+  }
+}

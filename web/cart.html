@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Panier — MonChantier</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="config.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <div class="max-w-4xl mx-auto px-4 py-4 md:py-8">
+    <h1 class="text-2xl md:text-3xl font-bold mb-4 md:mb-6" data-i18n="cart">Panier</h1>
+    <div id="items" class="space-y-3 md:space-y-4"></div>
+    <div class="mt-6 md:mt-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div class="text-lg md:text-xl font-semibold" id="total">0</div>
+      <a id="checkout" class="w-full sm:w-auto px-4 md:px-5 py-3 rounded-xl bg-red-600 text-white hover:bg-red-700 text-center text-sm md:text-base" href="#" target="_blank" data-i18n="checkout">Commander via WhatsApp</a>
+    </div>
+    <p class="text-slate-500 mt-4 md:mt-6 text-sm md:text-base" data-i18n="cartNote">Astuce: Ajoutez votre localisation Google Maps dans le message WhatsApp pour une livraison plus rapide.</p>
+  </div>
+  <script src="products.js"></script>
+  <script src="site.js"></script>
+</body>
+</html>

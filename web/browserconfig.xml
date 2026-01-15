@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<browserconfig>
+  <msapplication>
+    <tile>
+      <square150x150logo src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 150 150'><rect fill='%23dc2626' width='150' height='150'/><text x='75' y='95' font-size='80' text-anchor='middle' fill='%23ffffff'>🏗️</text></svg>" />
+      <TileColor>#dc2626</TileColor>
+    </tile>
+  </msapplication>
+</browserconfig>

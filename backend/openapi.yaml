@@ -1,0 +1,39 @@
+openapi: 3.0.3
+info:
+  title: MonChantier API
+  version: 0.1.0
+servers:
+  - url: https://api.monchantier.example/v1
+paths:
+  /products:
+    get:
+      summary: List products
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+      responses:
+        '200':
+          description: Ok
+  /orders:
+    post:
+      summary: Create an order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                customer:
+                  type: object
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      qty: { type: number }
+      responses:
+        '201':
+          description: Created

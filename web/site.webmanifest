@@ -1,0 +1,66 @@
+{
+  "name": "MonChantier - Agrégats & Matériaux de Construction",
+  "short_name": "MonChantier",
+  "description": "E-commerce de matériaux et services de construction. Livraison chantier, paiement flexible.",
+  "start_url": "/index.html",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#ffffff",
+  "theme_color": "#dc2626",
+  "categories": ["shopping", "business"],
+  "screenshots": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 540 720'><rect fill='%23f8fafc' width='540' height='720'/><text x='270' y='360' font-size='60' text-anchor='middle' fill='%23dc2626'>🏗️ MonChantier</text></svg>",
+      "sizes": "540x720",
+      "type": "image/svg+xml",
+      "form_factor": "narrow"
+    }
+  ],
+  "icons": [
+    { 
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%23dc2626' width='192' height='192'/><text x='96' y='110' font-size='100' text-anchor='middle' fill='%23ffffff'>🏗️</text></svg>", 
+      "sizes": "192x192", 
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    { 
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect fill='%23dc2626' width='512' height='512'/><text x='256' y='310' font-size='280' text-anchor='middle' fill='%23ffffff'>🏗️</text></svg>", 
+      "sizes": "512x512", 
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    { 
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'><rect fill='%23dc2626' width='192' height='192'/><circle cx='96' cy='96' r='90' fill='none' stroke='%23ffffff' stroke-width='8'/><text x='96' y='110' font-size='100' text-anchor='middle' fill='%23ffffff'>🏗️</text></svg>", 
+      "sizes": "192x192", 
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Catalogue",
+      "short_name": "Catalogue",
+      "description": "Parcourir le catalogue de produits",
+      "url": "/index.html#catalog",
+      "icons": [
+        {
+          "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'><text x='48' y='60' font-size='70' text-anchor='middle'>📦</text></svg>",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Panier",
+      "short_name": "Panier",
+      "description": "Voir votre panier",
+      "url": "/cart.html",
+      "icons": [
+        {
+          "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 96 96'><text x='48' y='60' font-size='70' text-anchor='middle'>🛒</text></svg>",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ]
+}
