@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Confirmation de paiement | MonChantier</title><script src="https://cdn.tailwindcss.com"></script><link rel="stylesheet" href="styles.css"><script src="config.js"></script></head>
+<body class="bg-slate-50 text-slate-800"><main class="max-w-xl mx-auto px-4 py-16"><h1 class="text-3xl font-bold">Confirmation du paiement</h1><p id="status" class="mt-4" role="status" aria-live="polite">Vérification sécurisée de votre paiement...</p><a class="mt-6 inline-block text-red-600" href="index.html">Retour au catalogue</a></main><script>
+const params = new URLSearchParams(window.location.search);
+const orderId = params.get('orderId');
+const confirmationToken = params.get('ct');
+const status = document.getElementById('status');
+if (!orderId || !confirmationToken) { status.textContent = 'Lien de confirmation incomplet. Contactez le support avec votre référence de commande.'; } else {
+  window.apiCall(`/orders/${orderId}/paypal/capture`, { method: 'POST', body: { confirmationToken } }).then((response) => {
+    localStorage.removeItem('cart');
+    status.textContent = `Paiement confirmé. Votre commande ${response.orderId} est confirmée.`;
+  }).catch((error) => { status.textContent = error.message || 'Le paiement n’a pas pu être confirmé.'; });
+}
+</script></body></html>

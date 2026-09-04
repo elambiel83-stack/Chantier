@@ -10,8 +10,12 @@
     cat_produits: "Produits",
     cat_services: "Services",
     cat_facilitation: "Facilitation",
+    cat_partenaires: "Partenaires",
     cart: "Panier",
     checkout: "Commander via WhatsApp",
+    pay: "Payer et commander",
+    emptyCart: "Votre panier est vide.",
+    removedItems: "Des articles indisponibles ont été retirés de votre panier.",
     contact: "Contacts",
     legal: "Mentions",
     footerAbout: "E‑commerce de matériaux et services de construction basé à Kolwezi (RDC). Livraison chantier, paiement flexible.",
@@ -28,25 +32,47 @@
     cat_produits: "Products",
     cat_services: "Services",
     cat_facilitation: "Facilitation",
+    cat_partenaires: "Partners",
     cart: "Cart",
     checkout: "Order via WhatsApp",
+    pay: "Pay and order",
+    emptyCart: "Your cart is empty.",
+    removedItems: "Unavailable items were removed from your cart.",
     contact: "Contacts",
     legal: "Legal",
     footerAbout: "E‑commerce for construction materials based in Kolwezi (DRC). Site delivery, flexible payment.",
     cartNote: "Tip: Include your Google Maps location in the WhatsApp message for faster delivery."
   };
   let lang = localStorage.getItem("lang") || "fr";
+  let currency = localStorage.getItem("currency") || window.COMMERCE_CONFIG?.defaultCurrency || "USD";
   const dict = () => lang === "fr" ? FR : EN;
   function applyI18n() {
+    document.documentElement.lang = lang;
     document.querySelectorAll("[data-i18n]").forEach(el => {
       const key = el.getAttribute("data-i18n");
       el.textContent = dict()[key] || el.textContent;
     });
   }
-  function money(v){ return new Intl.NumberFormat(lang === "fr" ? "fr-FR" : "en-US", {style:"currency", currency:"USD"}).format(v); }
+  function money(v){
+    const currencyConfig = window.COMMERCE_CONFIG?.currencies?.[currency] || { locale: "en-US", rate: 1 };
+    return new Intl.NumberFormat(currencyConfig.locale, {style:"currency", currency}).format(v * currencyConfig.rate);
+  }
 
-  document.getElementById("lang-fr").onclick = () => { lang="fr"; localStorage.setItem("lang","fr"); applyI18n(); render(); };
-  document.getElementById("lang-en").onclick = () => { lang="en"; localStorage.setItem("lang","en"); applyI18n(); render(); };
+  document.querySelectorAll("#currency, #checkout-currency").forEach((selector) => {
+    selector.value = currency;
+    selector.addEventListener("change", () => {
+      currency = selector.value;
+      localStorage.setItem("currency", currency);
+      document.querySelectorAll("#currency, #checkout-currency").forEach((item) => { item.value = currency; });
+      render();
+      renderCart();
+    });
+  });
+
+  const langFrButton = document.getElementById("lang-fr");
+  const langEnButton = document.getElementById("lang-en");
+  if (langFrButton) langFrButton.onclick = () => { lang="fr"; localStorage.setItem("lang","fr"); applyI18n(); render(); renderCart(); };
+  if (langEnButton) langEnButton.onclick = () => { lang="en"; localStorage.setItem("lang","en"); applyI18n(); render(); renderCart(); };
 
   const waNumber = "+243999972466";
   const waBase = "https://wa.me/" + waNumber.replace(/\D/g, "");
@@ -57,6 +83,49 @@
   if(whatsappBtn) whatsappBtn.href = waBase;
   if(whatsappFloat) whatsappFloat.href = waBase;
   if(waLink) waLink.href = waBase;
+
+  const authLink = document.getElementById('auth-link');
+  const logoutButton = document.getElementById('logout-button');
+  const authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
+  if (authLink && authUser) {
+    authLink.textContent = authUser.email || 'Mon compte';
+    authLink.href = 'auth.html';
+    authLink.classList.add('max-w-36', 'truncate');
+    logoutButton?.classList.remove('hidden');
+  }
+  if (logoutButton) {
+    logoutButton.addEventListener('click', async () => {
+      const refreshToken = localStorage.getItem('refreshToken');
+      logoutButton.disabled = true;
+      try {
+        if (refreshToken) await window.apiCall('/auth/logout', { method: 'POST', body: { token: refreshToken } });
+      } catch (error) {
+        console.error('Déconnexion distante impossible:', error);
+      } finally {
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        localStorage.removeItem('authUser');
+        window.location.assign('index.html');
+      }
+    });
+  }
+
+  function readCart() {
+    try {
+      const cart = JSON.parse(localStorage.getItem('cart') || '[]');
+      return Array.isArray(cart) ? cart.filter((item) => item && item.id && Number(item.qty) > 0) : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  function updateCartCount() {
+    const count = readCart().reduce((total, item) => total + Number(item.qty), 0);
+    document.querySelectorAll('#cart-count').forEach((badge) => {
+      badge.textContent = count;
+      badge.classList.toggle('hidden', count === 0);
+    });
+  }
 
   // Partage de localisation
   const shareLocationBtn = document.getElementById("shareLocation");
@@ -104,14 +173,14 @@
     const q = (search?.value || "").toLowerCase();
     const items = (window.PRODUCTS || []).filter(p => (p.category === currentCategory) && ((p.name_fr + " " + p.name_en).toLowerCase().includes(q)));
     grid.innerHTML = items.map(p => `
-      <div class="bg-white rounded-2xl shadow p-4 flex flex-col">
+      <div class="catalog-card bg-white rounded-2xl shadow p-4 flex flex-col">
         <img src="${p.img}" alt="${p.name_fr}" class="h-32 sm:h-40 w-full object-cover rounded-xl">
         <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${lang === "fr" ? p.name_fr : p.name_en}</div>
         <div class="text-slate-500 text-xs sm:text-sm">${p.id} · ${p.unit}${p.stock ? ' · Stock: ' + p.stock : ''}</div>
         <div class="mt-2 text-lg sm:text-xl font-bold">${money(p.price)}</div>
         <div class="mt-3 sm:mt-4 flex gap-2">
           <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${p.id}">
-          <button class="flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
+          <button class="dark-button flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
         </div>
       </div>
     `).join("");
@@ -142,55 +211,142 @@
     const qEl = document.getElementById("qty-"+id);
     const qty = Math.max(1, parseInt(qEl?.value||"1",10));
     const product = window.PRODUCTS.find(x=>x.id===id);
-    const cart = JSON.parse(localStorage.getItem("cart") || "[]");
+    const cart = readCart();
     const idx = cart.findIndex(x=>x.id===id);
     if(idx>=0){ cart[idx].qty += qty; } else { cart.push({id, qty}); }
     localStorage.setItem("cart", JSON.stringify(cart));
+    updateCartCount();
+    renderCart();
     alert((lang==='fr'?'Ajouté au panier: ':'Added to cart: ') + (lang==='fr'?product.name_fr:product.name_en));
+  };
+
+  window.updateCartItem = function(id, quantity) {
+    const cart = readCart();
+    const item = cart.find((entry) => entry.id === id);
+    if (!item) return;
+    item.qty = Math.max(0, Math.min(10000, Number(quantity) || 0));
+    localStorage.setItem('cart', JSON.stringify(cart.filter((entry) => entry.qty > 0)));
+    updateCartCount();
+    renderCart();
+  };
+
+  window.removeFromCart = function(id) {
+    localStorage.setItem('cart', JSON.stringify(readCart().filter((item) => item.id !== id)));
+    updateCartCount();
+    renderCart();
   };
 
   // Cart page logic
   const items = document.getElementById("items");
   function renderCart(){
     if(!items) return;
-    const cart = JSON.parse(localStorage.getItem("cart") || "[]");
-    const enriched = cart.map(c => ({...c, product: window.PRODUCTS.find(p=>p.id===c.id)}));
+    const cart = readCart();
+    const catalog = window.PRODUCTS || [];
+    const enriched = cart
+      .map(c => ({...c, product: catalog.find(p => p.id === c.id)}))
+      .filter(entry => entry.product);
+    // Un produit retiré du catalogue ne doit pas casser le rendu du panier.
+    if (catalog.length && enriched.length !== cart.length) {
+      localStorage.setItem('cart', JSON.stringify(enriched.map(({id, qty}) => ({id, qty}))));
+      const notice = document.getElementById('checkout-status');
+      if (notice) notice.textContent = dict().removedItems;
+    }
     let total = 0;
-    items.innerHTML = enriched.map(({product, qty}) => {
+    items.innerHTML = enriched.length ? enriched.map(({product, qty}) => {
       const line = product.price * qty;
       total += line;
       return `<div class="bg-white rounded-xl p-3 md:p-4 shadow flex items-center gap-3 md:gap-4">
-        <img src="${product.img}" class="h-12 w-12 sm:h-16 sm:w-16 rounded-lg object-cover flex-shrink-0" />
+        <img src="${product.img}" alt="${lang === "fr" ? product.name_fr : product.name_en}" class="h-12 w-12 sm:h-16 sm:w-16 rounded-lg object-cover flex-shrink-0" />
         <div class="flex-1 min-w-0">
           <div class="font-semibold text-sm md:text-base truncate">${lang === "fr" ? product.name_fr : product.name_en}</div>
           <div class="text-slate-500 text-xs md:text-sm">${product.id} · ${qty} ${product.unit} × ${money(product.price)}</div>
         </div>
         <div class="font-bold text-sm md:text-base flex-shrink-0">${money(line)}</div>
+        <div class="flex items-center gap-1">
+          <button type="button" class="h-8 w-8 rounded border" onclick="updateCartItem('${product.id}', ${qty - 1})" aria-label="Diminuer la quantité">−</button>
+          <span class="min-w-6 text-center text-sm">${qty}</span>
+          <button type="button" class="h-8 w-8 rounded border" onclick="updateCartItem('${product.id}', ${qty + 1})" aria-label="Augmenter la quantité">+</button>
+          <button type="button" class="ml-2 text-xs text-red-600 underline" onclick="removeFromCart('${product.id}')">Supprimer</button>
+        </div>
       </div>`;
-    }).join("");
+    }).join("") : `<p class="text-slate-500">${dict().emptyCart}</p>`;
+    updateCartCount();
+    const subtotalEl = document.getElementById("subtotal");
+    if(subtotalEl) subtotalEl.textContent = money(total);
     const totalEl = document.getElementById("total");
-    if(totalEl) totalEl.textContent = (lang==='fr'?'Total: ':'Total: ') + money(total);
-    const checkout = document.getElementById("checkout");
-    if(checkout){
-      const text = encodeURIComponent((lang==='fr'?'Bonjour, je souhaite commander: ':'Hello, I want to order: ')
-        + enriched.map(({product, qty}) => `\n- ${qty} × ${product.id} ${lang==='fr'?product.name_fr:product.name_en}`).join("")
-        + `\n${lang==='fr'?'Montant estimé: ':'Estimated total: '} ${money(total)}\n${lang==='fr'?'Ma localisation: ':'My location: '}\n`);
-      checkout.href = waBase + "?text=" + text;
-    }
+    if(totalEl) totalEl.textContent = money(total);
+  }
+
+  const checkoutForm = document.getElementById("checkout-form");
+  if (checkoutForm) {
+    checkoutForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!checkoutForm.reportValidity()) return;
+      const cart = JSON.parse(localStorage.getItem("cart") || "[]");
+      const status = document.getElementById("checkout-status");
+      const submitButton = document.getElementById("checkout");
+      if (!localStorage.getItem('accessToken')) {
+        localStorage.setItem('postLoginRedirect', 'cart.html');
+        window.location.assign('auth.html');
+        return;
+      }
+      if (!cart.length) {
+        status.textContent = lang === "fr" ? "Votre panier est vide." : "Your cart is empty.";
+        return;
+      }
+      const formData = new FormData(checkoutForm);
+      const paymentProvider = formData.get("paymentProvider");
+      submitButton.disabled = true;
+      status.textContent = lang === "fr" ? "Création de votre commande..." : "Creating your order...";
+      try {
+        const orderResponse = await window.apiCall("/orders", {
+          method: "POST",
+          body: {
+            customer: { fullName: formData.get("fullName"), phone: formData.get("phone"), email: formData.get("email") || undefined },
+            currency: formData.get("currency"),
+            paymentProvider,
+            items: cart.map((item) => ({ id: item.id, qty: item.qty }))
+          }
+        });
+        localStorage.setItem("lastOrderId", orderResponse.order.id);
+        if (paymentProvider === "paypal") {
+          status.textContent = lang === "fr" ? "Redirection sécurisée vers PayPal..." : "Redirecting securely to PayPal...";
+          const paymentResponse = await window.apiCall(`/orders/${orderResponse.order.id}/paypal`, { method: "POST" });
+          if (!paymentResponse.approvalUrl) throw new Error("Lien d’approbation PayPal indisponible");
+          window.location.assign(paymentResponse.approvalUrl);
+          return;
+        }
+        localStorage.removeItem("cart");
+        renderCart();
+        checkoutForm.reset();
+        // reset() rétablit les valeurs du HTML: on remet la devise choisie.
+        document.querySelectorAll("#currency, #checkout-currency").forEach((item) => { item.value = currency; });
+        status.textContent = lang === "fr" ? `Commande ${orderResponse.order.id} créée. Un conseiller vous contactera pour finaliser le paiement Mobile Money.` : `Order ${orderResponse.order.id} created. A representative will contact you to finalize Mobile Money payment.`;
+      } catch (error) {
+        // Session expirée malgré le renouvellement: on renvoie vers la connexion.
+        if (!localStorage.getItem("accessToken")) {
+          localStorage.setItem("postLoginRedirect", "cart.html");
+          window.location.assign("auth.html");
+          return;
+        }
+        status.textContent = error.message;
+      } finally {
+        submitButton.disabled = false;
+      }
+    });
   }
 
   applyI18n();
+  updateCartCount();
   
-  // Attendre le chargement des produits avant de faire le rendu
-  if (window.loadProducts) {
-    window.loadProducts().then(() => {
-      render();
-      renderCart();
-    });
-  } else {
+  // Attendre le catalogue et les taux de change officiels avant le premier rendu
+  Promise.all([
+    window.loadProducts ? window.loadProducts() : Promise.resolve(),
+    window.loadCurrencyRates ? window.loadCurrencyRates() : Promise.resolve()
+  ]).then(() => {
     render();
     renderCart();
-  }
+  });
   
   if (search) search.addEventListener("input", render);
 })();

@@ -1,39 +1,243 @@
 openapi: 3.0.3
 info:
   title: MonChantier API
-  version: 0.1.0
+  version: 1.0.0
+  description: API de catalogue, paniers et commandes MonChantier.
 servers:
-  - url: https://api.monchantier.example/v1
+  - url: http://localhost:3000/api
+    description: Environnement local
 paths:
   /products:
     get:
-      summary: List products
+      summary: Liste les produits
       parameters:
         - in: query
-          name: q
-          schema: { type: string }
+          name: category
+          schema:
+            type: string
+        - in: query
+          name: search
+          schema:
+            type: string
       responses:
         '200':
-          description: Ok
+          description: Produits disponibles
+  /currency-rates:
+    get:
+      summary: Taux de change officiels utilisés pour la facturation
+      responses:
+        '200':
+          description: Taux par devise, en unités par USD
+  /products/{id}:
+    get:
+      summary: Récupère un produit
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      responses:
+        '200':
+          description: Produit trouvé
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /products/category/{category}:
+    get:
+      summary: Liste les produits d'une catégorie
+      parameters:
+        - in: path
+          name: category
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Produits de la catégorie
+  /cart/session:
+    post:
+      summary: Crée un identifiant de panier non devinable
+      responses:
+        '201':
+          description: Session créée
+  /cart:
+    post:
+      summary: Enregistre un panier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CartRequest'
+      responses:
+        '200':
+          description: Panier enregistré
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+  /cart/{sessionId}:
+    get:
+      summary: Récupère un panier
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Panier trouvé
+    delete:
+      summary: Supprime un panier
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Panier supprimé
   /orders:
     post:
-      summary: Create an order
+      summary: Crée une commande, réserve le stock et ouvre une tentative de paiement
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+      responses:
+        '201':
+          description: Commande créée et stock réservé
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '409':
+          description: Stock insuffisant pour au moins un produit
+        '503':
+          description: Service de commande indisponible
+  /orders/{orderId}/paypal:
+    post:
+      summary: Crée une approbation PayPal pour une commande USD ou EUR du client authentifié
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: >-
+            URL d'approbation PayPal créée. La réponse contient aussi le jeton de
+            confirmation à usage unique, également placé dans l'URL de retour (paramètre ct).
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /orders/{orderId}/paypal/capture:
+    post:
+      summary: Capture un paiement PayPal approuvé
+      description: >-
+        Appelée par la page de retour PayPal, sans session: l'accès est prouvé par le jeton
+        de confirmation reçu à la création du paiement. Le montant encaissé est vérifié.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [confirmationToken]
               properties:
-                customer:
-                  type: object
-                items:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      id: { type: string }
-                      qty: { type: number }
+                confirmationToken:
+                  type: string
+                  description: Jeton reçu dans l'URL de retour (paramètre ct)
       responses:
-        '201':
-          description: Created
+        '200':
+          description: Paiement capturé et commande confirmée
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '403':
+          description: Jeton de confirmation invalide
+        '404':
+          $ref: '#/components/responses/NotFound'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    ProductId:
+      in: path
+      name: id
+      required: true
+      schema:
+        type: string
+    SessionId:
+      in: path
+      name: sessionId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrderId:
+      in: path
+      name: orderId
+      required: true
+      schema:
+        type: string
+        format: uuid
+  responses:
+    InvalidRequest:
+      description: Requête invalide ou règle métier non satisfaite
+    NotFound:
+      description: Ressource introuvable
+  schemas:
+    CartItem:
+      type: object
+      required: [id, qty]
+      properties:
+        id:
+          type: string
+          maxLength: 32
+        qty:
+          type: integer
+          minimum: 1
+          maximum: 10000
+    CartRequest:
+      type: object
+      required: [sessionId, items]
+      properties:
+        sessionId:
+          type: string
+          format: uuid
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CartItem'
+    OrderRequest:
+      type: object
+      required: [customer, currency, paymentProvider, items]
+      properties:
+        customer:
+          type: object
+          required: [fullName, phone]
+          properties:
+            fullName:
+              type: string
+              minLength: 2
+              maxLength: 120
+            phone:
+              type: string
+              minLength: 6
+              maxLength: 30
+            email:
+              type: string
+              format: email
+        currency:
+          type: string
+          enum: [USD, CDF, EUR]
+        paymentProvider:
+          type: string
+          enum: [paypal, mobile_money]
+        items:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/CartItem'

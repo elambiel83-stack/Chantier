@@ -77,6 +77,15 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.categoryTitle}>Facilitation</Text>
           <Text style={styles.categoryDesc}>Assistance achat, conseil technique...</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.categoryCard}
+          onPress={() => navigation.navigate('Products', { category: 'partenaires' })}
+        >
+          <Text style={styles.categoryEmoji}>🏗️</Text>
+          <Text style={styles.categoryTitle}>Partenaires</Text>
+          <Text style={styles.categoryDesc}>Transport et équipements partenaires...</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Cart Badge */}

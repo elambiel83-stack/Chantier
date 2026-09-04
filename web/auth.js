@@ -1,0 +1,49 @@
+(function () {
+  const loginForm = document.getElementById('login-form');
+  const registerForm = document.getElementById('register-form');
+  const status = document.getElementById('auth-status');
+
+  document.querySelectorAll('[data-auth-view]').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const isLogin = tab.dataset.authView === 'login';
+      loginForm.classList.toggle('hidden', !isLogin);
+      registerForm.classList.toggle('hidden', isLogin);
+      document.querySelectorAll('[data-auth-view]').forEach((item) => {
+        item.classList.toggle('border-b-2', item === tab);
+        item.classList.toggle('border-red-600', item === tab);
+        item.classList.toggle('text-red-700', item === tab);
+        item.classList.toggle('text-slate-600', item !== tab);
+      });
+      status.textContent = '';
+    });
+  });
+
+  async function authenticate(endpoint, form) {
+    const button = form.querySelector('button[type="submit"]');
+    button.disabled = true;
+    status.textContent = 'Traitement en cours...';
+    try {
+      const data = await window.apiCall(endpoint, { method: 'POST', body: Object.fromEntries(new FormData(form)) });
+      localStorage.setItem('accessToken', data.accessToken);
+      localStorage.setItem('refreshToken', data.refreshToken);
+      localStorage.setItem('authUser', JSON.stringify(data.user));
+      // Retour sur la page d'où venait l'utilisateur (le panier en général).
+      const redirect = localStorage.getItem('postLoginRedirect');
+      localStorage.removeItem('postLoginRedirect');
+      window.location.assign(redirect === 'cart.html' ? 'cart.html' : 'index.html');
+    } catch (error) {
+      status.textContent = error.message || 'Impossible de vous authentifier.';
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  loginForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    authenticate('/auth/login', loginForm);
+  });
+  registerForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    authenticate('/auth/register', registerForm);
+  });
+}());

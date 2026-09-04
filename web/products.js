@@ -15,7 +15,9 @@ const LOCAL_PRODUCTS = [
   { id: "SVC-001", name_fr: "Livraison chantier", name_en: "Site delivery", unit: "service", price: 0.00, img: "assets/mesproduits.png", category: "services" },
   { id: "SVC-002", name_fr: "Pose de pavés (m²)", name_en: "Paver installation (sqm)", unit: "sqm", price: 5.00, img: "assets/mesproduits.png", category: "services" },
   { id: "FAC-001", name_fr: "Assistance achat", name_en: "Purchase assistance", unit: "service", price: 0.00, img: "assets/mesproduits.png", category: "facilitation" },
-  { id: "FAC-002", name_fr: "Conseil technique", name_en: "Technical advice", unit: "service", price: 0.00, img: "assets/mesproduits.png", category: "facilitation" }
+  { id: "FAC-002", name_fr: "Conseil technique", name_en: "Technical advice", unit: "service", price: 0.00, img: "assets/mesproduits.png", category: "facilitation" },
+  { id: "PAR-001", name_fr: "Transport partenaire chantier", name_en: "Partner site transport", unit: "service", price: 0.00, img: "assets/mesproduits.png", category: "partenaires" },
+  { id: "PAR-002", name_fr: "Location d’équipement partenaire", name_en: "Partner equipment rental", unit: "service", price: 0.00, img: "assets/mesproduits.png", category: "partenaires" }
 ];
 
 // Charger les produits depuis l'API

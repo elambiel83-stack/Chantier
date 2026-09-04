@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,27 +8,99 @@ import {
   TouchableOpacity,
   Linking,
   Alert,
+  TextInput,
 } from 'react-native';
 import { useCart } from '../context/CartContext';
-import { API_CONFIG } from '../config';
+import { useAuth } from '../context/AuthContext';
+import { getApiUrl } from '../config';
+
+// Repli hors ligne uniquement: les taux facturés viennent de /api/currency-rates.
+const FALLBACK_RATES = { USD: 1, CDF: 2800, EUR: 0.92 };
 
 export default function CartScreen({ navigation }) {
   const { cart, removeFromCart, updateQuantity, getTotal, clearCart } = useCart();
+  const { authFetch, isAuthenticated, logout } = useAuth();
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [currency, setCurrency] = useState('USD');
+  const [paymentProvider, setPaymentProvider] = useState('mobile_money');
+  const [submitting, setSubmitting] = useState(false);
+  const [rates, setRates] = useState(FALLBACK_RATES);
 
-  const handleCheckout = () => {
-    const waNumber = API_CONFIG.whatsappNumber.replace(/\D/g, '');
-    const items = cart.map(item =>
-      `\n- ${item.quantity} × ${item.id} ${item.name_fr}`
-    ).join('');
-    const total = getTotal();
-    const message = encodeURIComponent(
-      `Bonjour, je souhaite commander:${items}\n\nMontant estimé: $${total.toFixed(2)}\n\nMa localisation: `
+  useEffect(() => {
+    let active = true;
+    fetch(getApiUrl('/currency-rates'))
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (active && data?.rates) setRates({ ...FALLBACK_RATES, ...data.rates });
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  const formatAmount = (amountUsd) => `${(amountUsd * (Number(rates[currency]) || 1)).toFixed(2)} ${currency}`;
+
+  const promptForLogin = () => {
+    Alert.alert(
+      'Connexion requise',
+      'Créez un compte ou connectez-vous pour finaliser votre commande.',
+      [
+        { text: 'Plus tard', style: 'cancel' },
+        { text: 'Se connecter', onPress: () => { logout(); } },
+      ]
     );
-    
-    const url = `whatsapp://send?phone=${waNumber}&text=${message}`;
-    Linking.openURL(url).catch(() =>
-      Alert.alert('Erreur', 'WhatsApp n\'est pas installé sur votre appareil')
-    );
+  };
+
+  const handleCheckout = async () => {
+    if (!isAuthenticated) {
+      promptForLogin();
+      return;
+    }
+    if (!fullName.trim() || !phone.trim()) {
+      Alert.alert('Informations requises', 'Saisissez votre nom complet et votre numéro de téléphone.');
+      return;
+    }
+    if (paymentProvider === 'paypal' && currency === 'CDF') {
+      Alert.alert('Devise non prise en charge', 'PayPal est disponible en USD ou EUR.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const data = await authFetch('/orders', {
+        method: 'POST',
+        body: {
+          customer: { fullName: fullName.trim(), phone: phone.trim(), email: email.trim() || undefined },
+          currency,
+          paymentProvider,
+          items: cart.map((item) => ({ id: item.id, qty: item.quantity })),
+        },
+      });
+
+      if (paymentProvider === 'paypal') {
+        const paypalData = await authFetch(`/orders/${data.order.id}/paypal`, { method: 'POST' });
+        if (!paypalData.approvalUrl) throw new Error('Paiement PayPal indisponible');
+        await Linking.openURL(paypalData.approvalUrl);
+        // Le panier reste intact tant que PayPal n'a pas confirmé le paiement.
+        Alert.alert('Paiement PayPal', 'Finalisez le paiement dans votre navigateur pour confirmer la commande.');
+        return;
+      }
+
+      clearCart();
+      setFullName('');
+      setPhone('');
+      setEmail('');
+      Alert.alert('Commande créée', `Référence : ${data.order.id}\nLe paiement Mobile Money reste en attente de confirmation.`);
+    } catch (error) {
+      if (error.status === 401) {
+        promptForLogin();
+        return;
+      }
+      Alert.alert('Erreur de commande', error.message || 'Une erreur est survenue.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const renderCartItem = ({ item }) => (
@@ -37,8 +109,8 @@ export default function CartScreen({ navigation }) {
       <View style={styles.itemInfo}>
         <Text style={styles.itemName}>{item.name_fr}</Text>
         <Text style={styles.itemId}>{item.id} · {item.unit}</Text>
-        <Text style={styles.itemPrice}>${item.price.toFixed(2)} × {item.quantity}</Text>
-        <Text style={styles.itemTotal}>${(item.price * item.quantity).toFixed(2)}</Text>
+        <Text style={styles.itemPrice}>{formatAmount(item.price)} × {item.quantity}</Text>
+        <Text style={styles.itemTotal}>{formatAmount(item.price * item.quantity)}</Text>
       </View>
       <View style={styles.quantityContainer}>
         <TouchableOpacity
@@ -91,14 +163,53 @@ export default function CartScreen({ navigation }) {
       <View style={styles.footer}>
         <View style={styles.totalContainer}>
           <Text style={styles.totalLabel}>Total:</Text>
-          <Text style={styles.totalAmount}>${getTotal().toFixed(2)}</Text>
+          <Text style={styles.totalAmount}>{formatAmount(getTotal())}</Text>
         </View>
-        
+
+        <TextInput
+          style={styles.input}
+          placeholder="Nom complet"
+          value={fullName}
+          onChangeText={setFullName}
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Téléphone"
+          value={phone}
+          onChangeText={setPhone}
+          keyboardType="phone-pad"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="E-mail (facultatif)"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+        />
+        <Text style={styles.selectionLabel}>Devise</Text>
+        <View style={styles.optionRow}>
+          {['USD', 'CDF', 'EUR'].map((option) => (
+            <TouchableOpacity key={option} style={[styles.option, currency === option && styles.optionSelected]} onPress={() => setCurrency(option)}>
+              <Text style={currency === option ? styles.optionTextSelected : styles.optionText}>{option}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        <Text style={styles.selectionLabel}>Moyen de paiement</Text>
+        <View style={styles.optionRow}>
+          <TouchableOpacity style={[styles.option, paymentProvider === 'mobile_money' && styles.optionSelected]} onPress={() => setPaymentProvider('mobile_money')}>
+            <Text style={paymentProvider === 'mobile_money' ? styles.optionTextSelected : styles.optionText}>Mobile Money</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.option, paymentProvider === 'paypal' && styles.optionSelected]} onPress={() => setPaymentProvider('paypal')}>
+            <Text style={paymentProvider === 'paypal' ? styles.optionTextSelected : styles.optionText}>PayPal</Text>
+          </TouchableOpacity>
+        </View>
         <TouchableOpacity
-          style={styles.checkoutButton}
+          style={[styles.checkoutButton, submitting && styles.checkoutButtonDisabled]}
           onPress={handleCheckout}
+          disabled={submitting}
         >
-          <Text style={styles.checkoutButtonText}>📱 Commander via WhatsApp</Text>
+          <Text style={styles.checkoutButtonText}>{submitting ? 'Création de la commande...' : 'Créer la commande'}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -118,7 +229,7 @@ export default function CartScreen({ navigation }) {
         </TouchableOpacity>
 
         <Text style={styles.footerNote}>
-          💡 Astuce: Ajoutez votre localisation Google Maps dans le message WhatsApp
+          Le total final et les instructions de paiement sont confirmés par MonChantier.
         </Text>
       </View>
     </View>
@@ -253,12 +364,57 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#dc2626',
   },
+  input: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+    color: '#1e293b',
+  },
+  selectionLabel: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#1e293b',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  optionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  option: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  optionSelected: {
+    backgroundColor: '#1e293b',
+    borderColor: '#1e293b',
+  },
+  optionText: {
+    color: '#1e293b',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  optionTextSelected: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
   checkoutButton: {
     backgroundColor: '#22c55e',
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
     marginBottom: 12,
+  },
+  checkoutButtonDisabled: {
+    opacity: 0.6,
   },
   checkoutButtonText: {
     color: '#fff',

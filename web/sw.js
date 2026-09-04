@@ -1,111 +1,107 @@
-const CACHE_NAME = 'monchantier-v1';
-const URLS_TO_CACHE = [
+// Service Worker MonChantier
+// Règle de base: le code de l'application passe par le réseau en premier (sinon une
+// correction ne parvient jamais au navigateur), les fichiers immuables par le cache.
+const VERSION = 'v2';
+const SHELL_CACHE = `monchantier-shell-${VERSION}`;
+const ASSET_CACHE = `monchantier-assets-${VERSION}`;
+const API_CACHE = `monchantier-api-${VERSION}`;
+const CURRENT_CACHES = [SHELL_CACHE, ASSET_CACHE, API_CACHE];
+
+const SHELL_URLS = [
   '/',
   '/index.html',
   '/cart.html',
-  '/test-api.html',
-  '/site.js',
-  '/products.js',
+  '/auth.html',
+  '/privacy.html',
+  '/terms.html',
   '/config.js',
-  '/site.webmanifest',
-  'https://cdn.tailwindcss.com',
-  '/assets/monchantier_logo.svg'
+  '/products.js',
+  '/site.js',
+  '/auth.js',
+  '/site.webmanifest'
 ];
 
-// Installation du service worker
 self.addEventListener('install', (event) => {
-  console.log('Service Worker: Installation en cours...');
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('Service Worker: Cache créé');
-      return cache.addAll(URLS_TO_CACHE.filter(url => !url.includes('http')));
-    })
+    caches.open(SHELL_CACHE)
+      .then((cache) => cache.addAll(SHELL_URLS))
+      .catch((error) => console.warn('Service Worker: pré-cache incomplet', error))
   );
   self.skipWaiting();
 });
 
-// Activation du service worker
 self.addEventListener('activate', (event) => {
-  console.log('Service Worker: Activation en cours...');
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames.map((cacheName) => {
-          if (cacheName !== CACHE_NAME) {
-            console.log('Service Worker: Suppression du cache ancien:', cacheName);
-            return caches.delete(cacheName);
-          }
-        })
-      );
-    })
+    caches.keys()
+      .then((names) => Promise.all(names.filter((name) => !CURRENT_CACHES.includes(name)).map((name) => caches.delete(name))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Stratégie de mise en cache: Network First, Fall back to Cache
-self.addEventListener('fetch', (event) => {
-  // Ignorer les demandes non-GET
-  if (event.request.method !== 'GET') {
-    return;
-  }
+function offlineJson(message) {
+  return new Response(JSON.stringify({ success: false, message }), {
+    status: 503,
+    statusText: 'Service Unavailable',
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
 
-  // Pour les appels API, utiliser Network First avec timeout
-  if (event.request.url.includes('/api/')) {
+// Réponse du réseau, cache en secours. caches.match renvoie une promesse qui peut
+// résoudre sur undefined: il faut l'attendre avant de décider du repli.
+async function networkFirst(request, cacheName, { cacheable = true } = {}) {
+  try {
+    const response = await fetch(request);
+    if (cacheable && response.ok) {
+      const cache = await caches.open(cacheName);
+      cache.put(request, response.clone());
+    }
+    return response;
+  } catch (error) {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    throw error;
+  }
+}
+
+async function cacheFirst(request, cacheName) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+  const response = await fetch(request);
+  if (response.ok) {
+    const cache = await caches.open(cacheName);
+    cache.put(request, response.clone());
+  }
+  return response;
+}
+
+self.addEventListener('fetch', (event) => {
+  const { request } = event;
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+  // Les ressources tierces (CDN, images distantes) restent gérées par le navigateur.
+  if (url.origin !== self.location.origin) return;
+
+  if (url.pathname.startsWith('/api/')) {
+    // Une réponse authentifiée est personnelle: elle ne doit jamais atterrir dans un
+    // cache partagé par tous les utilisateurs du navigateur.
+    const isPersonal = request.headers.has('Authorization') || url.pathname.startsWith('/api/auth/') || url.pathname.startsWith('/api/orders');
     event.respondWith(
-      Promise.race([
-        fetch(event.request),
-        new Promise(resolve => 
-          setTimeout(() => resolve(null), 5000)
-        )
-      ]).then((response) => {
-        if (response && response.status === 200) {
-          // Mettre en cache les réponses API
-          const cache = caches.open('api-cache-v1');
-          cache.then(c => c.put(event.request, response.clone()));
-          return response;
-        }
-        // Fallback sur le cache si réseau indisponible
-        return caches.match(event.request) || new Response(
-          JSON.stringify({ error: 'Offline - cached data may be unavailable' }),
-          { status: 503, statusText: 'Service Unavailable', headers: { 'Content-Type': 'application/json' } }
-        );
-      }).catch(() => {
-        return caches.match(event.request) || new Response(
-          JSON.stringify({ error: 'Offline' }),
-          { status: 503, statusText: 'Service Unavailable', headers: { 'Content-Type': 'application/json' } }
-        );
-      })
+      networkFirst(request, API_CACHE, { cacheable: !isPersonal })
+        .catch(() => offlineJson('Hors ligne: données indisponibles.'))
     );
     return;
   }
 
-  // Pour les autres ressources, utiliser Cache First
-  event.respondWith(
-    caches.match(event.request).then((response) => {
-      if (response) {
-        return response;
-      }
+  // Pages et scripts: toujours la version du serveur quand il répond.
+  if (request.mode === 'navigate' || /\.(?:html|js|css|webmanifest)$/.test(url.pathname) || url.pathname === '/') {
+    event.respondWith(
+      networkFirst(request, SHELL_CACHE)
+        .catch(() => caches.match('/index.html').then((page) => page || Response.error()))
+    );
+    return;
+  }
 
-      return fetch(event.request).then((response) => {
-        if (!response || response.status !== 200 || response.type === 'error') {
-          return response;
-        }
-
-        const responseToCache = response.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
-        });
-
-        return response;
-      }).catch(() => {
-        // Retourner une page offline si disponible
-        return caches.match('/index.html');
-      });
-    })
-  );
-});
-
-// Sync en arrière-plan (optionnel, nécessite HTTPS en production)
-self.addEventListener('sync', (event) => {
-  console.log('Service Worker: Sync en arrière-plan:', event.tag);
+  // Images, icônes, polices: contenu stable, le cache d'abord.
+  event.respondWith(cacheFirst(request, ASSET_CACHE).catch(() => Response.error()));
 });

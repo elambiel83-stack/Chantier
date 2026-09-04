@@ -83,7 +83,10 @@
     </div>
 
     <script>
-        const API_URL = 'http://localhost:3000/api';
+        // Même déduction que config.js: l'API suit l'origine de la page.
+        const API_URL = location.protocol.startsWith('http')
+          ? `${location.origin}/api`
+          : 'http://localhost:3000/api';
 
         function showResult(elementId, data, isError = false) {
             const el = document.getElementById(elementId);

@@ -10,7 +10,6 @@ import {
   TextInput,
   Alert,
 } from 'react-native';
-import axios from 'axios';
 import { getApiUrl } from '../config';
 import { useCart } from '../context/CartContext';
 
@@ -28,10 +27,10 @@ export default function ProductsScreen({ route, navigation }) {
   const fetchProducts = async () => {
     try {
       setLoading(true);
-      const response = await axios.get(getApiUrl('/products'), {
-        params: { category },
-      });
-      setProducts(response.data.products || []);
+      const response = await fetch(`${getApiUrl('/products')}?category=${encodeURIComponent(category)}`);
+      if (!response.ok) throw new Error('Chargement du catalogue impossible');
+      const data = await response.json();
+      setProducts(data.products || []);
     } catch (error) {
       Alert.alert('Erreur', 'Impossible de charger les produits. Vérifiez votre connexion.');
       console.error(error);
@@ -103,6 +102,14 @@ export default function ProductsScreen({ route, navigation }) {
         >
           <Text style={[styles.tabText, category === 'facilitation' && styles.activeTabText]}>
             Facilitation
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.tab, category === 'partenaires' && styles.activeTab]}
+          onPress={() => setCategory('partenaires')}
+        >
+          <Text style={[styles.tabText, category === 'partenaires' && styles.activeTabText]}>
+            Partenaires
           </Text>
         </TouchableOpacity>
       </View>
