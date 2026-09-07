@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, TextInput, ScrollView, Linking, StyleSheet, Alert } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, TextInput, ScrollView, Linking, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as WebBrowser from 'expo-web-browser';
@@ -431,7 +431,17 @@ function AppStack({ user }) {
 }
 
 function RootNavigator() {
-  const { session, user } = useAuth();
+  const { session, user, restoring } = useAuth();
+
+  // Le temps de restaurer une éventuelle session persistée: évite un flash de l'écran
+  // de connexion avant de savoir si un compte est déjà connecté (voir AuthContext).
+  if (restoring) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F8FAFC' }}>
+        <ActivityIndicator size="large" color="#3B82F6" />
+      </View>
+    );
+  }
 
   return (
     <NavigationContainer>

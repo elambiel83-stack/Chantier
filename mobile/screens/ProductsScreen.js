@@ -18,7 +18,7 @@ export default function ProductsScreen({ route, navigation }) {
   const [loading, setLoading] = useState(true);
   const [category, setCategory] = useState(route.params?.category || 'produits');
   const [search, setSearch] = useState('');
-  const { addToCart, getItemCount } = useCart();
+  const { addToCart, getItemCount, formatAmount } = useCart();
 
   useEffect(() => {
     fetchProducts();
@@ -56,7 +56,7 @@ export default function ProductsScreen({ route, navigation }) {
         <Text style={styles.productName}>{item.name_fr}</Text>
         <Text style={styles.productId}>{item.id} · {item.unit}</Text>
         {item.stock && <Text style={styles.productStock}>Stock: {item.stock}</Text>}
-        <Text style={styles.productPrice}>${item.price.toFixed(2)}</Text>
+        <Text style={styles.productPrice}>{formatAmount(item.price)}</Text>
       </View>
       <TouchableOpacity
         style={styles.addButton}
