@@ -65,6 +65,20 @@ Une sonde de santé est exposée sur `GET /healthz` (hors quota et hors authenti
 vérifie la connexion à PostgreSQL et répond `503` si la base est injoignable. À utiliser pour le
 health check de l’orchestrateur ou du monitoring d’uptime.
 
+## Suivi d’erreurs et arrêt propre
+
+Définissez `SENTRY_DSN` dans `backend/.env` pour envoyer les erreurs serveur (500, exceptions non
+interceptées) à [Sentry](https://sentry.io). Sans cette variable, elles restent seulement
+journalisées sur la sortie standard — aucune donnée n’est envoyée nulle part. Les rejets CORS
+(origine refusée) ne sont pas remontés : ce sont des refus attendus, pas des bugs.
+
+Le serveur intercepte `SIGTERM`/`SIGINT` (envoyés par Render, Docker, systemd... à chaque
+redéploiement ou arrêt) pour cesser d’accepter de nouvelles requêtes, laisser les requêtes en
+cours se terminer, puis fermer le pool PostgreSQL avant de quitter — plutôt que de couper les
+connexions net. Un arrêt forcé après 10 secondes évite de rester bloqué si une requête traîne.
+Après une exception non interceptée (`uncaughtException`), l’état du process n’étant plus fiable,
+le serveur s’arrête de la même façon plutôt que de continuer à servir des requêtes.
+
 Les rôles sont les suivants :
 
 - `customer` : crée ses commandes et ne consulte que les siennes.

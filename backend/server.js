@@ -1,3 +1,4 @@
+const Sentry = require('@sentry/node');
 const express = require('express');
 const path = require('path');
 const argon2 = require('argon2');
@@ -9,6 +10,17 @@ const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { Pool } = require('pg');
 require('dotenv').config();
+
+// Sans SENTRY_DSN, Sentry.init n'est pas appelé: captureException reste un no-op sûr
+// (voir captureError plus bas), donc rien d'autre à garder conditionnel.
+if (process.env.SENTRY_DSN) {
+  Sentry.init({ dsn: process.env.SENTRY_DSN, environment: process.env.NODE_ENV || 'development' });
+}
+
+function captureError(error) {
+  console.error(error instanceof Error ? error.stack : error);
+  if (process.env.SENTRY_DSN) Sentry.captureException(error);
+}
 
 const app = express();
 // Nombre de proxys de confiance devant l'app (reverse proxy, load balancer...).
@@ -984,10 +996,15 @@ app.delete('/api/cart/:sessionId', (req, res) => {
   });
 });
 
+if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
+
 // Gestionnaire d'erreurs
 app.use((err, req, res, next) => {
-  console.error(err.stack);
   const isCorsError = err.message === 'Origine non autorisée par CORS';
+  // Une origine rejetée est un refus attendu, pas un bug: on la journalise sans
+  // encombrer le suivi d'erreurs.
+  if (isCorsError) console.error(err.stack);
+  else captureError(err);
   res.status(isCorsError ? 403 : 500).json({
     success: false,
     message: isCorsError ? 'Origine non autorisée' : 'Erreur interne du serveur'
@@ -995,7 +1012,7 @@ app.use((err, req, res, next) => {
 });
 
 // Démarrer le serveur
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`✅ Serveur démarré sur http://localhost:${PORT}`);
   console.log(`📦 ${PRODUCTS.length} produits chargés`);
   console.log(`🌍 CORS activé pour: ${allowedOrigins.join(', ')}${codespaceOriginPattern ? ' (+ ports de ce Codespace)' : ''}`);
@@ -1003,4 +1020,45 @@ app.listen(PORT, () => {
   syncCatalog()
     .then(() => database && console.log('🗄️  Catalogue synchronisé en base'))
     .catch((error) => console.error('⚠️  Synchronisation du catalogue impossible:', error.message));
+});
+
+// Arrêt propre: cesse d'accepter de nouvelles requêtes, laisse les requêtes en cours se
+// terminer, ferme le pool PostgreSQL, puis quitte. Un déploiement (Render, Docker, k8s...)
+// envoie SIGTERM et attend l'arrêt du process avant de le tuer: sans ce gestionnaire, les
+// requêtes en cours et les connexions PostgreSQL sont coupées net à chaque redéploiement.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n${signal} reçu, arrêt en cours...`);
+  const forceExit = setTimeout(() => {
+    console.error('Arrêt forcé: la fermeture propre a dépassé le délai imparti');
+    process.exit(1);
+  }, 10000);
+  forceExit.unref();
+  try {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    if (database) await database.end();
+    clearTimeout(forceExit);
+    process.exit(0);
+  } catch (error) {
+    console.error('Erreur pendant l’arrêt:', error);
+    clearTimeout(forceExit);
+    process.exit(1);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Après une exception non interceptée, l'état du process n'est plus fiable: on la
+// journalise puis on s'arrête proprement plutôt que de continuer à servir des requêtes.
+process.on('uncaughtException', (error) => {
+  captureError(error);
+  shutdown('uncaughtException');
+});
+// Un rejet de promesse non intercepté n'affecte pas forcément la requête en cours (toutes
+// les routes retournent déjà leurs erreurs via next()): on le journalise sans arrêter le
+// serveur.
+process.on('unhandledRejection', (reason) => {
+  captureError(reason instanceof Error ? reason : new Error(String(reason)));
 });
