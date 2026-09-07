@@ -26,14 +26,15 @@ npm install
 
 ### 1. Configurer l'API
 
-Modifiez `config.js` avec l'IP de votre machine :
+Copiez `.env.example` vers `.env.local` (non versionné) et renseignez l'IP de votre
+machine :
 
-```javascript
-export const API_CONFIG = {
-  baseURL: 'http://192.168.1.100:3000/api', // Remplacez avec votre IP
-  // ...
-};
 ```
+EXPO_PUBLIC_API_BASE_URL=http://192.168.1.100:3000/api
+```
+
+Expo inline automatiquement les variables `EXPO_PUBLIC_*` au démarrage — redémarrez
+`npm start` après avoir modifié `.env.local`.
 
 **Pour trouver votre IP :**
 
@@ -113,7 +114,7 @@ mobile/
 ### L'app ne charge pas les produits
 
 1. Vérifiez que le backend est démarré
-2. Vérifiez l'IP dans `config.js`
+2. Vérifiez `EXPO_PUBLIC_API_BASE_URL` dans `.env.local`
 3. Assurez-vous que téléphone et PC sont sur le même réseau WiFi
 4. Testez l'API : `http://VOTRE_IP:3000/api` dans le navigateur
 

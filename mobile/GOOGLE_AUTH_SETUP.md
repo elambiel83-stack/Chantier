@@ -33,19 +33,21 @@
 2. Téléchargez le fichier `GoogleService-Info.plist`
 3. Placez-le dans le projet Xcode
 
-### 5. Mettre à jour App.js
+### 5. Renseigner les identifiants
 
-Remplacez les placeholders dans [App.js](App.js) :
+`App.js` lit les identifiants OAuth depuis `config.js` (`GOOGLE_AUTH_CONFIG`), lui-même
+alimenté par les variables d'environnement `EXPO_PUBLIC_GOOGLE_CLIENT_ID_*`. Copiez
+`.env.example` vers `.env.local` (non versionné) et renseignez les ID fournis par
+Google Cloud Console :
 
-```javascript
-const [request, response, promptAsync] = Google.useAuthRequest({
-  clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com', // ← À remplacer
-  iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com', // ← À remplacer
-  androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com', // ← À remplacer
-});
+```
+EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB=votre-id.apps.googleusercontent.com
+EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS=votre-id-ios.apps.googleusercontent.com
+EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID=votre-id-android.apps.googleusercontent.com
 ```
 
-Avec les ID fournis par Google Cloud Console.
+Tant qu'une variable est vide, le bouton correspondant reste désactivé plutôt que
+d'utiliser un faux identifiant.
 
 ### 6. Test
 

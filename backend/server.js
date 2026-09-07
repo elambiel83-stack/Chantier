@@ -11,6 +11,19 @@ const { Pool } = require('pg');
 require('dotenv').config();
 
 const app = express();
+// Nombre de proxys de confiance devant l'app (reverse proxy, load balancer...).
+// Sans ça, express-rate-limit et req.ip se basent sur la connexion TCP brute
+// (l'IP du proxy, partagée par tous les clients) plutôt que sur X-Forwarded-For.
+// Valeurs possibles: un nombre de sauts (ex. 1), true/false, ou un mot-clé
+// Express ('loopback', 'uniquelocal', une liste d'IP/CIDR...).
+function parseTrustProxy(value) {
+  if (value === undefined) return 1;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
+}
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 const PORT = process.env.PORT || 3000;
 const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3002,http://localhost:8080')
   .split(',')
@@ -27,6 +40,13 @@ const database = process.env.DATABASE_URL
   : null;
 const JWT_ISSUER = process.env.JWT_ISSUER || 'monchantier-api';
 const FALLBACK_CURRENCY_RATES = { USD: 1, CDF: 2800, EUR: 0.92 };
+// Airtel Money et Orange Money n'ont pas d'API de collecte automatisée branchée ici: le
+// client envoie le paiement à ce numéro marchand avec la référence de commande, et le
+// staff confirme manuellement (PATCH /api/orders/:orderId/status) après vérification.
+const MOBILE_MONEY_PROVIDERS = {
+  airtel_money: { label: 'Airtel Money', payoutNumber: process.env.AIRTEL_MONEY_PAYOUT_NUMBER },
+  orange_money: { label: 'Orange Money', payoutNumber: process.env.ORANGE_MONEY_PAYOUT_NUMBER }
+};
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
@@ -59,6 +79,18 @@ app.use(helmet({
   }
 }));
 app.use(express.json({ limit: '100kb' }));
+
+// Sonde de santé pour l'orchestrateur/monitoring: hors quota et hors authentification.
+app.get('/healthz', async (req, res) => {
+  if (!database) return res.json({ status: 'ok', database: 'disabled' });
+  try {
+    await database.query('SELECT 1');
+    res.json({ status: 'ok', database: 'ok' });
+  } catch (error) {
+    res.status(503).json({ status: 'error', database: 'unavailable' });
+  }
+});
+
 // Le quota ne vise que l'API: une page web charge plusieurs fichiers et l'épuiserait.
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -215,7 +247,7 @@ const orderSchema = z.object({
     email: z.string().trim().email().max(254).optional()
   }),
   currency: z.enum(['USD', 'CDF', 'EUR']),
-  paymentProvider: z.enum(['paypal', 'mobile_money']),
+  paymentProvider: z.enum(['paypal', 'airtel_money', 'orange_money']),
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
@@ -658,6 +690,13 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       message: 'PayPal ne prend pas en charge le CDF. Sélectionnez USD ou EUR.'
     });
   }
+  const mobileMoneyProvider = MOBILE_MONEY_PROVIDERS[paymentProvider];
+  if (mobileMoneyProvider && !mobileMoneyProvider.payoutNumber) {
+    return res.status(503).json({
+      success: false,
+      message: `Le paiement ${mobileMoneyProvider.label} n’est pas encore configuré. Contactez-nous.`
+    });
+  }
   const quantities = aggregateQuantities(items);
   const productIds = [...quantities.keys()];
 
@@ -721,7 +760,16 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       [order.id, paymentProvider, order.total_amount, order.currency]
     );
     await client.query('COMMIT');
-    res.status(201).json({ success: true, order: { id: order.id, status: order.status, totalAmount: order.total_amount, currency: order.currency, paymentProvider } });
+    // Airtel/Orange Money: pas de redirection ni d'appel externe, on renvoie directement
+    // les instructions de paiement (le client PayPal, lui, appelle /orders/:id/paypal ensuite).
+    const payment = mobileMoneyProvider
+      ? { provider: paymentProvider, label: mobileMoneyProvider.label, payoutNumber: mobileMoneyProvider.payoutNumber, reference: order.id }
+      : undefined;
+    res.status(201).json({
+      success: true,
+      order: { id: order.id, status: order.status, totalAmount: order.total_amount, currency: order.currency, paymentProvider },
+      ...(payment ? { payment } : {})
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
@@ -879,6 +927,14 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
       await client.query(
         `UPDATE product SET stock_qty = product.stock_qty + order_item.qty
          FROM order_item WHERE order_item.order_id = $1 AND product.id = order_item.product_id`,
+        [req.params.orderId]
+      );
+    }
+    if (parsed.data.status === 'confirmed') {
+      // Airtel/Orange Money n'ont pas de capture automatique: confirmer la commande vaut
+      // déclaration par le staff que le paiement a été vérifié (SMS, relevé marchand...).
+      await client.query(
+        "UPDATE payment SET status = 'paid', updated_at = now() WHERE order_id = $1 AND provider IN ('airtel_money', 'orange_money') AND status = 'pending'",
         [req.params.orderId]
       );
     }

@@ -321,7 +321,12 @@
         checkoutForm.reset();
         // reset() rétablit les valeurs du HTML: on remet la devise choisie.
         document.querySelectorAll("#currency, #checkout-currency").forEach((item) => { item.value = currency; });
-        status.textContent = lang === "fr" ? `Commande ${orderResponse.order.id} créée. Un conseiller vous contactera pour finaliser le paiement Mobile Money.` : `Order ${orderResponse.order.id} created. A representative will contact you to finalize Mobile Money payment.`;
+        const payment = orderResponse.payment;
+        status.textContent = payment
+          ? (lang === "fr"
+              ? `Commande ${orderResponse.order.id} créée. Envoyez le paiement via ${payment.label} au ${payment.payoutNumber} en indiquant la référence ${payment.reference}. Votre commande sera confirmée après vérification.`
+              : `Order ${orderResponse.order.id} created. Send payment via ${payment.label} to ${payment.payoutNumber} with reference ${payment.reference}. Your order will be confirmed after verification.`)
+          : (lang === "fr" ? `Commande ${orderResponse.order.id} créée.` : `Order ${orderResponse.order.id} created.`);
       } catch (error) {
         // Session expirée malgré le renouvellement: on renvoie vers la connexion.
         if (!localStorage.getItem("accessToken")) {
