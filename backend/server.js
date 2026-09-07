@@ -885,7 +885,16 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
     filters.push(`orders.status = $${values.length}`);
   }
   try {
-    const result = await database.query(`SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to, customer.full_name, customer.phone FROM orders JOIN customer ON customer.id = orders.customer_id ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY orders.created_at DESC`, values);
+    // Un payment par commande (voir POST /api/orders): la jointure ne duplique pas les lignes.
+    const result = await database.query(
+      `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
+              customer.full_name, customer.phone, payment.provider AS payment_provider, payment.status AS payment_status
+       FROM orders
+       JOIN customer ON customer.id = orders.customer_id
+       LEFT JOIN payment ON payment.order_id = orders.id
+       ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY orders.created_at DESC`,
+      values
+    );
     res.json({ success: true, orders: result.rows });
   } catch (error) {
     next(error);

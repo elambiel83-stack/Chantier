@@ -86,12 +86,16 @@
 
   const authLink = document.getElementById('auth-link');
   const logoutButton = document.getElementById('logout-button');
+  const staffLink = document.getElementById('staff-link');
   const authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
   if (authLink && authUser) {
     authLink.textContent = authUser.email || 'Mon compte';
     authLink.href = 'auth.html';
     authLink.classList.add('max-w-36', 'truncate');
     logoutButton?.classList.remove('hidden');
+  }
+  if (staffLink && authUser && ['staff', 'admin'].includes(authUser.role)) {
+    staffLink.classList.remove('hidden');
   }
   if (logoutButton) {
     logoutButton.addEventListener('click', async () => {

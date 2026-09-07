@@ -27,10 +27,12 @@
       localStorage.setItem('accessToken', data.accessToken);
       localStorage.setItem('refreshToken', data.refreshToken);
       localStorage.setItem('authUser', JSON.stringify(data.user));
-      // Retour sur la page d'où venait l'utilisateur (le panier en général).
+      // Retour sur la page d'où venait l'utilisateur (le panier, l'espace staff...).
       const redirect = localStorage.getItem('postLoginRedirect');
       localStorage.removeItem('postLoginRedirect');
-      window.location.assign(redirect === 'cart.html' ? 'cart.html' : 'index.html');
+      // Cette valeur n'est jamais fournie par l'utilisateur: uniquement des noms de page
+      // fixés par notre propre code (voir cart.html, admin.html).
+      window.location.assign(redirect || 'index.html');
     } catch (error) {
       status.textContent = error.message || 'Impossible de vous authentifier.';
     } finally {
