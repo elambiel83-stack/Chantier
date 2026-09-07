@@ -40,6 +40,18 @@ L’API applique une authentification par jeton Bearer. Les mots de passe sont h
 
 Avant de démarrer le backend, définissez une valeur aléatoire d’au moins 32 caractères pour `JWT_ACCESS_SECRET` dans `backend/.env`. Ne versionnez jamais cette valeur.
 
+## Déploiement derrière un reverse proxy
+
+En production, l’app tourne presque toujours derrière un reverse proxy ou un load balancer
+(Nginx, Render, Fly...). Définissez `TRUST_PROXY` dans `backend/.env` avec le nombre de sauts
+de proxy de confiance (`1` pour un seul proxy devant l’app). Sans ce réglage, le rate-limiting
+et la détection d’IP client se basent sur l’IP du proxy plutôt que sur celle du client, via
+l’en-tête `X-Forwarded-For`.
+
+Une sonde de santé est exposée sur `GET /healthz` (hors quota et hors authentification) : elle
+vérifie la connexion à PostgreSQL et répond `503` si la base est injoignable. À utiliser pour le
+health check de l’orchestrateur ou du monitoring d’uptime.
+
 Les rôles sont les suivants :
 
 - `customer` : crée ses commandes et ne consulte que les siennes.

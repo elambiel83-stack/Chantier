@@ -11,6 +11,19 @@ const { Pool } = require('pg');
 require('dotenv').config();
 
 const app = express();
+// Nombre de proxys de confiance devant l'app (reverse proxy, load balancer...).
+// Sans ça, express-rate-limit et req.ip se basent sur la connexion TCP brute
+// (l'IP du proxy, partagée par tous les clients) plutôt que sur X-Forwarded-For.
+// Valeurs possibles: un nombre de sauts (ex. 1), true/false, ou un mot-clé
+// Express ('loopback', 'uniquelocal', une liste d'IP/CIDR...).
+function parseTrustProxy(value) {
+  if (value === undefined) return 1;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
+}
+app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
 const PORT = process.env.PORT || 3000;
 const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:3002,http://localhost:8080')
   .split(',')
@@ -59,6 +72,18 @@ app.use(helmet({
   }
 }));
 app.use(express.json({ limit: '100kb' }));
+
+// Sonde de santé pour l'orchestrateur/monitoring: hors quota et hors authentification.
+app.get('/healthz', async (req, res) => {
+  if (!database) return res.json({ status: 'ok', database: 'disabled' });
+  try {
+    await database.query('SELECT 1');
+    res.json({ status: 'ok', database: 'ok' });
+  } catch (error) {
+    res.status(503).json({ status: 'error', database: 'unavailable' });
+  }
+});
+
 // Le quota ne vise que l'API: une page web charge plusieurs fichiers et l'épuiserait.
 app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
