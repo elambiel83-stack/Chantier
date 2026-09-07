@@ -5,12 +5,17 @@ vente en ligne des matériaux et services de construction
 
 Le fichier `backend/schema.sql` est idempotent et fait aussi office de migration : il doit être
 rejoué à chaque déploiement, pas seulement à la création du volume PostgreSQL. Docker Compose ne
-l’exécute qu’au tout premier démarrage du conteneur ; une base déjà existante n’obtiendrait donc
-jamais les tables et colonnes ajoutées depuis.
+l’exécute automatiquement (via `docker-entrypoint-initdb.d`) qu’au tout premier démarrage du volume
+PostgreSQL ; une base déjà existante n’obtiendrait donc jamais les tables et colonnes ajoutées
+depuis par ce seul mécanisme.
+
+Avec `docker compose up -d` (voir plus bas), le conteneur `backend` rejoue `schema.sql` lui-même à
+chaque démarrage (`backend/docker-entrypoint.sh`) : rien à faire manuellement dans ce cas. Pour un
+déploiement qui n’utilise pas ce conteneur (Render, ou tout hébergeur qui exécute directement
+`node server.js`), rejouez-le à la main à chaque déploiement :
 
 ```bash
-docker compose up -d
-docker exec -i chantier-postgres-1 psql -U monchantier -d monchantier < backend/schema.sql
+psql "$DATABASE_URL" -f backend/schema.sql
 ```
 
 Le stock, les prix et les catégories vivent dans la table `product` : c’est la source de vérité.
@@ -64,6 +69,42 @@ l’en-tête `X-Forwarded-For`.
 Une sonde de santé est exposée sur `GET /healthz` (hors quota et hors authentification) : elle
 vérifie la connexion à PostgreSQL et répond `503` si la base est injoignable. À utiliser pour le
 health check de l’orchestrateur ou du monitoring d’uptime.
+
+## Déploiement avec Docker Compose
+
+`docker-compose.yml` fait tourner la pile complète : PostgreSQL et le backend (`backend/Dockerfile`,
+qui inclut aussi `web/` — le backend sert le site en statique). Créez d’abord `backend/.env` (voir
+`backend/.env.example`), puis :
+
+```bash
+docker compose up -d --build
+```
+
+Le backend rejoue `schema.sql` à chaque démarrage (voir « Base de données » plus haut) et n’écoute
+que lorsque PostgreSQL répond (`depends_on` + `pg_isready`). `DATABASE_URL` est fixé par
+`docker-compose.yml` (hôte `postgres`, celui du réseau Compose) ; toutes les autres variables
+viennent de `backend/.env`.
+
+Ceci convient à un serveur avec Docker (VPS...). Sur une plateforme qui gère déjà le déploiement
+et le TLS (Render, Fly, Heroku...), ce `docker-compose.yml` n’est pas nécessaire — déployez-y
+directement `backend/` (ou l’image construite par `backend/Dockerfile`) selon ses instructions.
+
+### TLS (profil `tls`, optionnel)
+
+Sur un serveur avec IP publique et nom de domaine mais sans TLS géré en amont, un service
+[Caddy](https://caddyserver.com) optionnel (`Caddyfile`) termine le TLS avec un certificat Let’s
+Encrypt obtenu et renouvelé automatiquement :
+
+```bash
+DOMAIN=exemple.com docker compose --profile tls up -d --build
+```
+
+Le domaine doit déjà pointer vers ce serveur (DNS `A`/`AAAA`) et les ports `80`/`443` être
+accessibles publiquement — Caddy en a besoin pour la validation Let’s Encrypt. Inutile si la
+plateforme d’hébergement termine déjà le TLS (c’est le cas de Render, notamment).
+
+Le port `3000` du backend n’est publié que sur `127.0.0.1` (voir `docker-compose.yml`) : seul
+Caddy y accède, via le réseau Compose interne, pas depuis l’extérieur.
 
 ## Suivi d’erreurs et arrêt propre
 

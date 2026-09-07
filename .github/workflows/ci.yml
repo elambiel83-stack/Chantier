@@ -53,3 +53,28 @@ jobs:
       - name: Installer les dépendances
         run: npm ci
         working-directory: mobile
+
+  docker:
+    name: Docker (build + smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construire l'image backend
+        run: docker build -f backend/Dockerfile -t chantier-backend .
+      - name: Démarrer le conteneur sans base et vérifier /healthz
+        run: |
+          docker run -d --name chantier-backend -p 3000:3000 \
+            -e JWT_ACCESS_SECRET=ci-test-secret-at-least-32-characters-long \
+            -e DATABASE_URL= \
+            chantier-backend
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/healthz; then echo; break; fi
+            sleep 1
+          done
+          curl -sf http://localhost:3000/healthz | grep -q '"database":"disabled"'
+      - name: Logs du conteneur
+        if: always()
+        run: docker logs chantier-backend
+      - name: Arrêter le conteneur
+        if: always()
+        run: docker rm -f chantier-backend

@@ -10,6 +10,57 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monchantier -d monchantier"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    # Toutes les autres variables (JWT_ACCESS_SECRET, PAYPAL_*, AIRTEL/ORANGE_MONEY_*,
+    # SENTRY_DSN, CORS_ORIGIN...) viennent de backend/.env — voir backend/.env.example.
+    # DATABASE_URL est forcé ici: le nom d'hôte 'postgres' (réseau Compose) remplace
+    # 'localhost', qui n'existe pas dans le conteneur.
+    env_file:
+      - backend/.env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://monchantier:change-me@postgres:5432/monchantier
+    ports:
+      # Sur 127.0.0.1 uniquement: pas exposé publiquement. Caddy (profil tls) l'atteint
+      # via le réseau Compose interne (backend:3000), pas par ce port publié; en local,
+      # toujours joignable sur http://localhost:3000.
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # TLS pour un déploiement sur un serveur avec IP publique et nom de domaine (VPS...):
+  # inactif par défaut, voir README > Déploiement avec Docker Compose. Inutile sur une
+  # plateforme qui termine déjà le TLS elle-même (Render, Fly, Heroku...).
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["tls"]
+    environment:
+      # Docker Compose interpole les variables de tous les services même hors profil actif:
+      # une valeur par défaut évite de faire échouer `docker compose up -d` (sans --profile
+      # tls) si DOMAIN n'est pas définie. Caddy échoue de son côté si elle est absente et
+      # que le profil tls est effectivement utilisé.
+      DOMAIN: ${DOMAIN:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - backend
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  caddy_data:
