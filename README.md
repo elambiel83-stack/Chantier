@@ -68,6 +68,15 @@ de proxy de confiance (`1` pour un seul proxy devant l’app). Sans ce réglage,
 et la détection d’IP client se basent sur l’IP du proxy plutôt que sur celle du client, via
 l’en-tête `X-Forwarded-For`.
 
+**Avec Cloudflare devant Render (ou tout autre hébergeur déjà proxifié)** : comptez chaque
+saut séparément. Render est déjà lui-même derrière son propre proxy (`TRUST_PROXY=1`). Si le
+domaine passe aussi par Cloudflare en mode *Proxied* (nuage orange), c’est un deuxième saut :
+`TRUST_PROXY=2`. En *DNS only* (nuage gris), un seul saut réel : `TRUST_PROXY=1`. Pendant la
+vérification initiale du domaine personnalisé sur Render (émission du certificat Let’s
+Encrypt), le enregistrement DNS doit être en *DNS only* — Render a besoin d’y résoudre
+directement ; repassez en *Proxied* seulement après, et réglez alors le SSL/TLS Cloudflare sur
+*Full (strict)* (jamais *Flexible*).
+
 Une sonde de santé est exposée sur `GET /healthz` (hors quota et hors authentification) : elle
 vérifie la connexion à PostgreSQL et répond `503` si la base est injoignable. À utiliser pour le
 health check de l’orchestrateur ou du monitoring d’uptime.
