@@ -7,11 +7,9 @@ yarn-error.log*
 # Backend
 backend/.env
 backend/node_modules/
-backend/package-lock.json
 
 # Web
 web/node_modules/
-web/package-lock.json
 
 # Logs
 *.log
