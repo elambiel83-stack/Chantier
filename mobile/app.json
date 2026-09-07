@@ -16,10 +16,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.monchantier.app"
+      "bundleIdentifier": "net.monchantier.app"
     },
     "android": {
-      "package": "com.monchantier.app",
+      "package": "net.monchantier.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/icon.png",
         "backgroundColor": "#111827"

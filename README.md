@@ -38,6 +38,8 @@ un jeton de confirmation à usage unique, également placé dans l’URL de reto
 (paramètre `ct`) : `POST /api/orders/:orderId/paypal/capture` l’exige, ce qui permet de confirmer
 le paiement depuis n’importe quel navigateur sans session ouverte, mais seulement à qui revient de
 PayPal. Le montant réellement encaissé est comparé à celui de la commande avant confirmation.
+`APP_URL` (voir `backend/.env.example`) doit pointer vers le domaine public du site en production :
+c’est lui qui sert à construire ces URLs de retour PayPal.
 
 ### Airtel Money et Orange Money
 

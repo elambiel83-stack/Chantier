@@ -29,7 +29,7 @@
 
 ### 4. Configuration iOS
 
-1. Pour iOS, vous avez besoin du Bundle ID : `com.monchantier.app`
+1. Pour iOS, vous avez besoin du Bundle ID : `net.monchantier.app`
 2. Téléchargez le fichier `GoogleService-Info.plist`
 3. Placez-le dans le projet Xcode
 
