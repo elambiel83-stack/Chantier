@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS order_item (
 CREATE TABLE IF NOT EXISTS payment (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL CHECK (provider IN ('paypal', 'mobile_money')),
+  provider TEXT NOT NULL CHECK (provider IN ('paypal', 'airtel_money', 'orange_money')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'authorized', 'paid', 'failed', 'cancelled', 'refunded')) DEFAULT 'pending',
   amount NUMERIC(14,2) NOT NULL CHECK (amount >= 0),
   currency CHAR(3) NOT NULL CHECK (currency IN ('USD', 'CDF', 'EUR')),
@@ -110,6 +110,14 @@ CREATE TABLE IF NOT EXISTS payment (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Remplace 'mobile_money' (générique) par 'airtel_money'/'orange_money': Airtel Money et
+-- Orange Money sont confirmés manuellement par le staff, pas par 'mobile_money' en général.
+-- La contrainte est retirée avant la conversion des lignes existantes, sans quoi son
+-- ajout échouerait sur les commandes déjà enregistrées en 'mobile_money'.
+ALTER TABLE payment DROP CONSTRAINT IF EXISTS payment_provider_check;
+UPDATE payment SET provider = 'airtel_money' WHERE provider = 'mobile_money';
+ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('paypal', 'airtel_money', 'orange_money'));
 
 -- Jeton à usage unique transmis dans l'URL de retour PayPal (capture sans session).
 ALTER TABLE payment ADD COLUMN IF NOT EXISTS confirmation_token_hash TEXT;

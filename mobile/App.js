@@ -9,6 +9,7 @@ import ProductsScreen from './screens/ProductsScreen';
 import CartScreen from './screens/CartScreen';
 import { CartProvider } from './context/CartContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { GOOGLE_AUTH_CONFIG } from './config';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -55,11 +56,7 @@ function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com', // À remplacer
-    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
-  });
+  const [request, response, promptAsync] = Google.useAuthRequest(GOOGLE_AUTH_CONFIG);
 
   React.useEffect(() => {
     if (response?.type === 'success') {
@@ -181,11 +178,7 @@ function RegisterScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com',
-    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
-  });
+  const [request, response, promptAsync] = Google.useAuthRequest(GOOGLE_AUTH_CONFIG);
 
   React.useEffect(() => {
     if (response?.type === 'success') {

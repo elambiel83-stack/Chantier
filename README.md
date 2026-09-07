@@ -34,6 +34,19 @@ un jeton de confirmation à usage unique, également placé dans l’URL de reto
 le paiement depuis n’importe quel navigateur sans session ouverte, mais seulement à qui revient de
 PayPal. Le montant réellement encaissé est comparé à celui de la commande avant confirmation.
 
+### Airtel Money et Orange Money
+
+Aucune API de collecte automatisée n’est branchée pour ces deux opérateurs : la confirmation est
+manuelle. Quand `paymentProvider` vaut `airtel_money` ou `orange_money`, `POST /api/orders` renvoie
+en plus un objet `payment` (`payoutNumber`, `reference` = l’identifiant de la commande) que le
+client utilise pour envoyer son paiement. Si le numéro marchand correspondant n’est pas défini
+(`AIRTEL_MONEY_PAYOUT_NUMBER` / `ORANGE_MONEY_PAYOUT_NUMBER`), la commande est refusée avec un
+`503` plutôt que créée sans moyen de payer.
+
+Une fois le paiement reçu et vérifié manuellement (SMS, relevé marchand...), un membre `staff` ou
+`admin` confirme la commande via `PATCH /api/orders/:orderId/status` (`{"status": "confirmed"}`),
+ce qui marque aussi le paiement correspondant comme `paid`.
+
 ## Authentification et rôles
 
 L’API applique une authentification par jeton Bearer. Les mots de passe sont hachés avec Argon2id ; les jetons d’accès JWT ont une durée de 15 minutes et les jetons de renouvellement sont stockés sous forme de hachage et rotatifs.

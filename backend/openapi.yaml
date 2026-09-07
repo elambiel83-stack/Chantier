@@ -98,7 +98,10 @@ paths:
               $ref: '#/components/schemas/OrderRequest'
       responses:
         '201':
-          description: Commande créée et stock réservé
+          description: >-
+            Commande créée et stock réservé. Pour airtel_money/orange_money, la réponse
+            contient aussi `payment` (numéro marchand et référence à utiliser pour payer);
+            la confirmation elle-même reste manuelle (voir PATCH /orders/{orderId}/status).
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '401':
@@ -106,7 +109,9 @@ paths:
         '409':
           description: Stock insuffisant pour au moins un produit
         '503':
-          description: Service de commande indisponible
+          description: >-
+            Service de commande indisponible, ou moyen de paiement Airtel/Orange Money
+            non configuré (numéro marchand manquant)
   /orders/{orderId}/paypal:
     post:
       summary: Crée une approbation PayPal pour une commande USD ou EUR du client authentifié
@@ -234,7 +239,7 @@ components:
           enum: [USD, CDF, EUR]
         paymentProvider:
           type: string
-          enum: [paypal, mobile_money]
+          enum: [paypal, airtel_money, orange_money]
         items:
           type: array
           minItems: 1

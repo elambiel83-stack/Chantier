@@ -24,7 +24,7 @@ export default function CartScreen({ navigation }) {
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [currency, setCurrency] = useState('USD');
-  const [paymentProvider, setPaymentProvider] = useState('mobile_money');
+  const [paymentProvider, setPaymentProvider] = useState('airtel_money');
   const [submitting, setSubmitting] = useState(false);
   const [rates, setRates] = useState(FALLBACK_RATES);
 
@@ -91,7 +91,13 @@ export default function CartScreen({ navigation }) {
       setFullName('');
       setPhone('');
       setEmail('');
-      Alert.alert('Commande créée', `Référence : ${data.order.id}\nLe paiement Mobile Money reste en attente de confirmation.`);
+      const payment = data.payment;
+      Alert.alert(
+        'Commande créée',
+        payment
+          ? `Référence : ${payment.reference}\nEnvoyez le paiement via ${payment.label} au ${payment.payoutNumber}. Votre commande sera confirmée après vérification.`
+          : `Référence : ${data.order.id}`
+      );
     } catch (error) {
       if (error.status === 401) {
         promptForLogin();
@@ -197,8 +203,11 @@ export default function CartScreen({ navigation }) {
         </View>
         <Text style={styles.selectionLabel}>Moyen de paiement</Text>
         <View style={styles.optionRow}>
-          <TouchableOpacity style={[styles.option, paymentProvider === 'mobile_money' && styles.optionSelected]} onPress={() => setPaymentProvider('mobile_money')}>
-            <Text style={paymentProvider === 'mobile_money' ? styles.optionTextSelected : styles.optionText}>Mobile Money</Text>
+          <TouchableOpacity style={[styles.option, paymentProvider === 'airtel_money' && styles.optionSelected]} onPress={() => setPaymentProvider('airtel_money')}>
+            <Text style={paymentProvider === 'airtel_money' ? styles.optionTextSelected : styles.optionText}>Airtel Money</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.option, paymentProvider === 'orange_money' && styles.optionSelected]} onPress={() => setPaymentProvider('orange_money')}>
+            <Text style={paymentProvider === 'orange_money' ? styles.optionTextSelected : styles.optionText}>Orange Money</Text>
           </TouchableOpacity>
           <TouchableOpacity style={[styles.option, paymentProvider === 'paypal' && styles.optionSelected]} onPress={() => setPaymentProvider('paypal')}>
             <Text style={paymentProvider === 'paypal' ? styles.optionTextSelected : styles.optionText}>PayPal</Text>
