@@ -85,3 +85,17 @@ Pour créer le premier administrateur, inscrivez d’abord le compte puis, depui
 ```sql
 UPDATE user_account SET role = 'admin' WHERE email = 'admin@example.com';
 ```
+
+### Interface staff/admin
+
+`web/admin.html` (lien « Commandes » dans l’en-tête, visible une fois connecté avec un compte
+`staff` ou `admin`) donne une vue web sur la gestion des commandes, jusqu’ici accessible seulement
+en appelant l’API directement : liste filtrable par statut, réclamation d’une commande par un
+`staff`, et boutons de transition de statut adaptés au rôle et à l’affectation de chacun (le serveur
+reste la seule autorité : un bouton affiché à tort échoue simplement en `409`). `GET /api/orders`
+renvoie désormais aussi `payment_provider`/`payment_status` par commande, nécessaires pour vérifier
+manuellement un paiement Airtel/Orange Money avant de confirmer.
+
+La gestion des rôles (`PATCH /api/admin/users/:userId/role`) n’a pas d’interface : l’API ne propose
+aucune route pour lister les utilisateurs, donc l’attribution de rôles reste à faire via un accès
+direct à la base (voir ci-dessus) ou un appel API avec l’identifiant utilisateur déjà connu.
