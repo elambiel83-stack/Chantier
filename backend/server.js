@@ -367,6 +367,29 @@ const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
 const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
 
+const importRequestSchema = z.object({
+  sourceUrl: z.string().trim().url().max(2048).optional(),
+  description: z.string().trim().min(10).max(2000),
+  targetQty: z.number().positive().max(1000000)
+});
+const importQuoteSchema = z.object({
+  quoteAmount: z.number().positive().max(10000000),
+  quoteCurrency: z.enum(['USD', 'CDF', 'EUR']),
+  staffNotes: z.string().trim().max(2000).optional()
+});
+// Le staff documente ici les normes/certificats/code douanier vérifiés: obligatoire avant
+// qu'une demande puisse passer à 'ordered' (voir PATCH /import-requests/:id/status).
+const importComplianceSchema = z.object({
+  complianceNotes: z.string().trim().min(10).max(2000)
+});
+const importStatusSchema = z.object({
+  status: z.enum(['ordered', 'delivered', 'rejected', 'cancelled']),
+  staffNotes: z.string().trim().max(2000).optional()
+}).refine((data) => data.status !== 'rejected' || Boolean(data.staffNotes?.trim()), {
+  message: 'Un motif est requis pour refuser une demande d’importation',
+  path: ['staffNotes']
+});
+
 function requireJwtSecret() {
   if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) throw new Error('JWT_ACCESS_SECRET doit contenir au moins 32 caracteres');
 }
@@ -1459,6 +1482,160 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
     next(error);
   } finally {
     client.release();
+  }
+});
+
+// Demande d'importation: le client décrit un produit repéré chez un fournisseur (lien +
+// description) qu'il souhaite voir importé, plutôt que de faire confiance à un scraping
+// automatisé des sites fournisseurs (voir README > Sourcing produits): un membre du staff
+// sourcing chiffre la demande puis documente sa conformité aux normes applicables et au
+// code douanier avant qu'elle puisse être déclarée commandée — cette étape n'est jamais
+// automatique ni contournable (voir allowedPreviousStatuses ci-dessous).
+app.post('/api/import-requests', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  const parsed = importRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Demande d’importation invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    const result = await database.query(
+      'INSERT INTO import_request (customer_id, source_url, description, target_qty) VALUES ($1, $2, $3, $4) RETURNING id, status, created_at',
+      [req.auth.customerId, parsed.data.sourceUrl || null, parsed.data.description, parsed.data.targetQty]
+    );
+    res.status(201).json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/import-requests', requireAuthentication, async (req, res, next) => {
+  const status = z.enum(['submitted', 'quoted', 'compliance_cleared', 'ordered', 'delivered', 'rejected', 'cancelled']).safeParse(req.query.status);
+  if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de demande invalide' });
+  const filters = [];
+  const values = [];
+  if (req.auth.role === 'customer') {
+    values.push(req.auth.customerId);
+    filters.push(`import_request.customer_id = $${values.length}`);
+  } else if (req.auth.role === 'staff') {
+    values.push(req.auth.userId);
+    filters.push(`(import_request.assigned_to = $${values.length} OR (import_request.assigned_to IS NULL AND import_request.status = 'submitted'))`);
+  }
+  if (status.success) {
+    values.push(status.data);
+    filters.push(`import_request.status = $${values.length}`);
+  }
+  try {
+    const result = await database.query(
+      `SELECT import_request.id, import_request.source_url, import_request.description, import_request.target_qty,
+              import_request.status, import_request.quote_amount, import_request.quote_currency,
+              import_request.compliance_notes, import_request.staff_notes, import_request.assigned_to,
+              import_request.created_at, import_request.updated_at, customer.full_name, customer.phone
+       FROM import_request
+       JOIN customer ON customer.id = import_request.customer_id
+       ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY import_request.created_at DESC`,
+      values
+    );
+    res.json({ success: true, requests: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/import-requests/:id/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  try {
+    const result = await database.query(
+      "UPDATE import_request SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'submitted' RETURNING id, status, assigned_to",
+      [req.auth.userId, req.params.id]
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande n’est plus disponible pour affectation' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Un staff ne peut agir que sur les demandes qui lui sont affectées; un admin peut toujours agir.
+function importRequestOwnership(req, values) {
+  if (req.auth.role !== 'staff') return '';
+  values.push(req.auth.userId);
+  return ` AND assigned_to = $${values.length}`;
+}
+
+app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  const parsed = importQuoteSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Devis invalide', errors: parsed.error.flatten().fieldErrors });
+  const values = [req.params.id, parsed.data.quoteAmount, parsed.data.quoteCurrency, parsed.data.staffNotes || null];
+  const ownership = importRequestOwnership(req, values);
+  try {
+    const result = await database.query(
+      `UPDATE import_request SET quote_amount = $2, quote_currency = $3, staff_notes = COALESCE($4, staff_notes), status = 'quoted', updated_at = now()
+       WHERE id = $1 AND status = 'submitted'${ownership} RETURNING id, status, quote_amount, quote_currency`,
+      values
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande ne peut pas être chiffrée dans son état actuel' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  const parsed = importComplianceSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Constat de conformité invalide : précisez les normes, le code douanier et les certificats fournisseur vérifiés', errors: parsed.error.flatten().fieldErrors });
+  const values = [req.params.id, parsed.data.complianceNotes];
+  const ownership = importRequestOwnership(req, values);
+  try {
+    const result = await database.query(
+      `UPDATE import_request SET compliance_notes = $2, status = 'compliance_cleared', updated_at = now()
+       WHERE id = $1 AND status = 'quoted'${ownership} RETURNING id, status, compliance_notes`,
+      values
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande doit d’abord être chiffrée avant le contrôle de conformité' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/import-requests/:id/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  const parsed = importStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Transition invalide', errors: parsed.error.flatten().fieldErrors });
+  // 'ordered' n'est atteignable qu'après 'compliance_cleared': impossible de déclarer une
+  // commande fournisseur passée sans être passé par le contrôle de conformité.
+  const allowedPreviousStatuses = {
+    ordered: ['compliance_cleared'],
+    delivered: ['ordered'],
+    rejected: ['submitted', 'quoted', 'compliance_cleared'],
+    cancelled: ['submitted', 'quoted', 'compliance_cleared', 'ordered']
+  };
+  const values = [req.params.id, parsed.data.status, allowedPreviousStatuses[parsed.data.status], parsed.data.staffNotes || null];
+  const ownership = importRequestOwnership(req, values);
+  try {
+    const result = await database.query(
+      `UPDATE import_request SET status = $2, staff_notes = COALESCE($4, staff_notes), updated_at = now()
+       WHERE id = $1 AND status = ANY($3::text[])${ownership} RETURNING id, status`,
+      values
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Transition de statut non autorisée' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/import-requests/:id/cancel', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  try {
+    const result = await database.query(
+      `UPDATE import_request SET status = 'cancelled', updated_at = now()
+       WHERE id = $1 AND customer_id = $2 AND status IN ('submitted', 'quoted') RETURNING id, status`,
+      [req.params.id, req.auth.customerId]
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande ne peut plus être annulée' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
   }
 });
 

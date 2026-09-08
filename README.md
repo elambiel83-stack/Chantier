@@ -74,6 +74,51 @@ Une fois le paiement reçu et vérifié manuellement (SMS, relevé marchand...),
 `admin` confirme la commande via `PATCH /api/orders/:orderId/status` (`{"status": "confirmed"}`),
 ce qui marque aussi le paiement correspondant comme `paid`.
 
+## Sourcing produits et demandes d’importation
+
+Objectif : permettre à un client de demander l’importation d’un produit repéré chez un
+fournisseur (Chine ou ailleurs) que le catalogue MonChantier ne propose pas encore, en gardant
+la conformité aux normes et à la réglementation douanière comme étape humaine obligatoire —
+jamais automatisée.
+
+### Pourquoi pas de scraping automatique des sites fournisseurs
+
+- **Alibaba.com** expose une API officielle (`open.alibaba.com`/`openapi.alibaba.com`), mais
+  réservée aux ISV enregistrés et approuvés par Alibaba — pas d’accès self-service.
+- **1688.com** (marché domestique chinois) a aussi une API officielle (`open.1688.com`), mais elle
+  exige une vérification d’entreprise et un accord de partenariat signé avec Alibaba ; le site est
+  en outre pensé pour des achats à l’intérieur de la Chine, en chinois.
+- Scraper ces deux sites sans passer par leur API officielle viole leurs conditions
+  d’utilisation : risque de blocage IP et de litige contractuel, sans garantie de fiabilité.
+- **CJdropshipping** (`developers.cjdropshipping.com`) est en revanche accessible à un compte
+  développeur classique, hors Chine : API REST officielle pour la recherche produit et le suivi
+  de stock, **et** un service de sourcing (soumettre un lien/une image, leur équipe source auprès
+  d’usines partenaires) — exactement le besoin ici. C’est la piste à privilégier si une
+  intégration automatisée de recherche produit est ajoutée plus tard ; aucune clé n’est
+  configurée pour l’instant, la fonctionnalité ci-dessous fonctionne sans elle.
+
+### Fonctionnement actuel : `POST /api/import-requests`
+
+En l’absence d’intégration automatisée, le client décrit lui-même le produit (lien optionnel,
+description, quantité) ; un membre `staff` traite ensuite la demande à travers une machine à
+états dédiée (voir `backend/openapi.yaml` pour le détail de chaque route) :
+
+```
+submitted → quoted → compliance_cleared → ordered → delivered
+              ↘ rejected (motif requis)      ↘ cancelled
+```
+
+Point important : le statut `ordered` n’est atteignable que depuis `compliance_cleared` — le
+serveur refuse (409) toute tentative de sauter cette étape. `POST /import-requests/:id/compliance`
+exige que le staff documente explicitement (10 caractères minimum) les normes applicables, le
+code douanier (SH) et les certificats fournisseur vérifiés avant qu’une commande fournisseur
+puisse être déclarée passée. Le logiciel n’atteste jamais lui-même de la conformité légale : il
+force seulement qu’une personne l’ait vérifiée et l’ait consigné avant de continuer.
+
+Interfaces web : `web/import.html` (client, soumission + suivi de ses demandes) et
+`web/admin-imports.html` (staff/admin, mêmes rôles et logique d’affectation que
+`web/admin.html` pour les commandes).
+
 ## Authentification et rôles
 
 L’API applique une authentification par jeton Bearer. Les mots de passe sont hachés avec Argon2id ; les jetons d’accès JWT ont une durée de 15 minutes et les jetons de renouvellement sont stockés sous forme de hachage et rotatifs.
