@@ -314,15 +314,14 @@ const PRODUCTS = [
   }
 ];
 
-// Stockage temporaire des paniers (en production, utiliser une base de données)
-let carts = {};
-
-const cartSchema = z.object({
-  sessionId: z.string().uuid(),
+// Panier synchronisé entre appareils: stocké dans cart_item (table), rattaché au compte
+// (voir GET/PUT/DELETE /api/cart plus bas). Un visiteur non connecté reste en local
+// uniquement (localStorage/AsyncStorage côté client), rien à valider ici pour lui.
+const cartItemsSchema = z.object({
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
-  })).min(1).max(100)
+  })).max(100)
 });
 
 const orderSchema = z.object({
@@ -651,9 +650,24 @@ app.get('/api/products/category/:category', async (req, res, next) => {
   }
 });
 
-// Ajouter/mettre à jour le panier
-app.post('/api/cart', async (req, res, next) => {
-  const parsedCart = cartSchema.safeParse(req.body);
+// Panier synchronisé entre appareils pour un compte connecté. Un visiteur non connecté
+// n'appelle jamais ces routes: son panier reste local (localStorage/AsyncStorage) tant
+// qu'il ne s'est pas identifié — voir web/site.js et mobile/context/CartContext.js.
+app.get('/api/cart', requireAuthentication, async (req, res, next) => {
+  try {
+    const result = await database.query(
+      'SELECT product_id AS id, qty FROM cart_item WHERE user_id = $1 ORDER BY product_id',
+      [req.auth.userId]
+    );
+    res.json({ success: true, cart: { items: result.rows } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Remplace entièrement le panier serveur par celui envoyé (items vide = panier vidé).
+app.put('/api/cart', requireAuthentication, async (req, res, next) => {
+  const parsedCart = cartItemsSchema.safeParse(req.body);
   if (!parsedCart.success) {
     return res.status(400).json({
       success: false,
@@ -662,42 +676,50 @@ app.post('/api/cart', async (req, res, next) => {
     });
   }
 
-  const { sessionId, items } = parsedCart.data;
+  const quantities = aggregateQuantities(parsedCart.data.items);
 
   try {
     // Le stock affiché reste indicatif: seul le passage de commande le réserve.
-    const catalog = new Map((await listCatalog()).map((product) => [product.id, product]));
-    for (const [id, qty] of aggregateQuantities(items)) {
-      const product = catalog.get(id);
-      if (!product || qty > product.stock) {
-        return res.status(400).json({
-          success: false,
-          message: 'Un produit est introuvable ou la quantité dépasse le stock disponible'
-        });
+    if (quantities.size) {
+      const catalog = new Map((await listCatalog()).map((product) => [product.id, product]));
+      for (const [id, qty] of quantities) {
+        const product = catalog.get(id);
+        if (!product || qty > product.stock) {
+          return res.status(400).json({
+            success: false,
+            message: 'Un produit est introuvable ou la quantité dépasse le stock disponible'
+          });
+        }
       }
     }
   } catch (error) {
     return next(error);
   }
 
-  carts[sessionId] = {
-    items: items.map((item) => ({ id: item.id, qty: item.qty })),
-    updatedAt: new Date()
-  };
-
-  res.json({
-    success: true,
-    message: 'Panier mis à jour',
-    cart: carts[sessionId]
-  });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM cart_item WHERE user_id = $1', [req.auth.userId]);
+    for (const [id, qty] of quantities) {
+      await client.query('INSERT INTO cart_item (user_id, product_id, qty) VALUES ($1, $2, $3)', [req.auth.userId, id, qty]);
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Panier mis à jour', cart: { items: [...quantities].map(([id, qty]) => ({ id, qty })) } });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
 });
 
-// Créer un identifiant de panier non devinable.
-app.post('/api/cart/session', (req, res) => {
-  res.status(201).json({
-    success: true,
-    sessionId: crypto.randomUUID()
-  });
+app.delete('/api/cart', requireAuthentication, async (req, res, next) => {
+  try {
+    await database.query('DELETE FROM cart_item WHERE user_id = $1', [req.auth.userId]);
+    res.json({ success: true, message: 'Panier vidé' });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/auth/register', async (req, res, next) => {
@@ -1276,32 +1298,6 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
   }
 });
 
-// Récupérer le panier
-app.get('/api/cart/:sessionId', (req, res) => {
-  const cart = carts[req.params.sessionId];
-  
-  if (!cart) {
-    return res.json({
-      success: true,
-      cart: { items: [] }
-    });
-  }
-  
-  res.json({
-    success: true,
-    cart
-  });
-});
-
-// Supprimer le panier
-app.delete('/api/cart/:sessionId', (req, res) => {
-  delete carts[req.params.sessionId];
-  
-  res.json({
-    success: true,
-    message: 'Panier supprimé'
-  });
-});
 
 if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 

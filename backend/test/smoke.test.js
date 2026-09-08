@@ -79,11 +79,23 @@ test('GET /api/currency-rates renvoie les taux de repli', async () => {
   assert.equal(body.rates.USD, 1);
 });
 
-test('POST /api/cart/session renvoie un identifiant de panier', async () => {
-  const response = await fetch(`${BASE_URL}/api/cart/session`, { method: 'POST' });
-  assert.equal(response.status, 201);
-  const body = await response.json();
-  assert.match(body.sessionId, /^[0-9a-f-]{36}$/);
+test('GET /api/cart sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/cart`);
+  assert.equal(response.status, 503);
+});
+
+test('PUT /api/cart sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/cart`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items: [] })
+  });
+  assert.equal(response.status, 503);
+});
+
+test('DELETE /api/cart sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/cart`, { method: 'DELETE' });
+  assert.equal(response.status, 503);
 });
 
 // Sans DATABASE_URL, requireAuthentication refuse la requête avant même de

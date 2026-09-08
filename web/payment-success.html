@@ -8,6 +8,7 @@ const status = document.getElementById('status');
 if (!orderId || !confirmationToken) { status.textContent = 'Lien de confirmation incomplet. Contactez le support avec votre référence de commande.'; } else {
   window.apiCall(`/orders/${orderId}/paypal/capture`, { method: 'POST', body: { confirmationToken } }).then((response) => {
     localStorage.removeItem('cart');
+    if (localStorage.getItem('accessToken')) window.apiCall('/cart', { method: 'DELETE' }).catch(() => {});
     status.textContent = `Paiement confirmé. Votre commande ${response.orderId} est confirmée.`;
   }).catch((error) => { status.textContent = error.message || 'Le paiement n’a pas pu être confirmé.'; });
 }

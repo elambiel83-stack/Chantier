@@ -87,6 +87,31 @@ CREATE TABLE IF NOT EXISTS cart_item (
   PRIMARY KEY (cart_session_id, product_id)
 );
 
+-- Le panier par session ci-dessus n'a jamais été branché au code applicatif (le panier
+-- vivait en mémoire dans server.js, jamais dans ces tables) : remplacé par un panier par
+-- compte, synchronisable entre appareils (GET/PUT/DELETE /api/cart). Migration à usage
+-- unique: schema.sql étant rejoué à chaque déploiement, le DROP ne doit s'exécuter que la
+-- toute première fois (tant que cart_item a encore l'ancienne forme par session) — sans
+-- cette garde, chaque redéploiement suivant effacerait le panier de tout le monde.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'cart_item' AND column_name = 'cart_session_id'
+  ) THEN
+    DROP TABLE IF EXISTS cart_item;
+    DROP TABLE IF EXISTS cart;
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS cart_item (
+  user_id UUID NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+  product_id TEXT NOT NULL REFERENCES product(id) ON DELETE CASCADE,
+  qty INTEGER NOT NULL CHECK (qty > 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, product_id)
+);
+
 CREATE TABLE IF NOT EXISTS orders (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   customer_id UUID REFERENCES customer(id),
@@ -151,3 +176,4 @@ CREATE INDEX IF NOT EXISTS orders_assigned_to_idx ON orders(assigned_to);
 CREATE INDEX IF NOT EXISTS payment_order_id_idx ON payment(order_id);
 CREATE INDEX IF NOT EXISTS refresh_token_user_id_idx ON refresh_token(user_id);
 CREATE INDEX IF NOT EXISTS verification_code_user_id_idx ON verification_code(user_id);
+CREATE INDEX IF NOT EXISTS cart_item_user_id_idx ON cart_item(user_id);

@@ -123,6 +123,28 @@
     }
   }
 
+  // Écrit le panier localement puis, si connecté, le synchronise vers le serveur pour que
+  // les autres appareils du même compte le voient (best-effort, ne bloque jamais l'UI).
+  function persistCart(cart) {
+    localStorage.setItem('cart', JSON.stringify(cart));
+    if (window.syncCartToServer) window.syncCartToServer(cart);
+  }
+
+  // Au chargement d'une page, si connecté: adopte le panier du serveur (à jour si un autre
+  // appareil l'a modifié depuis). Un panier local non vide alors que le serveur est encore
+  // vide (ex: articles ajoutés avant connexion) est poussé vers le serveur plutôt que perdu.
+  async function syncCartOnLoad() {
+    if (!window.fetchCartFromServer) return;
+    const serverItems = await window.fetchCartFromServer();
+    if (serverItems === null) return;
+    const localCart = readCart();
+    if (serverItems.length === 0 && localCart.length > 0) {
+      await window.syncCartToServer(localCart);
+      return;
+    }
+    localStorage.setItem('cart', JSON.stringify(serverItems));
+  }
+
   function updateCartCount() {
     const count = readCart().reduce((total, item) => total + Number(item.qty), 0);
     document.querySelectorAll('#cart-count').forEach((badge) => {
@@ -218,7 +240,7 @@
     const cart = readCart();
     const idx = cart.findIndex(x=>x.id===id);
     if(idx>=0){ cart[idx].qty += qty; } else { cart.push({id, qty}); }
-    localStorage.setItem("cart", JSON.stringify(cart));
+    persistCart(cart);
     updateCartCount();
     renderCart();
     alert((lang==='fr'?'Ajouté au panier: ':'Added to cart: ') + (lang==='fr'?product.name_fr:product.name_en));
@@ -229,13 +251,13 @@
     const item = cart.find((entry) => entry.id === id);
     if (!item) return;
     item.qty = Math.max(0, Math.min(10000, Number(quantity) || 0));
-    localStorage.setItem('cart', JSON.stringify(cart.filter((entry) => entry.qty > 0)));
+    persistCart(cart.filter((entry) => entry.qty > 0));
     updateCartCount();
     renderCart();
   };
 
   window.removeFromCart = function(id) {
-    localStorage.setItem('cart', JSON.stringify(readCart().filter((item) => item.id !== id)));
+    persistCart(readCart().filter((item) => item.id !== id));
     updateCartCount();
     renderCart();
   };
@@ -251,7 +273,7 @@
       .filter(entry => entry.product);
     // Un produit retiré du catalogue ne doit pas casser le rendu du panier.
     if (catalog.length && enriched.length !== cart.length) {
-      localStorage.setItem('cart', JSON.stringify(enriched.map(({id, qty}) => ({id, qty}))));
+      persistCart(enriched.map(({id, qty}) => ({id, qty})));
       const notice = document.getElementById('checkout-status');
       if (notice) notice.textContent = dict().removedItems;
     }
@@ -320,7 +342,7 @@
           window.location.assign(paymentResponse.approvalUrl);
           return;
         }
-        localStorage.removeItem("cart");
+        persistCart([]);
         renderCart();
         checkoutForm.reset();
         // reset() rétablit les valeurs du HTML: on remet la devise choisie.
@@ -348,10 +370,13 @@
   applyI18n();
   updateCartCount();
   
-  // Attendre le catalogue et les taux de change officiels avant le premier rendu
+  // Attendre le catalogue, les taux de change officiels et (si connecté) le panier
+  // serveur avant le premier rendu — sinon on affiche un panier local qu'on remplace
+  // aussitôt après par celui du serveur, ce qui clignote à l'écran.
   Promise.all([
     window.loadProducts ? window.loadProducts() : Promise.resolve(),
-    window.loadCurrencyRates ? window.loadCurrencyRates() : Promise.resolve()
+    window.loadCurrencyRates ? window.loadCurrencyRates() : Promise.resolve(),
+    syncCartOnLoad()
   ]).then(() => {
     render();
     renderCart();

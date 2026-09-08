@@ -54,6 +54,29 @@ Une fois le paiement reçu et vérifié manuellement (SMS, relevé marchand...),
 `admin` confirme la commande via `PATCH /api/orders/:orderId/status` (`{"status": "confirmed"}`),
 ce qui marque aussi le paiement correspondant comme `paid`.
 
+## Panier
+
+Un visiteur non connecté garde un panier purement local (`localStorage` côté web,
+`AsyncStorage` côté mobile) : rien n'est envoyé au backend tant qu'il n'a pas de compte.
+
+Une fois connecté, le panier est synchronisé entre appareils via trois routes authentifiées,
+adossées à la table `cart_item` (par compte, pas par session anonyme) :
+
+- `GET /api/cart` : `{ items: [{ id, qty }] }`.
+- `PUT /api/cart` : remplace entièrement le panier serveur (`items: []` le vide). Même
+  vérification indicative qu'à l'ajout côté panier local : produit existant et quantité ne
+  dépassant pas le stock affiché — seul le passage de commande réserve réellement le stock.
+- `DELETE /api/cart` : vide le panier serveur (appelé après une commande confirmée).
+
+Le client (`web/site.js`+`web/config.js`, `mobile/context/CartContext.js`) applique la même
+logique des deux côtés : à la connexion, panier local et panier serveur sont **fusionnés**
+(quantités additionnées pour un même produit) puisque le local peut contenir des articles
+ajoutés avant l'identification ; aux ouvertures suivantes (session déjà active), le panier
+serveur est **adopté** tel quel — il peut refléter un ajout fait entre-temps depuis un autre
+appareil. Chaque modification locale (ajout/retrait/quantité) pousse aussitôt le panier complet
+vers le serveur (best-effort : une synchronisation qui échoue — hors ligne, session expirée —
+laisse le panier local pleinement utilisable, sans bloquer l'UI).
+
 ## Authentification et rôles
 
 L’API applique une authentification par jeton Bearer. Les mots de passe sont hachés avec Argon2id ; les jetons d’accès JWT ont une durée de 15 minutes et les jetons de renouvellement sont stockés sous forme de hachage et rotatifs.
