@@ -96,6 +96,14 @@ que lorsque PostgreSQL répond (`depends_on` + `pg_isready`). `DATABASE_URL` est
 `docker-compose.yml` (hôte `postgres`, celui du réseau Compose) ; toutes les autres variables
 viennent de `backend/.env`.
 
+Le mot de passe PostgreSQL par défaut (`change-me`) ne convient qu'au développement local : en
+production, créez un fichier `.env` à la racine du projet (lu automatiquement par `docker
+compose`, à ne jamais committer — déjà couvert par `.gitignore`) contenant
+`POSTGRES_PASSWORD=<mot de passe fort>`. Le port `5432` de PostgreSQL n'est de toute façon publié
+que sur `127.0.0.1` (comme le port `3000` du backend, voir plus bas) : seul le backend y accède
+via le réseau Compose interne, jamais depuis l'extérieur — mais un mot de passe fort reste la
+bonne pratique si ce serveur héberge d'autres services ou des utilisateurs non root.
+
 Ceci convient à un serveur avec Docker (VPS...). Sur une plateforme qui gère déjà le déploiement
 et le TLS (Render, Fly, Heroku...), ce `docker-compose.yml` n’est pas nécessaire — déployez-y
 directement `backend/` (ou l’image construite par `backend/Dockerfile`) selon ses instructions.

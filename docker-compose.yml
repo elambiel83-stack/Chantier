@@ -4,9 +4,16 @@ services:
     environment:
       POSTGRES_DB: monchantier
       POSTGRES_USER: monchantier
-      POSTGRES_PASSWORD: change-me
+      # Changez cette valeur en production: créez un fichier .env à la racine du projet
+      # (lu automatiquement par docker compose, à ne jamais committer) avec
+      # POSTGRES_PASSWORD=<mot de passe fort>. Doit rester identique au mot de passe dans
+      # DATABASE_URL ci-dessous (service backend).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
     ports:
-      - "5432:5432"
+      # 127.0.0.1 uniquement: sur un VPS avec IP publique, publier 5432 sans restriction
+      # exposerait la base à tout Internet. Seul le backend y accède, via le réseau Compose
+      # interne (hôte 'postgres'), pas par ce port publié.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/schema.sql:/docker-entrypoint-initdb.d/001-schema.sql:ro
@@ -28,7 +35,7 @@ services:
       - backend/.env
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://monchantier:change-me@postgres:5432/monchantier
+      DATABASE_URL: postgresql://monchantier:${POSTGRES_PASSWORD:-change-me}@postgres:5432/monchantier
     ports:
       # Sur 127.0.0.1 uniquement: pas exposé publiquement. Caddy (profil tls) l'atteint
       # via le réseau Compose interne (backend:3000), pas par ce port publié; en local,
