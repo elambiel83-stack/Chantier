@@ -22,7 +22,8 @@
     cartNote: "Partager votre position aide notre équipe à livrer plus vite — votre commande reste possible sans elle.",
     shareLocationBtn: "Partager ma position",
     locationShared: "Position partagée ✓",
-    locationDenied: "Position non partagée (autorisation refusée)."
+    locationDenied: "Position non partagée (autorisation refusée).",
+    locationNeedsConsent: "Acceptez les conditions de vente et la politique de confidentialité ci-dessus pour activer."
   };
   const EN = {
     hero1: "Buy",
@@ -47,7 +48,8 @@
     cartNote: "Sharing your position helps our team deliver faster — your order still works without it.",
     shareLocationBtn: "Share my position",
     locationShared: "Position shared ✓",
-    locationDenied: "Position not shared (permission denied)."
+    locationDenied: "Position not shared (permission denied).",
+    locationNeedsConsent: "Accept the terms of sale and privacy policy above to enable."
   };
   let lang = localStorage.getItem("lang") || "fr";
   let currency = localStorage.getItem("currency") || window.COMMERCE_CONFIG?.defaultCurrency || "USD";
@@ -170,6 +172,24 @@
   const shareDeliveryLocationBtn = document.getElementById('share-location');
   if (shareDeliveryLocationBtn) {
     const locationStatus = document.getElementById('location-status');
+    const consentCheckbox = document.getElementById('consent-checkbox');
+
+    // La demande de géolocalisation ne doit jamais précéder le consentement aux conditions
+    // de vente/politique de confidentialité: le bouton reste désactivé tant que la case
+    // n'est pas cochée (voir web/cart.html, qui place désormais la case au-dessus).
+    const syncShareButtonToConsent = () => {
+      const consented = Boolean(consentCheckbox?.checked);
+      shareDeliveryLocationBtn.disabled = !consented;
+      if (!consented) locationStatus.textContent = dict().locationNeedsConsent;
+      else if (locationStatus.textContent === dict().locationNeedsConsent) locationStatus.textContent = '';
+    };
+    if (consentCheckbox) {
+      syncShareButtonToConsent();
+      consentCheckbox.addEventListener('change', syncShareButtonToConsent);
+    } else {
+      shareDeliveryLocationBtn.disabled = false;
+    }
+
     shareDeliveryLocationBtn.addEventListener('click', () => {
       if (!navigator.geolocation) {
         locationStatus.textContent = lang === 'fr' ? 'Géolocalisation non supportée par votre navigateur.' : 'Geolocation not supported by your browser.';
