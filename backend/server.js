@@ -583,6 +583,32 @@ function aggregateQuantities(items) {
   return quantities;
 }
 
+// products: Map id -> ligne product (voir POST /api/orders, déjà chargée pour le décompte
+// de stock — pas de requête supplémentaire ici). payment: instructions mobile money, ou
+// undefined pour PayPal (le client règle ensuite via /orders/:id/paypal).
+function sendOrderConfirmationEmail(to, order, quantities, products, payment) {
+  const lines = [...quantities].map(([productId, qty]) => {
+    const product = products.get(productId);
+    return `- ${product.name_fr} (${product.id}) x${qty} ${product.unit}`;
+  });
+  const paymentInstructions = payment
+    ? `Paiement : envoyez ${order.total_amount} ${order.currency} via ${payment.label} au ${payment.payoutNumber} en indiquant la référence ${payment.reference}. Votre commande sera confirmée après vérification du paiement.`
+    : 'Paiement : finalisez le paiement PayPal pour confirmer la commande.';
+  const text = `Merci pour votre commande MonChantier !
+
+Référence : ${order.id}
+
+Articles commandés :
+${lines.join('\n')}
+
+Total : ${order.total_amount} ${order.currency}
+
+${paymentInstructions}
+
+Vous pouvez suivre l'état de votre commande à tout moment depuis « Mes commandes » sur le site.`;
+  return sendEmail(to, `Confirmation de votre commande MonChantier (${order.id.slice(0, 8)})`, text);
+}
+
 // Routes API
 
 // Route de test
@@ -1052,7 +1078,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
     // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
     const productResult = await client.query(
-      'SELECT id, price_usd, stock_qty FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
+      'SELECT id, name_fr, unit, price_usd, stock_qty FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
       [productIds]
     );
     if (productResult.rowCount !== productIds.length) {
@@ -1075,7 +1101,11 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       }
     }
 
-    await client.query('UPDATE customer SET full_name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4', [customer.fullName, customer.phone, customer.email || null, req.auth.customerId]);
+    const customerResult = await client.query(
+      'UPDATE customer SET full_name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4 RETURNING email',
+      [customer.fullName, customer.phone, customer.email || null, req.auth.customerId]
+    );
+    const customerEmail = customerResult.rows[0].email;
     const rateResult = await client.query('SELECT units_per_usd FROM currency_rate WHERE currency = $1', [currency]);
     if (rateResult.rowCount !== 1) throw new Error('Devise indisponible');
     const rate = Number(rateResult.rows[0].units_per_usd);
@@ -1105,6 +1135,14 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     const payment = mobileMoneyProvider
       ? { provider: paymentProvider, label: mobileMoneyProvider.label, payoutNumber: mobileMoneyProvider.payoutNumber, reference: order.id }
       : undefined;
+    // Purement informatif: la commande est déjà créée à ce stade, un échec d'envoi ne doit
+    // jamais faire échouer la réponse au client. channelAvailability évite une tentative
+    // inutile (et un avertissement dans les logs) quand Resend n'est pas configuré.
+    if (customerEmail && channelAvailability().email) {
+      sendOrderConfirmationEmail(customerEmail, order, quantities, products, payment).catch((error) => {
+        console.warn('E-mail de confirmation de commande non envoyé:', error.message);
+      });
+    }
     res.status(201).json({
       success: true,
       order: { id: order.id, status: order.status, totalAmount: order.total_amount, currency: order.currency, paymentProvider },
@@ -1238,6 +1276,44 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
       values
     );
     res.json({ success: true, orders: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Détail d'une commande (articles inclus) — même périmètre d'accès que la liste ci-dessus:
+// un customer ne voit que la sienne, un staff que celles qui lui sont affectées ou
+// disponibles, un admin toutes.
+app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  const filters = ['orders.id = $1'];
+  const values = [req.params.orderId];
+  if (req.auth.role === 'customer') {
+    values.push(req.auth.customerId);
+    filters.push(`orders.customer_id = $${values.length}`);
+  } else if (req.auth.role === 'staff') {
+    values.push(req.auth.userId);
+    filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
+  }
+  try {
+    const orderResult = await database.query(
+      `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
+              customer.full_name, customer.phone, payment.provider AS payment_provider, payment.status AS payment_status
+       FROM orders
+       JOIN customer ON customer.id = orders.customer_id
+       LEFT JOIN payment ON payment.order_id = orders.id
+       WHERE ${filters.join(' AND ')}`,
+      values
+    );
+    if (!orderResult.rowCount) return res.status(404).json({ success: false, message: 'Commande introuvable' });
+    const itemsResult = await database.query(
+      `SELECT order_item.product_id AS id, order_item.qty, order_item.unit_price_usd,
+              product.name_fr, product.name_en, product.unit
+       FROM order_item JOIN product ON product.id = order_item.product_id
+       WHERE order_item.order_id = $1 ORDER BY product.name_fr`,
+      [req.params.orderId]
+    );
+    res.json({ success: true, order: { ...orderResult.rows[0], items: itemsResult.rows } });
   } catch (error) {
     next(error);
   }

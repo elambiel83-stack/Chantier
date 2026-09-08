@@ -111,6 +111,11 @@ test('POST /api/orders sans base de données répond 503', async () => {
   assert.equal(response.status, 503);
 });
 
+test('GET /api/orders/:orderId sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/orders/00000000-0000-0000-0000-000000000000`);
+  assert.equal(response.status, 503);
+});
+
 test('POST /api/auth/google sans base de données répond 503', async () => {
   const response = await fetch(`${BASE_URL}/api/auth/google`, {
     method: 'POST',

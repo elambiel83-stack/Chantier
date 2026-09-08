@@ -52,7 +52,26 @@ client utilise pour envoyer son paiement. Si le numéro marchand correspondant n
 
 Une fois le paiement reçu et vérifié manuellement (SMS, relevé marchand...), un membre `staff` ou
 `admin` confirme la commande via `PATCH /api/orders/:orderId/status` (`{"status": "confirmed"}`),
-ce qui marque aussi le paiement correspondant comme `paid`.
+ce qui marque aussi le paiement correspondant comme `paid`. Seul un `admin` peut faire cette
+première transition (`pending → confirmed`) ; un `staff` ne peut réclamer
+(`POST /api/orders/:orderId/claim`) et faire progresser qu'une commande déjà `confirmed`.
+
+### Mes commandes et confirmation par e-mail
+
+- `GET /api/orders` : historique du client connecté (`staff`/`admin` voient plus large, voir
+  « Interface staff/admin » plus bas).
+- `GET /api/orders/:orderId` : détail d'une commande avec ses articles (`items`), même périmètre
+  d'accès que ci-dessus — un client qui n'est pas propriétaire de la commande reçoit un `404`,
+  jamais un `403` qui confirmerait que la commande existe.
+- `web/orders.html` (lien « Mes commandes » dans l'en-tête, visible une fois connecté avec un
+  compte `customer`) liste ces commandes et charge le détail à la demande (au clic, pas au
+  chargement de la page).
+
+Un e-mail de confirmation est envoyé au client juste après la création de la commande (via
+Resend, voir `RESEND_API_KEY`) : articles, total, instructions de paiement. Envoi purement
+informatif et non bloquant — `channelAvailability().email` évite une tentative si Resend n'est
+pas configuré, et un échec d'envoi (déjà configuré mais indisponible) n'empêche jamais la
+création de la commande, seulement journalisé en avertissement.
 
 ## Panier
 
