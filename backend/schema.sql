@@ -51,6 +51,10 @@ ALTER TABLE user_account ALTER COLUMN password_hash DROP NOT NULL;
 ALTER TABLE user_account ADD COLUMN IF NOT EXISTS google_sub TEXT UNIQUE;
 ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
 
+-- NULL = jamais vérifié. Un compte Google/Apple n'a pas besoin de ce parcours (le
+-- fournisseur a déjà vérifié l'e-mail) mais rien ne l'y force ici.
+ALTER TABLE user_account ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS refresh_token (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
@@ -128,8 +132,22 @@ ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('p
 -- Jeton à usage unique transmis dans l'URL de retour PayPal (capture sans session).
 ALTER TABLE payment ADD COLUMN IF NOT EXISTS confirmation_token_hash TEXT;
 
+-- Code de vérification (e-mail, SMS ou WhatsApp, au choix du client). Stocké haché comme
+-- refresh_token; expire et se limite en tentatives pour résister au brute-force.
+CREATE TABLE IF NOT EXISTS verification_code (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+  channel TEXT NOT NULL CHECK (channel IN ('email', 'sms', 'whatsapp')),
+  code_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS product_category_idx ON product(category);
 CREATE INDEX IF NOT EXISTS orders_customer_id_idx ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS orders_assigned_to_idx ON orders(assigned_to);
 CREATE INDEX IF NOT EXISTS payment_order_id_idx ON payment(order_id);
 CREATE INDEX IF NOT EXISTS refresh_token_user_id_idx ON refresh_token(user_id);
+CREATE INDEX IF NOT EXISTS verification_code_user_id_idx ON verification_code(user_id);

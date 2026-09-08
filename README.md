@@ -124,6 +124,14 @@ interceptées) à [Sentry](https://sentry.io). Sans cette variable, elles resten
 journalisées sur la sortie standard — aucune donnée n’est envoyée nulle part. Les rejets CORS
 (origine refusée) ne sont pas remontés : ce sont des refus attendus, pas des bugs.
 
+Avant tout envoi, `beforeSend` retire du corps et des en-têtes de requête capturés les mots de
+passe, jetons (accès, renouvellement, Google/Apple/Turnstile), codes de vérification et
+en-têtes `Authorization`/`Cookie` — Sentry ne doit jamais recevoir un secret, même dans le
+contexte d'une erreur. Au-delà des exceptions, certains événements de sécurité qui ne sont pas
+des bugs applicatifs sont explicitement remontés en `warning` (`captureSecurityEvent`) : CAPTCHA
+Turnstile refusé, quota d'API ou d'envoi de code dépassé, trop de tentatives sur un code de
+vérification — de quoi repérer un abus dans Sentry sans attendre qu'il devienne une erreur 500.
+
 Le serveur intercepte `SIGTERM`/`SIGINT` (envoyés par Render, Docker, systemd... à chaque
 redéploiement ou arrêt) pour cesser d’accepter de nouvelles requêtes, laisser les requêtes en
 cours se terminer, puis fermer le pool PostgreSQL avant de quitter — plutôt que de couper les
@@ -139,12 +147,14 @@ Les rôles sont les suivants :
 
 Routes d’authentification :
 
-- `POST /api/auth/register` : `{ "email", "password", "fullName", "phone" }` ; le mot de passe doit contenir de 12 à 128 caractères.
-- `POST /api/auth/login` : `{ "email", "password" }`.
+- `POST /api/auth/register` : `{ "email", "password", "fullName", "phone", "cf-turnstile-response"? }` ; le mot de passe doit contenir de 12 à 128 caractères.
+- `POST /api/auth/login` : `{ "email", "password", "cf-turnstile-response"? }`.
 - `POST /api/auth/google` : `{ "idToken" }` — jeton d'identité Google obtenu côté client (web ou mobile).
 - `POST /api/auth/apple` : `{ "identityToken", "fullName"? }` — jeton d'identité Apple ("Sign in with Apple", l'authentification iCloud sur iOS) ; `fullName` n'est fourni par Apple qu'à la toute première connexion, le client doit donc le transmettre à ce moment-là.
 - `POST /api/auth/refresh` : `{ "token" }` ; le jeton précédent devient immédiatement invalide.
-- `GET /api/auth/me` : en-tête `Authorization: Bearer <accessToken>`.
+- `GET /api/auth/me` : en-tête `Authorization: Bearer <accessToken>` ; renvoie aussi `email` et
+  `verified` (booléen, dérivé de `verified_at`) pour que le client affiche le statut de
+  vérification du compte.
 
 `POST /api/auth/google` et `POST /api/auth/apple` vérifient le jeton reçu contre les clés
 publiques du fournisseur (jamais contre ce que le client affirme dans le corps de la requête) —
@@ -153,6 +163,46 @@ comptes Google/Apple. Répondent `503` tant que `GOOGLE_CLIENT_IDS`/`APPLE_CLIEN
 `backend/.env.example`) ne sont pas définies. Un compte existant avec la même adresse e-mail
 (déjà vérifiée par le fournisseur) est automatiquement relié plutôt que dupliqué ; sinon un
 nouveau compte est créé sans mot de passe.
+
+### CAPTCHA (Cloudflare Turnstile)
+
+`cf-turnstile-response` (le jeton résolu par le widget Turnstile côté client) est vérifié auprès de
+Cloudflare sur `/api/auth/register` et `/api/auth/login` — voir `backend/turnstile.js`, testé
+isolément (`backend/test/turnstile.test.js`) avec Cloudflare mocké. Sans `TURNSTILE_SECRET_KEY`
+défini, la vérification est un no-op qui laisse toujours passer (dev local sans compte
+Cloudflare) ; définie, un jeton absent ou invalide est refusé (`403`) et l'événement remonté à
+Sentry (voir plus bas). Le site key (public, à poser dans `web/auth.html`) n'est pas une
+variable d'environnement backend.
+
+Côté web, `web/auth.html` charge déjà le script Turnstile et affiche le widget dans les deux
+formulaires (connexion/inscription) ; remplacez `YOUR_TURNSTILE_SITE_KEY` par la clé de site de
+votre tableau de bord Cloudflare avant mise en production. Le champ caché injecté par le widget
+(`cf-turnstile-response`) est ramassé automatiquement par `Object.fromEntries(new
+FormData(form))` dans `web/auth.js`, sans code JS supplémentaire à écrire. CAPTCHA n'est branché
+que côté web : il n'existe pas de SDK officiel Cloudflare Turnstile pour React Native/Expo, donc
+l'app mobile n'affiche pas de CAPTCHA — `register`/`login` y fonctionnent simplement sans
+`cf-turnstile-response` (champ optionnel).
+
+### Vérification de compte (e-mail, SMS ou WhatsApp au choix du client)
+
+- `GET /api/auth/verification/channels` : `{ email, sms, whatsapp }` — n'annonce un canal que
+  s'il est réellement configuré côté backend (voir `backend/.env.example`), jamais un choix qui
+  échouerait à l'envoi.
+- `POST /api/auth/verification/send` (authentifié) : `{ "channel": "email"|"sms"|"whatsapp" }` —
+  envoie un code à 6 chiffres, valable 10 minutes, sur l'e-mail ou le téléphone du compte. Limité
+  à 3 envois par compte toutes les 15 minutes (SMS/WhatsApp ont un coût par message).
+- `POST /api/auth/verification/confirm` (authentifié) : `{ "code" }` — 5 tentatives maximum par
+  code avant qu'un nouveau code soit nécessaire. Marque le compte comme `verified_at` en base.
+
+Côté web, `web/account.html`/`web/account.js` (lien « Mon compte » dans l'en-tête une fois
+connecté) affichent le statut de vérification, ne proposent que les canaux réellement
+disponibles (`GET /api/auth/verification/channels`), et enchaînent envoi puis saisie du code.
+Ces routes étant de simples endpoints JSON, l'app mobile peut s'y brancher de la même façon ;
+aucun écran dédié n'y a encore été construit dans ce lot — à faire avant de considérer la
+vérification comme disponible sur mobile.
+
+Aucune route existante ne conditionne son accès à `verified_at` : ce parcours de vérification
+est disponible mais n'est pas (encore) imposé pour utiliser le site.
 
 La création et la liste des commandes nécessitent aussi cet en-tête. Un membre `staff` réclame une commande confirmée au moyen de `POST /api/orders/:orderId/claim`; les membres `staff` et `admin` changent son statut avec `PATCH /api/orders/:orderId/status`. Seul un administrateur peut attribuer un rôle via `PATCH /api/admin/users/:userId/role`.
 

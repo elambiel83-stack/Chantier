@@ -90,7 +90,7 @@
   const authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
   if (authLink && authUser) {
     authLink.textContent = authUser.email || 'Mon compte';
-    authLink.href = 'auth.html';
+    authLink.href = 'account.html';
     authLink.classList.add('max-w-36', 'truncate');
     logoutButton?.classList.remove('hidden');
   }
