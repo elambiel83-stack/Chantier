@@ -91,6 +91,10 @@ const database = process.env.DATABASE_URL
   : null;
 const JWT_ISSUER = process.env.JWT_ISSUER || 'monchantier-api';
 const FALLBACK_CURRENCY_RATES = { USD: 1, CDF: 2800, EUR: 0.92 };
+// Vendeur historique créé par backend/schema.sql (UUID fixe): tout le catalogue codé en
+// dur ci-dessous lui appartient tant qu'il n'existe aucune interface d'attribution à un
+// autre vendeur. Utilisé aussi pour la réponse hors base (voir listCatalog/findProduct).
+const DEFAULT_VENDOR = { id: '00000000-0000-0000-0000-000000000001', name: 'MonChantier' };
 // Airtel Money et Orange Money n'ont pas d'API de collecte automatisée branchée ici: le
 // client envoie le paiement à ce numéro marchand avec la référence de commande, et le
 // staff confirme manuellement (PATCH /api/orders/:orderId/status) après vérification.
@@ -364,6 +368,16 @@ const appleAuthSchema = z.object({
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
 const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
+const organizationSchema = z.object({
+  legalName: z.string().trim().min(2).max(200),
+  tradeName: z.string().trim().min(2).max(200).optional(),
+  orgType: z.enum(['vendor', 'buyer', 'both']),
+  countryCode: z.string().trim().length(2).transform((code) => code.toUpperCase()),
+  registrationNumber: z.string().trim().max(100).optional(),
+  taxId: z.string().trim().max(100).optional(),
+  defaultCurrency: z.enum(['USD', 'CDF', 'EUR']).optional()
+});
+const organizationStatusSchema = z.object({ status: z.enum(['pending_verification', 'verified', 'suspended', 'rejected']) });
 
 function requireJwtSecret() {
   if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) throw new Error('JWT_ACCESS_SECRET doit contenir au moins 32 caracteres');
@@ -485,9 +499,11 @@ async function getPaypalAccessToken() {
 async function ensureCatalog(client) {
   for (const product of PRODUCTS) {
     // stock_qty n'est renseigné qu'à la création: le stock vit ensuite en base.
+    // organization_id de même: jamais réécrit sur conflit, pour ne pas écraser une
+    // réassignation faite depuis à un autre vendeur.
     await client.query(
-      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, organization_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (id) DO UPDATE SET
          name_fr = EXCLUDED.name_fr,
          name_en = EXCLUDED.name_en,
@@ -496,7 +512,7 @@ async function ensureCatalog(client) {
          image_url = EXCLUDED.image_url,
          category = EXCLUDED.category,
          stock_qty = COALESCE(product.stock_qty, EXCLUDED.stock_qty)`,
-      [product.id, product.name_fr, product.name_en, product.unit, product.price, product.img, product.category, product.stock]
+      [product.id, product.name_fr, product.name_en, product.unit, product.price, product.img, product.category, product.stock, DEFAULT_VENDOR.id]
     );
   }
 }
@@ -530,9 +546,15 @@ function mapProductRow(row) {
     price: Number(row.price_usd),
     img: row.image_url,
     category: row.category,
-    stock: row.stock_qty === null ? 0 : Number(row.stock_qty)
+    stock: row.stock_qty === null ? 0 : Number(row.stock_qty),
+    vendor: { id: row.organization_id, name: row.vendor_name || DEFAULT_VENDOR.name }
   };
 }
+
+const PRODUCT_COLUMNS = `product.id, product.name_fr, product.name_en, product.unit, product.price_usd,
+       product.image_url, product.category, product.stock_qty, product.organization_id,
+       COALESCE(organization.trade_name, organization.legal_name) AS vendor_name`;
+const PRODUCT_FROM = 'FROM product LEFT JOIN organization ON organization.id = product.organization_id';
 
 async function listCatalog({ category, search } = {}) {
   if (!database) {
@@ -543,33 +565,36 @@ async function listCatalog({ category, search } = {}) {
         product.name_fr.toLowerCase().includes(searchLower) ||
         product.name_en.toLowerCase().includes(searchLower) ||
         product.id.toLowerCase().includes(searchLower))
-    );
+    ).map((product) => ({ ...product, vendor: DEFAULT_VENDOR }));
   }
   await syncCatalog();
   const values = [];
   const filters = [];
   if (category) {
     values.push(category);
-    filters.push(`category = $${values.length}`);
+    filters.push(`product.category = $${values.length}`);
   }
   if (search) {
     values.push(`%${search.toLowerCase().replace(/([\\%_])/g, '\\$1')}%`);
     const placeholder = `$${values.length}`;
-    filters.push(`(lower(name_fr) LIKE ${placeholder} ESCAPE '\\' OR lower(name_en) LIKE ${placeholder} ESCAPE '\\' OR lower(id) LIKE ${placeholder} ESCAPE '\\')`);
+    filters.push(`(lower(product.name_fr) LIKE ${placeholder} ESCAPE '\\' OR lower(product.name_en) LIKE ${placeholder} ESCAPE '\\' OR lower(product.id) LIKE ${placeholder} ESCAPE '\\')`);
   }
   const result = await database.query(
-    `SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty FROM product
-     ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY id`,
+    `SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM}
+     ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY product.id`,
     values
   );
   return result.rows.map(mapProductRow);
 }
 
 async function findProduct(id) {
-  if (!database) return PRODUCTS.find((product) => product.id === id) || null;
+  if (!database) {
+    const product = PRODUCTS.find((product) => product.id === id);
+    return product ? { ...product, vendor: DEFAULT_VENDOR } : null;
+  }
   await syncCatalog();
   const result = await database.query(
-    'SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty FROM product WHERE id = $1',
+    `SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM} WHERE product.id = $1`,
     [id]
   );
   return result.rowCount ? mapProductRow(result.rows[0]) : null;
@@ -1300,6 +1325,65 @@ app.delete('/api/cart/:sessionId', (req, res) => {
     success: true,
     message: 'Panier supprimé'
   });
+});
+
+// Annuaire public des vendeurs vérifiés (fondation marketplace multi-vendeurs, voir
+// docs/marketplace-schema-cible.md). Ne liste que les vendeurs 'verified': un vendeur
+// encore en attente de vérification ou suspendu ne doit pas apparaître aux acheteurs.
+app.get('/api/organizations', async (req, res, next) => {
+  if (!database) return res.json({ success: true, count: 1, organizations: [{ ...DEFAULT_VENDOR, countryCode: 'CD' }] });
+  try {
+    const result = await database.query(
+      `SELECT id, trade_name, legal_name, country_code FROM organization
+       WHERE org_type IN ('vendor', 'both') AND status = 'verified'
+       ORDER BY COALESCE(trade_name, legal_name)`
+    );
+    const organizations = result.rows.map((row) => ({
+      id: row.id,
+      name: row.trade_name || row.legal_name,
+      countryCode: row.country_code
+    }));
+    res.json({ success: true, count: organizations.length, organizations });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Onboarding d'un vendeur: créé 'pending_verification' par défaut (voir organization.status
+// dans le schéma), à faire passer 'verified' via PATCH ci-dessous une fois sa conformité
+// (documents KYB...) vérifiée hors-ligne — il n'y a pas encore d'automatisation de ce contrôle.
+app.post('/api/admin/organizations', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  const parsed = organizationSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Organisation invalide' });
+  const { legalName, tradeName, orgType, countryCode, registrationNumber, taxId, defaultCurrency } = parsed.data;
+  try {
+    const result = await database.query(
+      `INSERT INTO organization (legal_name, trade_name, org_type, country_code, registration_number, tax_id, default_currency)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, legal_name, trade_name, org_type, country_code, status, default_currency, created_at`,
+      [legalName, tradeName || null, orgType, countryCode, registrationNumber || null, taxId || null, defaultCurrency || null]
+    );
+    res.status(201).json({ success: true, organization: result.rows[0] });
+  } catch (error) {
+    if (error.code === '23503') return res.status(400).json({ success: false, message: 'Pays inconnu' });
+    next(error);
+  }
+});
+
+app.patch('/api/admin/organizations/:organizationId/status', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.organizationId).success) return res.status(400).json({ success: false, message: 'Identifiant d’organisation invalide' });
+  const parsed = organizationStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
+  try {
+    const result = await database.query(
+      'UPDATE organization SET status = $1, updated_at = now() WHERE id = $2 RETURNING id, legal_name, trade_name, status',
+      [parsed.data.status, req.params.organizationId]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Organisation introuvable' });
+    res.json({ success: true, organization: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
 });
 
 if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);

@@ -71,6 +71,31 @@ test('GET /api/products/:id renvoie 404 pour un produit inconnu', async () => {
   assert.equal(response.status, 404);
 });
 
+test('GET /api/products/:id rattache le produit au vendeur historique', async () => {
+  const response = await fetch(`${BASE_URL}/api/products/CIM-001`);
+  const body = await response.json();
+  assert.equal(body.product.vendor.id, '00000000-0000-0000-0000-000000000001');
+  assert.equal(body.product.vendor.name, 'MonChantier');
+});
+
+test('GET /api/organizations sans base de données renvoie le vendeur historique', async () => {
+  const response = await fetch(`${BASE_URL}/api/organizations`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.success, true);
+  assert.equal(body.count, 1);
+  assert.equal(body.organizations[0].id, '00000000-0000-0000-0000-000000000001');
+});
+
+test('POST /api/admin/organizations sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/admin/organizations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ legalName: 'X', orgType: 'vendor', countryCode: 'CD' })
+  });
+  assert.equal(response.status, 503);
+});
+
 test('GET /api/currency-rates renvoie les taux de repli', async () => {
   const response = await fetch(`${BASE_URL}/api/currency-rates`);
   assert.equal(response.status, 200);

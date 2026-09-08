@@ -288,9 +288,14 @@ CREATE TABLE IF NOT EXISTS address (
 
 -- Rattache chaque produit existant à son vendeur. Nullable le temps du
 -- backfill (rejouable), puis verrouillé NOT NULL : un produit sans vendeur
--- n'a pas de sens dans un catalogue multi-vendeurs.
+-- n'a pas de sens dans un catalogue multi-vendeurs. DEFAULT sur le vendeur
+-- historique : ensureCatalog() (server.js) insère aussi sans le préciser
+-- explicitement pour les lignes déjà connues (ON CONFLICT DO UPDATE ne
+-- touche pas organization_id, pour ne jamais écraser une réassignation
+-- ultérieure à un autre vendeur).
 ALTER TABLE product ADD COLUMN IF NOT EXISTS organization_id UUID REFERENCES organization(id);
 UPDATE product SET organization_id = '00000000-0000-0000-0000-000000000001' WHERE organization_id IS NULL;
+ALTER TABLE product ALTER COLUMN organization_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
 ALTER TABLE product ALTER COLUMN organization_id SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS product_organization_id_idx ON product(organization_id);
