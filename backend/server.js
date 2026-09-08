@@ -377,6 +377,10 @@ const driverLocationSchema = z.object({
 // Au-delà de ce délai sans mise à jour de position pendant une livraison en cours, on
 // considère un blocage possible (embouteillage...) et on avertit le client une fois.
 const DELIVERY_DELAY_THRESHOLD_MINUTES = 15;
+// Durée de conservation des coordonnées de géolocalisation (destination du client, position
+// du livreur) après qu'une commande soit terminée ou annulée — voir purgeStaleDeliveryLocations
+// et web/privacy.html.
+const LOCATION_RETENTION_DAYS = 30;
 
 // true si la commande est en livraison et que la position du livreur n'a plus été
 // rafraîchie depuis DELIVERY_DELAY_THRESHOLD_MINUTES: signale un blocage possible
@@ -663,6 +667,32 @@ async function checkDeliveryDelays() {
     }
   } catch (error) {
     console.error('⚠️  Vérification des retards de livraison impossible:', error.message);
+  }
+}
+
+// Balayage périodique: tient la promesse de web/privacy.html ("les données de commande
+// sont supprimées ou anonymisées lorsqu'elles ne sont plus nécessaires") pour les
+// coordonnées de géolocalisation — la destination fournie par le client comme la position
+// du livreur. Une fois la commande dans un état terminal (completed/cancelled) depuis plus
+// de LOCATION_RETENTION_DAYS, ces colonnes sont mises à NULL; le reste de la commande
+// (montants, articles, statut) est conservé pour la comptabilité, seule la géolocalisation
+// est effacée. `updated_at` se fige à la transition vers l'état terminal: aucune mise à
+// jour de position n'est plus acceptée par PATCH .../location une fois la commande
+// terminée/annulée (voir cette route), donc `updated_at` reflète bien cette date-là.
+async function purgeStaleDeliveryLocations() {
+  if (!database) return;
+  try {
+    const result = await database.query(
+      `UPDATE orders SET delivery_latitude = NULL, delivery_longitude = NULL,
+              driver_latitude = NULL, driver_longitude = NULL, driver_location_updated_at = NULL
+       WHERE status IN ('completed', 'cancelled')
+         AND updated_at < now() - ($1 * interval '1 day')
+         AND (delivery_latitude IS NOT NULL OR driver_latitude IS NOT NULL)`,
+      [LOCATION_RETENTION_DAYS]
+    );
+    if (result.rowCount) console.log(`🧹 Géolocalisation anonymisée sur ${result.rowCount} commande(s) terminée(s) depuis plus de ${LOCATION_RETENTION_DAYS} jours`);
+  } catch (error) {
+    console.error('⚠️  Anonymisation des positions de livraison impossible:', error.message);
   }
 }
 
@@ -1495,6 +1525,7 @@ const server = app.listen(PORT, () => {
 // unref(): un balayage périodique ne doit jamais, à lui seul, empêcher le process de
 // s'arrêter (utile notamment pour les tests, qui tuent le process sans passer par shutdown()).
 const deliveryDelayInterval = database ? setInterval(checkDeliveryDelays, 5 * 60 * 1000).unref() : null;
+const locationRetentionInterval = database ? setInterval(purgeStaleDeliveryLocations, 24 * 60 * 60 * 1000).unref() : null;
 
 // Arrêt propre: cesse d'accepter de nouvelles requêtes, laisse les requêtes en cours se
 // terminer, ferme le pool PostgreSQL, puis quitte. Un déploiement (Render, Docker, k8s...)
@@ -1511,6 +1542,7 @@ async function shutdown(signal) {
   }, 10000);
   forceExit.unref();
   if (deliveryDelayInterval) clearInterval(deliveryDelayInterval);
+  if (locationRetentionInterval) clearInterval(locationRetentionInterval);
   try {
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     if (database) await database.end();

@@ -180,8 +180,11 @@
             ? `<p class="mt-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">⚠️ Position du livreur non rafraîchie depuis un moment — blocage possible.</p>`
             : ''}
           ${canShareLocation(order)
-            ? `<button type="button" class="location-share px-3 py-2 rounded-lg text-sm outline-button border mt-2"
-                 data-order-id="${order.id}">${activeShares.has(order.id) ? 'Arrêter le partage de ma position' : 'Partager ma position (livraison)'}</button>`
+            ? `<div class="mt-2">
+                 <button type="button" class="location-share px-3 py-2 rounded-lg text-sm outline-button border"
+                   data-order-id="${order.id}">${activeShares.has(order.id) ? 'Arrêter le partage de ma position' : 'Partager ma position (livraison)'}</button>
+                 <p class="mt-1 text-xs text-slate-400">Visible par le client et les autres agents pendant cette livraison, puis effacée automatiquement (voir <a class="underline" href="privacy.html" target="_blank" rel="noopener">politique de confidentialité</a>).</p>
+               </div>`
             : ''}
           ${actions.length ? `<div class="mt-3 flex flex-wrap gap-2">${actions.map((action, index) => `
             <button type="button" class="order-action px-3 py-2 rounded-lg text-sm ${action.variant === 'signal' ? 'signal-button text-white' : 'outline-button border'}"
