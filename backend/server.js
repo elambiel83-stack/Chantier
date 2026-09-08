@@ -466,7 +466,7 @@ async function checkTurnstile(req, res, token) {
 async function getPaypalAccessToken() {
   const { PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_API_BASE } = process.env;
   if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
-    throw new Error('PayPal n’est pas configuré');
+    throw Object.assign(new Error('PayPal n’est pas configuré'), { status: 503 });
   }
 
   const authorization = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString('base64');
@@ -1134,6 +1134,7 @@ app.post('/api/orders/:orderId/paypal', requireAuthentication, requireRole('cust
     const approval = paypalOrder.links.find((link) => link.rel === 'approve');
     res.json({ success: true, approvalUrl: approval && approval.href, confirmationToken });
   } catch (error) {
+    if (error.status === 503) return res.status(503).json({ success: false, message: 'PayPal n’est pas configuré. Contactez-nous.' });
     next(error);
   }
 });
