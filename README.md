@@ -41,6 +41,26 @@ PayPal. Le montant réellement encaissé est comparé à celui de la commande av
 `APP_URL` (voir `backend/.env.example`) doit pointer vers le domaine public du site en production :
 c’est lui qui sert à construire ces URLs de retour PayPal.
 
+### CinetPay (Mobile Money automatisé)
+
+CinetPay (https://cinetpay.com) agrège les paiements Mobile Money (Airtel Money, Orange Money,
+M-Pesa...) avec une API de collecte automatisée, contrairement à Airtel/Orange Money ci-dessous.
+Ne prend en charge que `USD` et `CDF` (pas `EUR`).
+
+`POST /api/orders/:orderId/cinetpay` exige le jeton du client propriétaire de la commande et
+renvoie `paymentUrl` (à ouvrir pour payer) ainsi qu’un jeton de confirmation à usage unique, placé
+dans l’URL de retour (paramètre `ct`) comme pour PayPal. `POST /api/orders/:orderId/cinetpay/check`
+l’exige pour confirmer le paiement depuis la page de retour, sans session ouverte.
+
+Le statut réel n’est jamais déduit de ce que renvoie le client ou la notification CinetPay :
+`POST /api/cinetpay/notify` (webhook serveur-à-serveur, appelé directement par CinetPay) ne
+contient que l’identifiant de transaction, qui sert uniquement à déclencher un appel à l’API
+CinetPay `/v2/payment/check` — seule source de vérité sur le statut et le montant encaissés. Cette
+notification arrive indépendamment du retour du client dans son navigateur (utile en Mobile Money,
+où le client peut fermer l’onglet avant la validation) ; la page de retour revérifie aussi le
+statut au cas où la notification n’est pas encore arrivée, et peut donc répondre `pending`.
+`APP_URL` sert à construire à la fois l’URL de retour client et l’URL de notification.
+
 ### Airtel Money et Orange Money
 
 Aucune API de collecte automatisée n’est branchée pour ces deux opérateurs : la confirmation est

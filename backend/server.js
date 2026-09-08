@@ -98,6 +98,8 @@ const MOBILE_MONEY_PROVIDERS = {
   airtel_money: { label: 'Airtel Money', payoutNumber: process.env.AIRTEL_MONEY_PAYOUT_NUMBER },
   orange_money: { label: 'Orange Money', payoutNumber: process.env.ORANGE_MONEY_PAYOUT_NUMBER }
 };
+// CinetPay (paiement Mobile Money automatisé) ne prend en charge que USD et CDF ici.
+const CINETPAY_SUPPORTED_CURRENCIES = ['USD', 'CDF'];
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
@@ -332,7 +334,7 @@ const orderSchema = z.object({
     email: z.string().trim().email().max(254).optional()
   }),
   currency: z.enum(['USD', 'CDF', 'EUR']),
-  paymentProvider: z.enum(['paypal', 'airtel_money', 'orange_money']),
+  paymentProvider: z.enum(['paypal', 'cinetpay', 'airtel_money', 'orange_money']),
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
@@ -480,6 +482,97 @@ async function getPaypalAccessToken() {
   });
   if (!response.ok) throw new Error('Authentification PayPal refusée');
   return (await response.json()).access_token;
+}
+
+function requireCinetpayCredentials() {
+  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = process.env;
+  if (!CINETPAY_API_KEY || !CINETPAY_SITE_ID) throw new Error('CinetPay n’est pas configuré');
+  return { CINETPAY_API_KEY, CINETPAY_SITE_ID };
+}
+
+async function initCinetpayPayment({ transactionId, amount, currency, description, customerName, customerPhone, returnUrl, notifyUrl }) {
+  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = requireCinetpayCredentials();
+  const response = await fetch('https://api-cinetpay.com/v2/payment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      apikey: CINETPAY_API_KEY,
+      site_id: CINETPAY_SITE_ID,
+      transaction_id: transactionId,
+      amount,
+      currency,
+      description,
+      customer_name: customerName,
+      customer_phone_number: customerPhone,
+      notify_url: notifyUrl,
+      return_url: returnUrl,
+      channels: 'ALL',
+      lang: 'fr'
+    })
+  });
+  const body = await response.json();
+  if (!response.ok || body.code !== '201' || !body.data?.payment_url) {
+    throw new Error(body.message || 'Création du paiement CinetPay refusée');
+  }
+  return body.data.payment_url;
+}
+
+// Seule source de vérité sur le statut d'un paiement CinetPay: la notification
+// serveur-à-serveur (POST /api/cinetpay/notify) ne contient que l'identifiant de
+// transaction, jamais le statut ni le montant, précisément pour forcer cet appel.
+async function checkCinetpayPayment(transactionId) {
+  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = requireCinetpayCredentials();
+  const response = await fetch('https://api-cinetpay.com/v2/payment/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apikey: CINETPAY_API_KEY, site_id: CINETPAY_SITE_ID, transaction_id: transactionId })
+  });
+  return response.json();
+}
+
+// Appelée à la fois par la page de retour client (POST /orders/:id/cinetpay/check) et par
+// le webhook CinetPay: dans les deux cas on revérifie le statut réel auprès de CinetPay
+// avant de confirmer quoi que ce soit, et on n'agit que si le paiement est encore 'pending'
+// (idempotent en cas de double appel).
+async function finalizeCinetpayPayment(transactionId) {
+  const paymentResult = await database.query(
+    `SELECT payment.id, payment.order_id, payment.amount, payment.currency, payment.status
+     FROM payment WHERE payment.provider = 'cinetpay' AND payment.provider_reference = $1`,
+    [transactionId]
+  );
+  const payment = paymentResult.rows[0];
+  if (!payment) return null;
+  if (payment.status !== 'pending') return { orderId: payment.order_id, status: payment.status === 'paid' ? 'confirmed' : payment.status };
+
+  const result = await checkCinetpayPayment(transactionId);
+  let accepted = result.code === '00' && result.data?.status === 'ACCEPTED';
+  if (accepted) {
+    const paidAmount = Number(result.data.amount);
+    const paidCurrency = String(result.data.currency || '').trim();
+    if (paidCurrency !== payment.currency.trim() || paidAmount !== Number(payment.amount)) {
+      console.error('Montant CinetPay incohérent', { transactionId, received: result.data, expected: { amount: payment.amount, currency: payment.currency } });
+      accepted = false;
+    }
+  }
+  if (!accepted && result.code !== '00' && result.data?.status !== 'REFUSED') {
+    // Statut encore indéterminé côté CinetPay (ex: en attente de validation Mobile Money):
+    // on ne marque rien comme échoué, un prochain appel (webhook ou retour client) retentera.
+    return { orderId: payment.order_id, status: 'pending' };
+  }
+
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE payment SET status = $1, updated_at = now() WHERE id = $2', [accepted ? 'paid' : 'failed', payment.id]);
+    if (accepted) await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [payment.order_id]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { orderId: payment.order_id, status: accepted ? 'confirmed' : 'failed' };
 }
 
 async function ensureCatalog(client) {
@@ -1008,6 +1101,12 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       message: 'PayPal ne prend pas en charge le CDF. Sélectionnez USD ou EUR.'
     });
   }
+  if (paymentProvider === 'cinetpay' && !CINETPAY_SUPPORTED_CURRENCIES.includes(currency)) {
+    return res.status(400).json({
+      success: false,
+      message: 'CinetPay ne prend pas en charge l’EUR. Sélectionnez USD ou CDF.'
+    });
+  }
   const mobileMoneyProvider = MOBILE_MONEY_PROVIDERS[paymentProvider];
   if (mobileMoneyProvider && !mobileMoneyProvider.payoutNumber) {
     return res.status(503).json({
@@ -1181,6 +1280,94 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
       client.release();
     }
     res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/orders/:orderId/cinetpay', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  try {
+    const paymentResult = await database.query(
+      `SELECT payment.id, payment.amount, payment.currency FROM payment
+       JOIN orders ON orders.id = payment.order_id
+       WHERE payment.order_id = $1 AND orders.customer_id = $2 AND payment.provider = 'cinetpay' AND payment.status = 'pending'`,
+      [req.params.orderId, req.auth.customerId]
+    );
+    if (paymentResult.rowCount !== 1) return res.status(404).json({ success: false, message: 'Paiement CinetPay introuvable ou déjà traité' });
+    const payment = paymentResult.rows[0];
+    const currency = payment.currency.trim();
+    if (!CINETPAY_SUPPORTED_CURRENCIES.includes(currency)) {
+      return res.status(400).json({ success: false, message: 'CinetPay ne prend pas en charge l’EUR. Sélectionnez USD ou CDF.' });
+    }
+    const applicationUrl = process.env.APP_URL || 'http://localhost:3002';
+    const confirmationToken = crypto.randomBytes(32).toString('base64url');
+    // Un identifiant de transaction CinetPay ne peut être réutilisé: on en dérive un nouveau
+    // à chaque tentative, même pour une commande déjà tentée sans succès.
+    const transactionId = `${req.params.orderId}-${crypto.randomBytes(4).toString('hex')}`;
+    const customerResult = await database.query('SELECT full_name, phone FROM customer WHERE id = $1', [req.auth.customerId]);
+    const customer = customerResult.rows[0];
+    const paymentUrl = await initCinetpayPayment({
+      transactionId,
+      amount: Number(payment.amount),
+      currency,
+      description: `Commande MonChantier ${req.params.orderId}`,
+      customerName: customer?.full_name || 'Client MonChantier',
+      customerPhone: customer?.phone || '',
+      notifyUrl: `${applicationUrl}/api/cinetpay/notify`,
+      returnUrl: `${applicationUrl}/payment-success.html?orderId=${req.params.orderId}&ct=${confirmationToken}&provider=cinetpay`
+    });
+    await database.query(
+      'UPDATE payment SET provider_reference = $1, confirmation_token_hash = $2, updated_at = now() WHERE id = $3',
+      [transactionId, hashToken(confirmationToken), payment.id]
+    );
+    res.json({ success: true, paymentUrl, confirmationToken });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Appelée par la page de retour CinetPay, sans session: l'accès est prouvé par le jeton de
+// confirmation reçu à la création du paiement, comme /orders/:orderId/paypal/capture.
+app.post('/api/orders/:orderId/cinetpay/check', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  const parsedCheck = paypalCaptureSchema.safeParse(req.body);
+  if (!parsedCheck.success) return res.status(400).json({ success: false, message: 'Jeton de confirmation manquant' });
+  try {
+    const paymentResult = await database.query(
+      `SELECT provider_reference, confirmation_token_hash, status FROM payment
+       WHERE order_id = $1 AND provider = 'cinetpay'`,
+      [req.params.orderId]
+    );
+    const payment = paymentResult.rows[0];
+    if (!payment || !payment.provider_reference) return res.status(404).json({ success: false, message: 'Paiement CinetPay introuvable' });
+    if (!tokensMatch(parsedCheck.data.confirmationToken, payment.confirmation_token_hash)) {
+      return res.status(403).json({ success: false, message: 'Jeton de confirmation invalide' });
+    }
+    const outcome = payment.status === 'pending'
+      ? await finalizeCinetpayPayment(payment.provider_reference)
+      : { orderId: req.params.orderId, status: payment.status === 'paid' ? 'confirmed' : payment.status };
+    if (outcome.status === 'confirmed') return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+    if (outcome.status === 'pending') return res.json({ success: true, orderId: req.params.orderId, status: 'pending', message: 'Paiement en attente de confirmation par CinetPay' });
+    return res.status(400).json({ success: false, message: 'Le paiement CinetPay n’a pas abouti' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Notification serveur-à-serveur CinetPay: envoyée en application/x-www-form-urlencoded,
+// avec pour seule information fiable l'identifiant de transaction (voir finalizeCinetpayPayment
+// pour la vérification du statut réel). Toujours répondre 200 pour éviter des relances inutiles
+// de CinetPay une fois la commande retrouvée; une commande introuvable retourne 404 pour signal.
+app.post('/api/cinetpay/notify', express.urlencoded({ extended: false, limit: '10kb' }), async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const transactionId = req.body?.cpm_trans_id;
+  if (typeof transactionId !== 'string' || !transactionId) return res.status(400).end();
+  try {
+    const outcome = await finalizeCinetpayPayment(transactionId);
+    if (!outcome) return res.status(404).end();
+    res.status(200).end();
   } catch (error) {
     next(error);
   }

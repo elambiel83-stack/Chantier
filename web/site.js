@@ -313,11 +313,13 @@
           }
         });
         localStorage.setItem("lastOrderId", orderResponse.order.id);
-        if (paymentProvider === "paypal") {
-          status.textContent = lang === "fr" ? "Redirection sécurisée vers PayPal..." : "Redirecting securely to PayPal...";
-          const paymentResponse = await window.apiCall(`/orders/${orderResponse.order.id}/paypal`, { method: "POST" });
-          if (!paymentResponse.approvalUrl) throw new Error("Lien d’approbation PayPal indisponible");
-          window.location.assign(paymentResponse.approvalUrl);
+        if (paymentProvider === "paypal" || paymentProvider === "cinetpay") {
+          const providerLabel = paymentProvider === "paypal" ? "PayPal" : "CinetPay";
+          status.textContent = lang === "fr" ? `Redirection sécurisée vers ${providerLabel}...` : `Redirecting securely to ${providerLabel}...`;
+          const paymentResponse = await window.apiCall(`/orders/${orderResponse.order.id}/${paymentProvider}`, { method: "POST" });
+          const redirectUrl = paymentProvider === "paypal" ? paymentResponse.approvalUrl : paymentResponse.paymentUrl;
+          if (!redirectUrl) throw new Error(`Lien de paiement ${providerLabel} indisponible`);
+          window.location.assign(redirectUrl);
           return;
         }
         localStorage.removeItem("cart");

@@ -158,6 +158,67 @@ paths:
           description: Jeton de confirmation invalide
         '404':
           $ref: '#/components/responses/NotFound'
+  /orders/{orderId}/cinetpay:
+    post:
+      summary: Crée un paiement CinetPay (Mobile Money automatisé) pour une commande USD ou CDF du client authentifié
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: >-
+            URL de paiement CinetPay créée. La réponse contient aussi le jeton de
+            confirmation à usage unique, également placé dans l'URL de retour (paramètre ct).
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /orders/{orderId}/cinetpay/check:
+    post:
+      summary: Vérifie et finalise un paiement CinetPay auprès de l'API CinetPay
+      description: >-
+        Appelée par la page de retour CinetPay, sans session: l'accès est prouvé par le
+        jeton de confirmation reçu à la création du paiement. Le statut et le montant
+        renvoyés proviennent toujours d'un appel à l'API CinetPay /v2/payment/check.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmationToken]
+              properties:
+                confirmationToken:
+                  type: string
+                  description: Jeton reçu dans l'URL de retour (paramètre ct)
+      responses:
+        '200':
+          description: >-
+            Paiement confirmé (status=confirmed) ou encore en attente de validation
+            Mobile Money côté CinetPay (status=pending, à revérifier plus tard)
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '403':
+          description: Jeton de confirmation invalide
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /cinetpay/notify:
+    post:
+      summary: Notification serveur-à-serveur CinetPay (webhook)
+      description: >-
+        Appelée directement par CinetPay en application/x-www-form-urlencoded. Le corps
+        n'est jamais pris pour argent comptant: seul l'identifiant de transaction
+        (cpm_trans_id) est utilisé pour déclencher une revérification via l'API CinetPay.
+      responses:
+        '200':
+          description: Notification traitée (paiement retrouvé et statut revérifié)
+        '404':
+          description: Transaction CinetPay inconnue
 components:
   securitySchemes:
     bearerAuth:
@@ -239,7 +300,7 @@ components:
           enum: [USD, CDF, EUR]
         paymentProvider:
           type: string
-          enum: [paypal, airtel_money, orange_money]
+          enum: [paypal, cinetpay, airtel_money, orange_money]
         items:
           type: array
           minItems: 1
