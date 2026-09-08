@@ -64,8 +64,9 @@ première transition (`pending → confirmed`) ; un `staff` ne peut réclamer
   d'accès que ci-dessus — un client qui n'est pas propriétaire de la commande reçoit un `404`,
   jamais un `403` qui confirmerait que la commande existe.
 - `web/orders.html` (lien « Mes commandes » dans l'en-tête, visible une fois connecté avec un
-  compte `customer`) liste ces commandes et charge le détail à la demande (au clic, pas au
-  chargement de la page).
+  compte `customer`) et `mobile/screens/OrdersScreen.js` (bouton « Mes commandes » sur l'accueil,
+  même condition) listent ces commandes et chargent le détail à la demande (au clic, pas au
+  chargement de la page/l'écran).
 
 Un e-mail de confirmation est envoyé au client juste après la création de la commande (via
 Resend, voir `RESEND_API_KEY`) : articles, total, instructions de paiement. Envoi purement

@@ -93,9 +93,11 @@ mobile/
 ├── screens/
 │   ├── HomeScreen.js        # Écran d'accueil
 │   ├── ProductsScreen.js    # Catalogue produits
-│   └── CartScreen.js        # Panier
+│   ├── CartScreen.js        # Panier
+│   └── OrdersScreen.js      # Mes commandes (historique + détail)
 ├── context/
-│   └── CartContext.js       # Gestion du panier
+│   ├── CartContext.js       # Gestion du panier
+│   └── AuthContext.js       # Session, jetons, authFetch
 └── assets/                   # Images et icônes
 ```
 
@@ -180,7 +182,7 @@ captures d'écran.
 ## 📝 TODO
 
 - [x] Authentification utilisateur (e-mail/mot de passe, Google, Apple — voir `GOOGLE_AUTH_SETUP.md`/`APPLE_AUTH_SETUP.md`)
-- [ ] Historique des commandes
+- [x] Historique des commandes (`OrdersScreen.js`, lien « Mes commandes » sur l'accueil pour un compte customer connecté)
 - [ ] Notifications push
 - [ ] Mode hors ligne
 - [x] Paiement intégré (PayPal, Airtel Money, Orange Money — voir le README à la racine du dépôt)
