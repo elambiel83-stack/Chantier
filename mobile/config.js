@@ -12,12 +12,22 @@ export const API_CONFIG = {
 };
 
 // Client OAuth Google: expo-auth-session accepte un identifiant par plateforme.
-// Non définis, Google.useAuthRequest reste inactif (bouton désactivé) plutôt que
-// d'utiliser un faux identifiant qui échouerait silencieusement.
+// Aucun des trois définis: Google.useAuthRequest lève une exception synchrone dès son
+// premier rendu (invariantClientId dans expo-auth-session — vérifié en conditions
+// réelles, contrairement à ce que le commentaire précédent supposait), ce qui plantait
+// tout l'écran de connexion/inscription avant même d'afficher le formulaire e-mail/mot
+// de passe. GOOGLE_AUTH_CONFIGURED reflète la vraie disponibilité; un identifiant de
+// repli non fonctionnel évite seulement le crash, jamais utilisé si un vrai est défini.
+const NOT_CONFIGURED_PLACEHOLDER = 'google-oauth-not-configured';
+export const GOOGLE_AUTH_CONFIGURED = Boolean(
+  process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB ||
+  process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS ||
+  process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID
+);
 export const GOOGLE_AUTH_CONFIG = {
-  clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB,
-  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS,
-  androidClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID,
+  clientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_WEB || NOT_CONFIGURED_PLACEHOLDER,
+  iosClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_IOS || NOT_CONFIGURED_PLACEHOLDER,
+  androidClientId: process.env.EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID || NOT_CONFIGURED_PLACEHOLDER,
 };
 
 export const getApiUrl = (endpoint) => {

@@ -11,7 +11,7 @@ import CartScreen from './screens/CartScreen';
 import OrdersScreen from './screens/OrdersScreen';
 import { CartProvider } from './context/CartContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { GOOGLE_AUTH_CONFIG } from './config';
+import { GOOGLE_AUTH_CONFIG, GOOGLE_AUTH_CONFIGURED } from './config';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -85,7 +85,7 @@ function LoginScreen({ navigation }) {
   };
 
   const handleGooglePress = async () => {
-    if (!request) return notifyGoogleNotConfigured();
+    if (!GOOGLE_AUTH_CONFIGURED || !request) return notifyGoogleNotConfigured();
     try {
       const result = await promptAsync();
       if (result.type !== 'success') return;
@@ -246,7 +246,7 @@ function RegisterScreen({ navigation }) {
   };
 
   const handleGooglePress = async () => {
-    if (!request) return notifyGoogleNotConfigured();
+    if (!GOOGLE_AUTH_CONFIGURED || !request) return notifyGoogleNotConfigured();
     try {
       const result = await promptAsync();
       if (result.type !== 'success') return;
