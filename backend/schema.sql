@@ -15,6 +15,13 @@ ALTER TABLE product ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'pro
 -- Volontairement nullable: une colonne NULL signale un produit jamais initialisé, que
 -- la synchronisation du catalogue amorcera; 0 signifie réellement "en rupture".
 ALTER TABLE product ADD COLUMN IF NOT EXISTS stock_qty NUMERIC(12,3) CHECK (stock_qty >= 0);
+-- NULL = catalogue MonChantier (comportement historique, voir PRODUCTS/ensureCatalog).
+-- Non-NULL = produit/service publié par un partenaire de la marketplace (voir table
+-- vendor ci-dessous et POST/PATCH /api/vendor/products).
+ALTER TABLE product ADD COLUMN IF NOT EXISTS vendor_id UUID;
+-- Permet à un partenaire de suspendre une annonce sans la supprimer (ce qui casserait la
+-- référence order_item.product_id des commandes déjà passées).
+ALTER TABLE product ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
 
 CREATE TABLE IF NOT EXISTS currency_rate (
   currency CHAR(3) PRIMARY KEY CHECK (currency IN ('USD', 'CDF', 'EUR')),
@@ -50,6 +57,38 @@ CREATE TABLE IF NOT EXISTS user_account (
 ALTER TABLE user_account ALTER COLUMN password_hash DROP NOT NULL;
 ALTER TABLE user_account ADD COLUMN IF NOT EXISTS google_sub TEXT UNIQUE;
 ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
+
+-- 'vendor': partenaire de la marketplace (transporteur, fournisseur, artisan, vendeur de
+-- matériaux...) — voir table vendor ci-dessous. Retirer/ajouter la contrainte avant de la
+-- recréer, sans quoi le second déploiement échouerait ("constraint already exists").
+ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_role_check;
+ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor'));
+
+-- Profil partenaire (marketplace multi-vendeurs): un compte 'vendor' publie son propre
+-- catalogue (product.vendor_id) et gère la préparation de ses articles sur les commandes
+-- (order_item.vendor_id/vendor_status) — MonChantier reste l'unique vendeur légal et
+-- collecteur du paiement (voir web/terms.html), les partenaires ne sont pas payés
+-- automatiquement par ce système, comme Airtel/Orange Money aujourd'hui.
+CREATE TABLE IF NOT EXISTS vendor (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL UNIQUE REFERENCES user_account(id) ON DELETE CASCADE,
+  business_name TEXT NOT NULL,
+  -- Réutilise les catégories déjà utilisées par product.category: un partenaire "vendeur
+  -- de matériaux" publie en 'produits', un "transporteur"/"artisan" plutôt en 'services'
+  -- ou 'partenaires' — pas de nomenclature séparée à maintenir.
+  category TEXT NOT NULL CHECK (category IN ('produits', 'services', 'facilitation', 'partenaires')),
+  phone TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'product_vendor_id_fkey') THEN
+    ALTER TABLE product ADD CONSTRAINT product_vendor_id_fkey FOREIGN KEY (vendor_id) REFERENCES vendor(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS product_vendor_id_idx ON product(vendor_id);
 
 -- NULL = jamais vérifié. Un compte Google/Apple n'a pas besoin de ce parcours (le
 -- fournisseur a déjà vérifié l'e-mail) mais rien ne l'y force ici.
@@ -151,6 +190,16 @@ CREATE TABLE IF NOT EXISTS order_item (
   qty NUMERIC(12,3) NOT NULL,
   unit_price_usd NUMERIC(10,2) NOT NULL
 );
+
+-- Copié depuis product.vendor_id au moment de la commande (dénormalisé, comme
+-- unit_price_usd ci-dessus): un partenaire qui change/supprime un produit plus tard ne
+-- doit pas perdre la trace de qui devait fournir une ligne déjà commandée. vendor_status
+-- suit la préparation de CETTE ligne par le partenaire, indépendamment de orders.status
+-- (piloté par le staff/admin) — permet à plusieurs partenaires de préparer leurs articles
+-- en parallèle sur une même commande.
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS vendor_id UUID REFERENCES vendor(id) ON DELETE SET NULL;
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS vendor_status TEXT NOT NULL DEFAULT 'pending' CHECK (vendor_status IN ('pending', 'confirmed', 'ready', 'delivered', 'cancelled'));
+CREATE INDEX IF NOT EXISTS order_item_vendor_id_idx ON order_item(vendor_id);
 
 CREATE TABLE IF NOT EXISTS payment (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

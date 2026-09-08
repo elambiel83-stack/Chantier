@@ -285,7 +285,75 @@
       : 'Vous voyez les commandes confirmées non affectées et celles qui vous sont assignées.';
     dashboardEl.classList.remove('hidden');
     await loadOrders();
+    // Créer/suspendre des partenaires reste une décision admin: le staff ne gère que les
+    // commandes qui lui sont assignées, pas la marketplace elle-même.
+    if (me.role === 'admin') {
+      document.getElementById('vendors-section').classList.remove('hidden');
+      await loadVendors();
+    }
   }
+
+  const VENDOR_CATEGORY_LABELS = {
+    produits: 'Produits',
+    services: 'Services',
+    facilitation: 'Facilitation',
+    partenaires: 'Partenaires'
+  };
+
+  async function loadVendors() {
+    const statusEl = document.getElementById('vendor-create-status');
+    const listEl = document.getElementById('vendors-list');
+    try {
+      const data = await window.apiCall('/admin/vendors');
+      const vendors = data.vendors || [];
+      listEl.innerHTML = vendors.length
+        ? vendors.map((vendor) => `
+            <div class="bg-white rounded-xl p-3 shadow flex flex-wrap items-center justify-between gap-2" data-vendor-id="${vendor.id}">
+              <div>
+                <div class="font-semibold">${escapeHtml(vendor.business_name)} <span class="text-xs font-normal text-slate-400">(${VENDOR_CATEGORY_LABELS[vendor.category] || vendor.category})</span></div>
+                <div class="text-slate-500 text-sm">${escapeHtml(vendor.email)}${vendor.phone ? ` · ${escapeHtml(vendor.phone)}` : ''}</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-semibold px-2 py-1 rounded-full ${vendor.is_active ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-500'}">${vendor.is_active ? 'Actif' : 'Suspendu'}</span>
+                <button type="button" class="vendor-toggle px-3 py-1 rounded-lg text-sm outline-button border" data-vendor-id="${vendor.id}" data-active="${vendor.is_active}">${vendor.is_active ? 'Suspendre' : 'Réactiver'}</button>
+              </div>
+            </div>
+          `).join('')
+        : '<p class="text-slate-500 text-sm">Aucun partenaire pour le moment.</p>';
+      listEl.querySelectorAll('.vendor-toggle').forEach((button) => {
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            await window.apiCall(`/admin/vendors/${button.dataset.vendorId}`, { method: 'PATCH', body: { isActive: button.dataset.active !== 'true' } });
+            await loadVendors();
+          } catch (error) {
+            statusEl.textContent = error.message || 'Action refusée.';
+            button.disabled = false;
+          }
+        });
+      });
+    } catch (error) {
+      statusEl.textContent = error.message || 'Impossible de charger les partenaires.';
+    }
+  }
+
+  document.getElementById('vendor-create-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const statusEl = document.getElementById('vendor-create-status');
+    const email = document.getElementById('vendor-email').value.trim();
+    const businessName = document.getElementById('vendor-business-name').value.trim();
+    const category = document.getElementById('vendor-category').value;
+    const phone = document.getElementById('vendor-phone').value.trim();
+    statusEl.textContent = 'Création en cours...';
+    try {
+      await window.apiCall('/admin/vendors', { method: 'POST', body: { email, businessName, category, ...(phone ? { phone } : {}) } });
+      statusEl.textContent = 'Partenaire créé.';
+      event.target.reset();
+      await loadVendors();
+    } catch (error) {
+      statusEl.textContent = error.message || 'Création refusée.';
+    }
+  });
 
   statusFilterEl.addEventListener('change', loadOrders);
   document.getElementById('refresh').addEventListener('click', loadOrders);

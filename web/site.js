@@ -1,4 +1,12 @@
 (function(){
+  // Un produit peut désormais provenir d'un partenaire de la marketplace (nom, unité,
+  // image publiés par ce partenaire lui-même — voir POST /api/vendor/products): ces champs
+  // ne sont plus des chaînes développeur fixes et doivent être échappés avant insertion
+  // dans innerHTML, sans quoi un partenaire malveillant pourrait injecter du HTML/JS visible
+  // par tout client parcourant le catalogue.
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  }
   const FR = {
     hero1: "Achetez",
     hero2: "et matériaux de construction, livrés à votre chantier.",
@@ -95,6 +103,7 @@
   const authLink = document.getElementById('auth-link');
   const logoutButton = document.getElementById('logout-button');
   const staffLink = document.getElementById('staff-link');
+  const vendorLink = document.getElementById('vendor-link');
   const ordersLink = document.getElementById('orders-link');
   const authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
   if (authLink && authUser) {
@@ -105,6 +114,9 @@
   }
   if (staffLink && authUser && ['staff', 'admin'].includes(authUser.role)) {
     staffLink.classList.remove('hidden');
+  }
+  if (vendorLink && authUser && authUser.role === 'vendor') {
+    vendorLink.classList.remove('hidden');
   }
   if (ordersLink && authUser && authUser.role === 'customer') {
     ordersLink.classList.remove('hidden');
@@ -259,12 +271,13 @@
     const items = (window.PRODUCTS || []).filter(p => (p.category === currentCategory) && ((p.name_fr + " " + p.name_en).toLowerCase().includes(q)));
     grid.innerHTML = items.map(p => `
       <div class="catalog-card bg-white rounded-2xl shadow p-4 flex flex-col">
-        <img src="${p.img}" alt="${p.name_fr}" class="h-32 sm:h-40 w-full object-cover rounded-xl">
-        <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${lang === "fr" ? p.name_fr : p.name_en}</div>
-        <div class="text-slate-500 text-xs sm:text-sm">${p.id} · ${p.unit}${p.stock ? ' · Stock: ' + p.stock : ''}</div>
+        <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name_fr)}" class="h-32 sm:h-40 w-full object-cover rounded-xl">
+        <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${escapeHtml(lang === "fr" ? p.name_fr : p.name_en)}</div>
+        <div class="text-slate-500 text-xs sm:text-sm">${escapeHtml(p.id)} · ${escapeHtml(p.unit)}${p.stock ? ' · Stock: ' + escapeHtml(p.stock) : ''}</div>
+        ${p.vendorName ? `<div class="text-xs text-red-600 mt-0.5">${lang === 'fr' ? 'Vendu par' : 'Sold by'} ${escapeHtml(p.vendorName)}</div>` : ''}
         <div class="mt-2 text-lg sm:text-xl font-bold">${money(p.price)}</div>
         <div class="mt-3 sm:mt-4 flex gap-2">
-          <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${p.id}">
+          <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${escapeHtml(p.id)}">
           <button class="dark-button flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
         </div>
       </div>
@@ -341,10 +354,10 @@
       const line = product.price * qty;
       total += line;
       return `<div class="bg-white rounded-xl p-3 md:p-4 shadow flex items-center gap-3 md:gap-4">
-        <img src="${product.img}" alt="${lang === "fr" ? product.name_fr : product.name_en}" class="h-12 w-12 sm:h-16 sm:w-16 rounded-lg object-cover flex-shrink-0" />
+        <img src="${escapeHtml(product.img)}" alt="${escapeHtml(lang === "fr" ? product.name_fr : product.name_en)}" class="h-12 w-12 sm:h-16 sm:w-16 rounded-lg object-cover flex-shrink-0" />
         <div class="flex-1 min-w-0">
-          <div class="font-semibold text-sm md:text-base truncate">${lang === "fr" ? product.name_fr : product.name_en}</div>
-          <div class="text-slate-500 text-xs md:text-sm">${product.id} · ${qty} ${product.unit} × ${money(product.price)}</div>
+          <div class="font-semibold text-sm md:text-base truncate">${escapeHtml(lang === "fr" ? product.name_fr : product.name_en)}</div>
+          <div class="text-slate-500 text-xs md:text-sm">${escapeHtml(product.id)} · ${qty} ${escapeHtml(product.unit)} × ${money(product.price)}</div>
         </div>
         <div class="font-bold text-sm md:text-base flex-shrink-0">${money(line)}</div>
         <div class="flex items-center gap-1">

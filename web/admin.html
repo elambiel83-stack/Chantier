@@ -44,6 +44,38 @@
       </div>
       <p id="orders-status" class="text-sm mb-3" role="status" aria-live="polite"></p>
       <div id="orders" class="space-y-3"></div>
+
+      <div id="vendors-section" class="hidden mt-10 border-t border-slate-200 pt-6">
+        <h2 class="text-xl font-bold mb-1">Partenaires</h2>
+        <p class="text-slate-500 text-sm mb-4">Transporteurs, fournisseurs, artisans... chaque partenaire gère son propre catalogue et prépare ses articles sur les commandes qui les concernent.</p>
+
+        <form id="vendor-create-form" class="bg-white rounded-xl p-4 shadow flex flex-wrap items-end gap-3 mb-4">
+          <div>
+            <label class="block text-xs font-medium mb-1" for="vendor-email">E-mail du compte (déjà inscrit)</label>
+            <input id="vendor-email" type="email" required class="border rounded-lg px-3 py-2 text-sm w-56">
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1" for="vendor-business-name">Nom commercial</label>
+            <input id="vendor-business-name" type="text" required class="border rounded-lg px-3 py-2 text-sm w-56">
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1" for="vendor-category">Catégorie</label>
+            <select id="vendor-category" class="border rounded-lg px-3 py-2 text-sm">
+              <option value="partenaires">Partenaires (transport, équipement...)</option>
+              <option value="produits">Produits (matériaux)</option>
+              <option value="services">Services (artisans...)</option>
+              <option value="facilitation">Facilitation</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium mb-1" for="vendor-phone">Téléphone (optionnel)</label>
+            <input id="vendor-phone" type="tel" class="border rounded-lg px-3 py-2 text-sm w-40">
+          </div>
+          <button type="submit" class="signal-button px-4 py-2 rounded-lg text-white text-sm">Créer le partenaire</button>
+        </form>
+        <p id="vendor-create-status" class="text-sm mb-3" role="status" aria-live="polite"></p>
+        <div id="vendors-list" class="space-y-2"></div>
+      </div>
     </div>
   </main>
 

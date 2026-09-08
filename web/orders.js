@@ -1,4 +1,10 @@
 (function () {
+  // Un article de commande peut provenir d'un partenaire de la marketplace (nom publié par
+  // ce partenaire lui-même — voir POST /api/vendor/products): à échapper avant innerHTML,
+  // sans quoi un partenaire malveillant pourrait injecter du HTML/JS visible par le client.
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  }
   const STATUS_LABELS = {
     pending: 'En attente',
     confirmed: 'Confirmée',
@@ -118,7 +124,7 @@
           const { order: detail } = await window.apiCall(`/orders/${order.id}`);
           content.innerHTML = detail.items.map((item) => `
             <div class="flex justify-between">
-              <span>${item.name_fr} × ${item.qty} ${item.unit}</span>
+              <span>${escapeHtml(item.name_fr)} × ${item.qty} ${escapeHtml(item.unit)}${item.vendor_name ? ` <span class="text-slate-400">(${escapeHtml(item.vendor_name)} · ${escapeHtml(item.vendor_status)})</span>` : ''}</span>
               <span>${(item.qty * item.unit_price_usd).toFixed(2)} USD</span>
             </div>
           `).join('') || '<p class="text-slate-500">Aucun article.</p>';

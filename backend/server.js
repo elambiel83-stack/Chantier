@@ -369,11 +369,47 @@ const appleAuthSchema = z.object({
 });
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
-const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
+const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor']) });
 const driverLocationSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180)
 });
+
+// Marketplace multi-vendeurs (transporteur, fournisseur, artisan, vendeur de matériaux...).
+// Réutilise les catégories déjà utilisées par le catalogue plutôt qu'une nomenclature séparée.
+const vendorCategorySchema = z.enum(['produits', 'services', 'facilitation', 'partenaires']);
+const createVendorSchema = z.object({
+  email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
+  businessName: z.string().trim().min(2).max(120),
+  category: vendorCategorySchema,
+  phone: z.string().trim().min(6).max(30).optional()
+});
+const vendorActiveSchema = z.object({ isActive: z.boolean() });
+// z.string().url() accepte n'importe quel schéma bien formé (y compris javascript:) — cette
+// image est ensuite posée telle quelle dans un attribut src par tout le monde (voir
+// web/site.js), donc seuls http(s) sont acceptés ici.
+const imageUrlSchema = z.string().trim().max(500).regex(/^https?:\/\//i, 'URL d’image invalide (http/https requis)');
+const vendorProductSchema = z.object({
+  nameFr: z.string().trim().min(2).max(120),
+  nameEn: z.string().trim().min(2).max(120),
+  unit: z.string().trim().min(1).max(20),
+  price: z.number().min(0).max(1000000),
+  category: vendorCategorySchema,
+  stockQty: z.number().min(0).max(1000000).optional(),
+  imageUrl: imageUrlSchema.optional()
+});
+const vendorProductUpdateSchema = z.object({
+  nameFr: z.string().trim().min(2).max(120).optional(),
+  nameEn: z.string().trim().min(2).max(120).optional(),
+  unit: z.string().trim().min(1).max(20).optional(),
+  price: z.number().min(0).max(1000000).optional(),
+  category: vendorCategorySchema.optional(),
+  stockQty: z.number().min(0).max(1000000).optional(),
+  imageUrl: imageUrlSchema.optional(),
+  isActive: z.boolean().optional()
+});
+// 'pending' est l'état initial fixé à la création de la commande, jamais choisi ensuite.
+const vendorItemStatusSchema = z.object({ status: z.enum(['confirmed', 'ready', 'delivered', 'cancelled']) });
 // Au-delà de ce délai sans mise à jour de position pendant une livraison en cours, on
 // considère un blocage possible (embouteillage...) et on avertit le client une fois.
 const DELIVERY_DELAY_THRESHOLD_MINUTES = 15;
@@ -453,10 +489,15 @@ async function requireAuthentication(req, res, next) {
   try {
     requireJwtSecret();
     const payload = jwt.verify(match[1], JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
-    const accountResult = await database.query('SELECT id, customer_id, role, is_active FROM user_account WHERE id = $1', [payload.sub]);
+    const accountResult = await database.query(
+      `SELECT user_account.id, user_account.customer_id, user_account.role, user_account.is_active, vendor.id AS vendor_id
+       FROM user_account LEFT JOIN vendor ON vendor.user_id = user_account.id
+       WHERE user_account.id = $1`,
+      [payload.sub]
+    );
     const account = accountResult.rows[0];
     if (!account || !account.is_active) return res.status(401).json({ success: false, message: 'Session invalide ou compte desactive' });
-    req.auth = { userId: account.id, customerId: account.customer_id, role: account.role };
+    req.auth = { userId: account.id, customerId: account.customer_id, role: account.role, vendorId: account.vendor_id };
     next();
   } catch (error) {
     res.status(401).json({ success: false, message: 'Jeton d’authentification invalide ou expire' });
@@ -468,6 +509,14 @@ function requireRole(...roles) {
     if (!roles.includes(req.auth.role)) return res.status(403).json({ success: false, message: 'Droits insuffisants' });
     next();
   };
+}
+
+// Un rôle 'vendor' sans ligne vendor associée (ex: promu via PATCH .../role sans passer par
+// POST /api/admin/vendors) ne doit jamais pouvoir agir avec un vendor_id manquant/erroné —
+// notamment publier un produit sans propriétaire (indiscernable du catalogue MonChantier).
+function requireVendorProfile(req, res, next) {
+  if (!req.auth.vendorId) return res.status(403).json({ success: false, message: 'Profil partenaire introuvable — contactez un administrateur' });
+  next();
 }
 
 function requireDatabase(res) {
@@ -557,7 +606,10 @@ function mapProductRow(row) {
     price: Number(row.price_usd),
     img: row.image_url,
     category: row.category,
-    stock: row.stock_qty === null ? 0 : Number(row.stock_qty)
+    stock: row.stock_qty === null ? 0 : Number(row.stock_qty),
+    // Absent (undefined) pour le catalogue MonChantier (mode sans base et produits sans
+    // partenaire) — présent seulement quand product.vendor_id pointe vers un vendor actif.
+    vendorName: row.vendor_business_name || null
   };
 }
 
@@ -577,16 +629,22 @@ async function listCatalog({ category, search } = {}) {
   const filters = [];
   if (category) {
     values.push(category);
-    filters.push(`category = $${values.length}`);
+    filters.push(`product.category = $${values.length}`);
   }
   if (search) {
     values.push(`%${search.toLowerCase().replace(/([\\%_])/g, '\\$1')}%`);
     const placeholder = `$${values.length}`;
-    filters.push(`(lower(name_fr) LIKE ${placeholder} ESCAPE '\\' OR lower(name_en) LIKE ${placeholder} ESCAPE '\\' OR lower(id) LIKE ${placeholder} ESCAPE '\\')`);
+    filters.push(`(lower(product.name_fr) LIKE ${placeholder} ESCAPE '\\' OR lower(product.name_en) LIKE ${placeholder} ESCAPE '\\' OR lower(product.id) LIKE ${placeholder} ESCAPE '\\')`);
   }
+  // Un produit n'est visible publiquement que s'il est actif et, s'il appartient à un
+  // partenaire, que ce partenaire l'est aussi (permet de suspendre un partenaire entier
+  // sans avoir à désactiver chacun de ses produits un par un).
+  filters.push(`product.is_active = true AND (product.vendor_id IS NULL OR vendor.is_active = true)`);
   const result = await database.query(
-    `SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty FROM product
-     ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY id`,
+    `SELECT product.id, product.name_fr, product.name_en, product.unit, product.price_usd, product.image_url, product.category, product.stock_qty,
+            vendor.business_name AS vendor_business_name
+     FROM product LEFT JOIN vendor ON vendor.id = product.vendor_id
+     WHERE ${filters.join(' AND ')} ORDER BY product.id`,
     values
   );
   return result.rows.map(mapProductRow);
@@ -596,7 +654,10 @@ async function findProduct(id) {
   if (!database) return PRODUCTS.find((product) => product.id === id) || null;
   await syncCatalog();
   const result = await database.query(
-    'SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty FROM product WHERE id = $1',
+    `SELECT product.id, product.name_fr, product.name_en, product.unit, product.price_usd, product.image_url, product.category, product.stock_qty,
+            vendor.business_name AS vendor_business_name
+     FROM product LEFT JOIN vendor ON vendor.id = product.vendor_id
+     WHERE product.id = $1 AND product.is_active = true AND (product.vendor_id IS NULL OR vendor.is_active = true)`,
     [id]
   );
   return result.rowCount ? mapProductRow(result.rows[0]) : null;
@@ -1129,6 +1190,169 @@ app.patch('/api/admin/users/:userId/role', requireAuthentication, requireRole('a
   }
 });
 
+// Marketplace multi-vendeurs: crée le profil partenaire pour un compte déjà inscrit (la
+// personne doit d'abord créer un compte via /api/auth/register, comme tout customer) et le
+// bascule en rôle 'vendor'. Reprend le profil s'il existait déjà mais avait été suspendu
+// (ON CONFLICT réactive plutôt que de dupliquer).
+app.post('/api/admin/vendors', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  const parsed = createVendorSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Informations partenaire invalides', errors: parsed.error.flatten().fieldErrors });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const userResult = await client.query('SELECT id FROM user_account WHERE email = $1', [parsed.data.email]);
+    if (!userResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Aucun compte avec cet e-mail — la personne doit d’abord créer un compte' });
+    }
+    const userId = userResult.rows[0].id;
+    const vendorResult = await client.query(
+      `INSERT INTO vendor (user_id, business_name, category, phone) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET business_name = EXCLUDED.business_name, category = EXCLUDED.category, phone = EXCLUDED.phone, is_active = true
+       RETURNING id, business_name, category, phone, is_active`,
+      [userId, parsed.data.businessName, parsed.data.category, parsed.data.phone || null]
+    );
+    await client.query("UPDATE user_account SET role = 'vendor', updated_at = now() WHERE id = $1", [userId]);
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, vendor: vendorResult.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/admin/vendors', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  try {
+    const result = await database.query(
+      `SELECT vendor.id, vendor.business_name, vendor.category, vendor.phone, vendor.is_active, vendor.created_at, user_account.email
+       FROM vendor JOIN user_account ON user_account.id = vendor.user_id
+       ORDER BY vendor.created_at DESC`
+    );
+    res.json({ success: true, vendors: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Suspendre un partenaire masque immédiatement tout son catalogue (voir listCatalog/
+// findProduct: WHERE vendor.is_active) sans avoir à toucher chaque produit individuellement.
+app.patch('/api/admin/vendors/:vendorId', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.vendorId).success) return res.status(400).json({ success: false, message: 'Identifiant partenaire invalide' });
+  const parsed = vendorActiveSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
+  try {
+    const result = await database.query('UPDATE vendor SET is_active = $1 WHERE id = $2 RETURNING id, business_name, is_active', [parsed.data.isActive, req.params.vendorId]);
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Partenaire introuvable' });
+    res.json({ success: true, vendor: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Catalogue du partenaire (y compris ses annonces suspendues, contrairement à GET
+// /api/products): CRUD scopé à req.auth.vendorId, jamais aux produits d'un autre partenaire
+// ni au catalogue MonChantier.
+app.get('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  try {
+    const result = await database.query(
+      'SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active FROM product WHERE vendor_id = $1 ORDER BY id',
+      [req.auth.vendorId]
+    );
+    res.json({ success: true, products: result.rows.map((row) => ({ ...mapProductRow(row), isActive: row.is_active })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  const parsed = vendorProductSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Produit invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    // Les produits MonChantier utilisent des identifiants lisibles (BRQ-001...): un préfixe
+    // dédié évite toute collision avec ce catalogue existant ou entre partenaires.
+    const id = `V-${crypto.randomUUID().slice(0, 8)}`;
+    const result = await database.query(
+      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, vendor_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active`,
+      [id, parsed.data.nameFr, parsed.data.nameEn, parsed.data.unit, parsed.data.price, parsed.data.imageUrl || null, parsed.data.category, parsed.data.stockQty ?? 0, req.auth.vendorId]
+    );
+    res.status(201).json({ success: true, product: { ...mapProductRow(result.rows[0]), isActive: result.rows[0].is_active } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  const parsed = vendorProductUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Modification invalide', errors: parsed.error.flatten().fieldErrors });
+  const fieldMap = { nameFr: 'name_fr', nameEn: 'name_en', unit: 'unit', price: 'price_usd', category: 'category', stockQty: 'stock_qty', imageUrl: 'image_url', isActive: 'is_active' };
+  const sets = [];
+  const values = [];
+  for (const [key, column] of Object.entries(fieldMap)) {
+    if (parsed.data[key] !== undefined) {
+      values.push(parsed.data[key]);
+      sets.push(`${column} = $${values.length}`);
+    }
+  }
+  if (!sets.length) return res.status(400).json({ success: false, message: 'Aucune modification fournie' });
+  values.push(req.params.productId, req.auth.vendorId);
+  try {
+    const result = await database.query(
+      `UPDATE product SET ${sets.join(', ')} WHERE id = $${values.length - 1} AND vendor_id = $${values.length}
+       RETURNING id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active`,
+      values
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Produit introuvable' });
+    res.json({ success: true, product: { ...mapProductRow(result.rows[0]), isActive: result.rows[0].is_active } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Lignes de commande à préparer par ce partenaire — jamais la commande entière (qui peut
+// contenir des articles d'autres partenaires ou de MonChantier): seuls le nécessaire pour
+// livrer (client, position) et le statut de préparation de SA ligne sont exposés.
+app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  try {
+    const result = await database.query(
+      `SELECT order_item.id, order_item.qty, order_item.unit_price_usd, order_item.vendor_status,
+              product.name_fr, product.name_en, product.unit,
+              orders.id AS order_id, orders.status AS order_status, orders.currency, orders.created_at,
+              orders.delivery_latitude, orders.delivery_longitude,
+              customer.full_name, customer.phone
+       FROM order_item
+       JOIN orders ON orders.id = order_item.order_id
+       JOIN customer ON customer.id = orders.customer_id
+       JOIN product ON product.id = order_item.product_id
+       WHERE order_item.vendor_id = $1
+       ORDER BY orders.created_at DESC`,
+      [req.auth.vendorId]
+    );
+    res.json({ success: true, items: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/vendor/order-items/:itemId/status', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.itemId).success) return res.status(400).json({ success: false, message: 'Identifiant invalide' });
+  const parsed = vendorItemStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
+  try {
+    const result = await database.query(
+      'UPDATE order_item SET vendor_status = $1 WHERE id = $2 AND vendor_id = $3 RETURNING id, vendor_status',
+      [parsed.data.status, req.params.itemId, req.auth.vendorId]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Article introuvable' });
+    res.json({ success: true, item: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/orders', requireAuthentication, requireRole('customer'), async (req, res, next) => {
   if (!requireDatabase(res)) return;
   const parsedOrder = orderSchema.safeParse(req.body);
@@ -1165,7 +1389,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
     // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
     const productResult = await client.query(
-      'SELECT id, name_fr, unit, price_usd, stock_qty FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
+      'SELECT id, name_fr, unit, price_usd, stock_qty, vendor_id FROM product WHERE id = ANY($1::text[]) AND is_active = true ORDER BY id FOR UPDATE',
       [productIds]
     );
     if (productResult.rowCount !== productIds.length) {
@@ -1208,9 +1432,12 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     );
     const order = orderResult.rows[0];
     for (const [productId, qty] of quantities) {
+      // vendor_id copié depuis product à cet instant (voir order_item.vendor_id dans
+      // schema.sql): un partenaire qui modifie ce produit plus tard ne doit pas faire
+      // perdre la trace de qui devait fournir cette ligne déjà commandée.
       await client.query(
-        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd) VALUES ($1, $2, $3, $4)',
-        [order.id, productId, qty, Number(products.get(productId).price_usd)]
+        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd, vendor_id) VALUES ($1, $2, $3, $4, $5)',
+        [order.id, productId, qty, Number(products.get(productId).price_usd), products.get(productId).vendor_id]
       );
     }
     await client.query(
@@ -1337,6 +1564,10 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
 });
 
 app.get('/api/orders', requireAuthentication, async (req, res, next) => {
+  // Un partenaire ne voit que ses propres lignes de commande, jamais la commande entière
+  // (qui peut contenir des articles d'autres partenaires concurrents): voir GET
+  // /api/vendor/orders, qui applique ce périmètre réduit.
+  if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
   const status = z.enum(['pending', 'confirmed', 'delivering', 'completed', 'cancelled']).safeParse(req.query.status);
   if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
   const filters = [];
@@ -1375,6 +1606,7 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
 // un customer ne voit que la sienne, un staff que celles qui lui sont affectées ou
 // disponibles, un admin toutes.
 app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) => {
+  if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const filters = ['orders.id = $1'];
   const values = [req.params.orderId];
@@ -1399,9 +1631,12 @@ app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) =>
     );
     if (!orderResult.rowCount) return res.status(404).json({ success: false, message: 'Commande introuvable' });
     const itemsResult = await database.query(
-      `SELECT order_item.product_id AS id, order_item.qty, order_item.unit_price_usd,
-              product.name_fr, product.name_en, product.unit
-       FROM order_item JOIN product ON product.id = order_item.product_id
+      `SELECT order_item.product_id AS id, order_item.qty, order_item.unit_price_usd, order_item.vendor_status,
+              product.name_fr, product.name_en, product.unit,
+              vendor.business_name AS vendor_name
+       FROM order_item
+       JOIN product ON product.id = order_item.product_id
+       LEFT JOIN vendor ON vendor.id = order_item.vendor_id
        WHERE order_item.order_id = $1 ORDER BY product.name_fr`,
       [req.params.orderId]
     );
