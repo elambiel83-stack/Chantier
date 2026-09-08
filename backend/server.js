@@ -378,6 +378,29 @@ const organizationSchema = z.object({
   defaultCurrency: z.enum(['USD', 'CDF', 'EUR']).optional()
 });
 const organizationStatusSchema = z.object({ status: z.enum(['pending_verification', 'verified', 'suspended', 'rejected']) });
+const organizationMemberSchema = z.object({
+  email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
+  orgRole: z.enum(['owner', 'manager', 'sales', 'purchasing', 'finance', 'viewer'])
+});
+const vendorProductCreateSchema = z.object({
+  organizationId: z.string().uuid(),
+  nameFr: z.string().trim().min(2).max(160),
+  nameEn: z.string().trim().min(2).max(160),
+  unit: z.string().trim().min(1).max(20),
+  price: z.number().min(0).max(1_000_000),
+  imageUrl: z.string().trim().url().max(2000).optional(),
+  category: z.string().trim().min(1).max(40),
+  stock: z.number().min(0).max(1_000_000)
+});
+const vendorProductUpdateSchema = z.object({
+  nameFr: z.string().trim().min(2).max(160).optional(),
+  nameEn: z.string().trim().min(2).max(160).optional(),
+  unit: z.string().trim().min(1).max(20).optional(),
+  price: z.number().min(0).max(1_000_000).optional(),
+  imageUrl: z.string().trim().url().max(2000).optional(),
+  category: z.string().trim().min(1).max(40).optional(),
+  stock: z.number().min(0).max(1_000_000).optional()
+}).refine((data) => Object.keys(data).length > 0, { message: 'Aucune modification fournie' });
 
 function requireJwtSecret() {
   if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) throw new Error('JWT_ACCESS_SECRET doit contenir au moins 32 caracteres');
@@ -464,6 +487,41 @@ function requireDatabase(res) {
     message: 'Le service de commande est temporairement indisponible'
   });
   return false;
+}
+
+// Rôles d'organisation autorisés à gérer le catalogue: pas 'finance'/'purchasing'/'viewer',
+// qui n'ont pas vocation à publier des produits pour le compte du vendeur.
+const CATALOG_MANAGER_ROLES = ['owner', 'manager', 'sales'];
+
+async function organizationRoleFor(userId, organizationId) {
+  const result = await database.query(
+    'SELECT org_role FROM organization_member WHERE organization_id = $1 AND user_id = $2',
+    [organizationId, userId]
+  );
+  return result.rowCount ? result.rows[0].org_role : null;
+}
+
+// true si l'appelant peut gérer le catalogue de cette organisation (membre avec un rôle
+// catalogue, ou admin plateforme pour la modération) ; répond déjà 403 sinon.
+async function canManageCatalog(req, res, organizationId) {
+  if (req.auth.role === 'admin') return true;
+  const role = await organizationRoleFor(req.auth.userId, organizationId);
+  if (role && CATALOG_MANAGER_ROLES.includes(role)) return true;
+  res.status(403).json({ success: false, message: 'Droits insuffisants sur cette organisation' });
+  return false;
+}
+
+// Identifiant produit lisible mais garanti unique tous vendeurs confondus: product.id
+// reste une clé texte partagée par tout le catalogue à ce stade (voir
+// docs/marketplace-schema-cible.md pour le SKU par vendeur du schéma cible, pas encore migré).
+function generateProductId(label) {
+  const slug = (label || 'PROD')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 24) || 'PROD';
+  return `${slug}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
 }
 
 // true si la requête peut continuer; répond déjà 403 sinon. Un no-op qui laisse toujours
@@ -556,11 +614,12 @@ const PRODUCT_COLUMNS = `product.id, product.name_fr, product.name_en, product.u
        COALESCE(organization.trade_name, organization.legal_name) AS vendor_name`;
 const PRODUCT_FROM = 'FROM product LEFT JOIN organization ON organization.id = product.organization_id';
 
-async function listCatalog({ category, search } = {}) {
+async function listCatalog({ category, search, vendorId } = {}) {
   if (!database) {
     const searchLower = (search || '').toLowerCase();
     return PRODUCTS.filter((product) =>
       (!category || product.category === category) &&
+      (!vendorId || vendorId === DEFAULT_VENDOR.id) &&
       (!search ||
         product.name_fr.toLowerCase().includes(searchLower) ||
         product.name_en.toLowerCase().includes(searchLower) ||
@@ -573,6 +632,10 @@ async function listCatalog({ category, search } = {}) {
   if (category) {
     values.push(category);
     filters.push(`product.category = $${values.length}`);
+  }
+  if (vendorId) {
+    values.push(vendorId);
+    filters.push(`product.organization_id = $${values.length}`);
   }
   if (search) {
     values.push(`%${search.toLowerCase().replace(/([\\%_])/g, '\\$1')}%`);
@@ -632,7 +695,8 @@ app.get('/api', (req, res) => {
 app.get('/api/products', async (req, res, next) => {
   const parsedQuery = z.object({
     category: z.string().trim().max(40).optional(),
-    search: z.string().trim().max(80).optional()
+    search: z.string().trim().max(80).optional(),
+    vendorId: z.string().uuid().optional()
   }).safeParse(req.query);
   if (!parsedQuery.success) return res.status(400).json({ success: false, message: 'Filtres de recherche invalides' });
   try {
@@ -1381,6 +1445,111 @@ app.patch('/api/admin/organizations/:organizationId/status', requireAuthenticati
     );
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Organisation introuvable' });
     res.json({ success: true, organization: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Rattache un compte utilisateur existant à une organisation avec un rôle métier: c'est
+// ce qui permet ensuite à ce compte d'utiliser les routes /api/vendor/* pour cette
+// organisation. Idempotent par (organization_id, user_id): un second appel met juste à
+// jour le rôle plutôt que d'échouer.
+app.post('/api/admin/organizations/:organizationId/members', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.organizationId).success) return res.status(400).json({ success: false, message: 'Identifiant d’organisation invalide' });
+  const parsed = organizationMemberSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Membre invalide' });
+  try {
+    const userResult = await database.query('SELECT id FROM user_account WHERE email = $1', [parsed.data.email]);
+    if (!userResult.rowCount) return res.status(404).json({ success: false, message: 'Utilisateur introuvable' });
+    const result = await database.query(
+      `INSERT INTO organization_member (organization_id, user_id, org_role) VALUES ($1, $2, $3)
+       ON CONFLICT (organization_id, user_id) DO UPDATE SET org_role = EXCLUDED.org_role
+       RETURNING organization_id, user_id, org_role`,
+      [req.params.organizationId, userResult.rows[0].id, parsed.data.orgRole]
+    );
+    res.status(201).json({ success: true, member: result.rows[0] });
+  } catch (error) {
+    if (error.code === '23503') return res.status(404).json({ success: false, message: 'Organisation introuvable' });
+    next(error);
+  }
+});
+
+// Organisations du compte authentifié: un vendeur a besoin de son organizationId avant de
+// pouvoir appeler les routes /api/vendor/products ci-dessous.
+app.get('/api/vendor/organizations', requireAuthentication, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const result = await database.query(
+      `SELECT organization.id, COALESCE(organization.trade_name, organization.legal_name) AS name,
+              organization.status, organization_member.org_role
+       FROM organization_member
+       JOIN organization ON organization.id = organization_member.organization_id
+       WHERE organization_member.user_id = $1
+       ORDER BY name`,
+      [req.auth.userId]
+    );
+    const organizations = result.rows.map((row) => ({ id: row.id, name: row.name, status: row.status, role: row.org_role }));
+    res.json({ success: true, count: organizations.length, organizations });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Crée un produit pour le compte d'une organisation vendeur: accessible à un membre avec
+// un rôle catalogue (voir CATALOG_MANAGER_ROLES) ou à un admin plateforme.
+app.post('/api/vendor/products', requireAuthentication, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const parsed = vendorProductCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Produit invalide' });
+  const { organizationId, nameFr, nameEn, unit, price, imageUrl, category, stock } = parsed.data;
+  try {
+    if (!(await canManageCatalog(req, res, organizationId))) return;
+    const orgResult = await database.query('SELECT org_type FROM organization WHERE id = $1', [organizationId]);
+    if (!orgResult.rowCount) return res.status(404).json({ success: false, message: 'Organisation introuvable' });
+    if (!['vendor', 'both'].includes(orgResult.rows[0].org_type)) {
+      return res.status(400).json({ success: false, message: 'Cette organisation n’est pas un vendeur' });
+    }
+    // Boucle de repli en cas de collision d'identifiant généré (improbable: 16^6
+    // combinaisons par préfixe), plutôt qu'une contrainte d'unicité qui échouerait au client.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const id = generateProductId(nameFr || nameEn);
+      const insertResult = await database.query(
+        `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, organization_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
+        [id, nameFr, nameEn, unit, price, imageUrl || null, category, stock, organizationId]
+      );
+      if (insertResult.rowCount) return res.status(201).json({ success: true, product: await findProduct(id) });
+    }
+    throw new Error('Impossible de générer un identifiant produit unique après plusieurs tentatives');
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Modifie un produit existant: réservé aux membres catalogue de l'organisation qui le
+// possède déjà (pas de changement de propriétaire ici) ou à un admin plateforme.
+app.patch('/api/vendor/products/:id', requireAuthentication, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const parsed = vendorProductUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Modification invalide' });
+  try {
+    const existing = await database.query('SELECT organization_id FROM product WHERE id = $1', [req.params.id]);
+    if (!existing.rowCount) return res.status(404).json({ success: false, message: 'Produit introuvable' });
+    if (!(await canManageCatalog(req, res, existing.rows[0].organization_id))) return;
+    const columnByKey = { nameFr: 'name_fr', nameEn: 'name_en', unit: 'unit', price: 'price_usd', imageUrl: 'image_url', category: 'category', stock: 'stock_qty' };
+    const assignments = [];
+    const values = [];
+    for (const [key, column] of Object.entries(columnByKey)) {
+      if (parsed.data[key] !== undefined) {
+        values.push(parsed.data[key]);
+        assignments.push(`${column} = $${values.length}`);
+      }
+    }
+    values.push(req.params.id);
+    await database.query(`UPDATE product SET ${assignments.join(', ')} WHERE id = $${values.length}`, values);
+    res.json({ success: true, product: await findProduct(req.params.id) });
   } catch (error) {
     next(error);
   }

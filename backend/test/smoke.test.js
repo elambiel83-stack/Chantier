@@ -96,6 +96,41 @@ test('POST /api/admin/organizations sans base de données répond 503', async ()
   assert.equal(response.status, 503);
 });
 
+test('GET /api/products?vendorId= filtre le catalogue de repli par vendeur', async () => {
+  const matching = await fetch(`${BASE_URL}/api/products?vendorId=00000000-0000-0000-0000-000000000001`);
+  const matchingBody = await matching.json();
+  assert.ok(matchingBody.products.length > 0);
+
+  const other = await fetch(`${BASE_URL}/api/products?vendorId=11111111-1111-1111-1111-111111111111`);
+  const otherBody = await other.json();
+  assert.equal(otherBody.products.length, 0);
+});
+
+test('GET /api/vendor/organizations sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/vendor/organizations`, {
+    headers: { Authorization: 'Bearer x' }
+  });
+  assert.equal(response.status, 503);
+});
+
+test('POST /api/vendor/products sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/vendor/products`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' },
+    body: JSON.stringify({ organizationId: '00000000-0000-0000-0000-000000000001', nameFr: 'X test', nameEn: 'X test', unit: 'pcs', price: 1, category: 'produits', stock: 1 })
+  });
+  assert.equal(response.status, 503);
+});
+
+test('PATCH /api/vendor/products/:id sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/vendor/products/CIM-001`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' },
+    body: JSON.stringify({ price: 1 })
+  });
+  assert.equal(response.status, 503);
+});
+
 test('GET /api/currency-rates renvoie les taux de repli', async () => {
   const response = await fetch(`${BASE_URL}/api/currency-rates`);
   assert.equal(response.status, 200);

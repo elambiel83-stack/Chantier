@@ -28,6 +28,55 @@ paths:
       responses:
         '200':
           description: Vendeurs dont le statut est 'verified'
+  /vendor/organizations:
+    get:
+      summary: Organisations dont le compte authentifié est membre, avec son rôle dans chacune
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Organisations du compte
+        '401':
+          description: Authentification requise
+  /vendor/products:
+    post:
+      summary: Crée un produit pour le compte d'une organisation vendeur
+      description: >-
+        Réservé à un membre de l'organisation avec un rôle catalogue (owner, manager,
+        sales) ou à un admin plateforme. L'identifiant du produit est généré côté serveur.
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Produit créé
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '403':
+          description: Droits insuffisants sur cette organisation
+        '404':
+          description: Organisation introuvable
+        '503':
+          description: Service indisponible (base de données non configurée)
+  /vendor/products/{id}:
+    patch:
+      summary: Modifie un produit existant appartenant à l'organisation du compte authentifié
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ProductId'
+      responses:
+        '200':
+          description: Produit modifié
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '403':
+          description: Droits insuffisants sur ce produit
+        '404':
+          $ref: '#/components/responses/NotFound'
   /currency-rates:
     get:
       summary: Taux de change officiels utilisés pour la facturation
