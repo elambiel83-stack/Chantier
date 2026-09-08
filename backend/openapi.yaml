@@ -154,8 +154,12 @@ paths:
       responses:
         '201':
           description: >-
-            Commande créée et stock réservé. Pour airtel_money/orange_money, la réponse
-            contient aussi `payment` (numéro marchand et référence à utiliser pour payer);
+            Commande créée et stock réservé. La réponse contient aussi `vendorOrders`
+            (un élément par vendeur présent dans le panier, avec son sous-total en USD):
+            un panier peut mêler plusieurs vendeurs, chacun assurant sa propre préparation
+            et livraison, même si le paiement reste unique pour toute la commande. Pour
+            airtel_money/orange_money, la réponse contient aussi `payment` (numéro
+            marchand et référence à utiliser pour payer);
             la confirmation elle-même reste manuelle (voir PATCH /orders/{orderId}/status).
         '400':
           $ref: '#/components/responses/InvalidRequest'

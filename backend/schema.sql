@@ -303,3 +303,58 @@ CREATE INDEX IF NOT EXISTS organization_member_user_id_idx ON organization_membe
 CREATE INDEX IF NOT EXISTS vendor_document_organization_id_idx ON vendor_document(organization_id);
 CREATE INDEX IF NOT EXISTS payout_account_organization_id_idx ON payout_account(organization_id);
 CREATE INDEX IF NOT EXISTS address_organization_id_idx ON address(organization_id);
+
+-- ============================================================================
+-- Marketplace multi-vendeurs — phase 4 (éclatement des commandes par vendeur)
+-- Voir docs/marketplace-schema-cible.md. Ne touche pas orders.status/assigned_to,
+-- toujours la source de vérité pour le contrôle staff (claim, transitions, capture
+-- PayPal) : vendor_order.status/assigned_to sont tenus en miroir par server.js dans
+-- les mêmes transactions, pour rester un reflet fidèle plutôt qu'un second état à
+-- faire diverger. Un paiement (`payment`) reste global à `orders`: aucune répartition
+-- ni séquestre par vendeur à ce stade (voir docs/marketplace-schema-cible.md, phase 5).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS vendor_order (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organization(id),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'confirmed', 'delivering', 'completed', 'cancelled')) DEFAULT 'pending',
+  -- En USD, comme order_item.unit_price_usd (le seul montant ligne à ligne déjà présent
+  -- dans le schéma) : évite d'avoir à connaître le taux de change appliqué à la commande
+  -- pour calculer la part de chaque vendeur.
+  subtotal_amount_usd NUMERIC(14,2) NOT NULL DEFAULT 0,
+  assigned_to UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (order_id, organization_id)
+);
+
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS vendor_order_id UUID REFERENCES vendor_order(id) ON DELETE CASCADE;
+
+-- Backfill: crée un vendor_order pour chaque couple (commande, vendeur) déjà présent
+-- parmi les order_item existants (une commande passée avant cette migration n'a par
+-- construction qu'un seul vendeur, l'historique, mais le calcul reste général). Rejouable:
+-- ON CONFLICT réutilise le vendor_order déjà créé si le script est relancé.
+INSERT INTO vendor_order (order_id, organization_id, status, subtotal_amount_usd, assigned_to, created_at, updated_at)
+SELECT o.id, p.organization_id, o.status, SUM(oi.qty * oi.unit_price_usd), o.assigned_to, o.created_at, o.updated_at
+FROM order_item oi
+JOIN orders o ON o.id = oi.order_id
+JOIN product p ON p.id = oi.product_id
+WHERE oi.vendor_order_id IS NULL
+GROUP BY o.id, p.organization_id, o.status, o.assigned_to, o.created_at, o.updated_at
+ON CONFLICT (order_id, organization_id) DO NOTHING;
+
+UPDATE order_item oi
+SET vendor_order_id = vo.id
+FROM vendor_order vo, product p
+WHERE oi.vendor_order_id IS NULL
+  AND oi.product_id = p.id
+  AND vo.order_id = oi.order_id
+  AND vo.organization_id = p.organization_id;
+
+ALTER TABLE order_item ALTER COLUMN vendor_order_id SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS vendor_order_order_id_idx ON vendor_order(order_id);
+CREATE INDEX IF NOT EXISTS vendor_order_organization_id_idx ON vendor_order(organization_id);
+CREATE INDEX IF NOT EXISTS vendor_order_assigned_to_idx ON vendor_order(assigned_to);
+CREATE INDEX IF NOT EXISTS order_item_vendor_order_id_idx ON order_item(vendor_order_id);

@@ -1119,7 +1119,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
     // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
     const productResult = await client.query(
-      'SELECT id, price_usd, stock_qty FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
+      'SELECT id, price_usd, stock_qty, organization_id FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
       [productIds]
     );
     if (productResult.rowCount !== productIds.length) {
@@ -1156,10 +1156,36 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       [req.auth.customerId, currency, subtotal]
     );
     const order = orderResult.rows[0];
+
+    // Un panier peut mêler plusieurs vendeurs: chacun obtient son propre vendor_order
+    // (sous-total en USD, comme order_item.unit_price_usd) et chaque ligne s'y rattache.
+    // Le paiement, lui, reste global à la commande — aucune répartition par vendeur à ce
+    // stade (voir docs/marketplace-schema-cible.md, phase 5).
+    const subtotalUsdByOrganization = new Map();
     for (const [productId, qty] of quantities) {
+      const product = products.get(productId);
+      subtotalUsdByOrganization.set(
+        product.organization_id,
+        (subtotalUsdByOrganization.get(product.organization_id) || 0) + Number(product.price_usd) * qty
+      );
+    }
+    const vendorOrderIdByOrganization = new Map();
+    const vendorOrders = [];
+    for (const [organizationId, vendorSubtotalUsd] of subtotalUsdByOrganization) {
+      const roundedSubtotal = Number(vendorSubtotalUsd.toFixed(2));
+      const vendorOrderResult = await client.query(
+        'INSERT INTO vendor_order (order_id, organization_id, subtotal_amount_usd) VALUES ($1, $2, $3) RETURNING id',
+        [order.id, organizationId, roundedSubtotal]
+      );
+      vendorOrderIdByOrganization.set(organizationId, vendorOrderResult.rows[0].id);
+      vendorOrders.push({ organizationId, subtotalUsd: roundedSubtotal });
+    }
+
+    for (const [productId, qty] of quantities) {
+      const product = products.get(productId);
       await client.query(
-        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd) VALUES ($1, $2, $3, $4)',
-        [order.id, productId, qty, Number(products.get(productId).price_usd)]
+        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd, vendor_order_id) VALUES ($1, $2, $3, $4, $5)',
+        [order.id, productId, qty, Number(product.price_usd), vendorOrderIdByOrganization.get(product.organization_id)]
       );
     }
     await client.query(
@@ -1175,6 +1201,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     res.status(201).json({
       success: true,
       order: { id: order.id, status: order.status, totalAmount: order.total_amount, currency: order.currency, paymentProvider },
+      vendorOrders,
       ...(payment ? { payment } : {})
     });
   } catch (error) {
@@ -1262,6 +1289,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
       await client.query('BEGIN');
       await client.query("UPDATE payment SET status = 'paid', confirmation_token_hash = NULL, updated_at = now() WHERE id = $1", [pendingPayment.id]);
       await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [req.params.orderId]);
+      await client.query("UPDATE vendor_order SET status = 'confirmed', updated_at = now() WHERE order_id = $1", [req.params.orderId]);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1302,7 +1330,34 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY orders.created_at DESC`,
       values
     );
-    res.json({ success: true, orders: result.rows });
+    const orderIds = result.rows.map((row) => row.id);
+    const vendorOrdersByOrderId = new Map();
+    if (orderIds.length) {
+      // Requête séparée plutôt qu'une jointure supplémentaire: évite de dupliquer les
+      // lignes orders ci-dessus par vendeur, et reste simple à faire évoluer.
+      const vendorOrderResult = await database.query(
+        `SELECT vendor_order.order_id, vendor_order.organization_id,
+                COALESCE(organization.trade_name, organization.legal_name) AS vendor_name,
+                vendor_order.status, vendor_order.subtotal_amount_usd
+         FROM vendor_order
+         JOIN organization ON organization.id = vendor_order.organization_id
+         WHERE vendor_order.order_id = ANY($1::uuid[])
+         ORDER BY vendor_name`,
+        [orderIds]
+      );
+      for (const row of vendorOrderResult.rows) {
+        const list = vendorOrdersByOrderId.get(row.order_id) || [];
+        list.push({
+          organizationId: row.organization_id,
+          vendorName: row.vendor_name,
+          status: row.status,
+          subtotalUsd: Number(row.subtotal_amount_usd)
+        });
+        vendorOrdersByOrderId.set(row.order_id, list);
+      }
+    }
+    const orders = result.rows.map((row) => ({ ...row, vendorOrders: vendorOrdersByOrderId.get(row.id) || [] }));
+    res.json({ success: true, orders });
   } catch (error) {
     next(error);
   }
@@ -1310,12 +1365,22 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
 
 app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  const client = await database.connect();
   try {
-    const result = await database.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId]);
-    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette commande n’est plus disponible pour affectation' });
+    await client.query('BEGIN');
+    const result = await client.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId]);
+    if (!result.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Cette commande n’est plus disponible pour affectation' });
+    }
+    await client.query('UPDATE vendor_order SET assigned_to = $1, updated_at = now() WHERE order_id = $2', [req.auth.userId, req.params.orderId]);
+    await client.query('COMMIT');
     res.json({ success: true, order: result.rows[0] });
   } catch (error) {
+    await client.query('ROLLBACK');
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -1354,6 +1419,9 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
         [req.params.orderId]
       );
     }
+    // orders.status reste la source de vérité du contrôle staff (transitions, affectation);
+    // vendor_order.status n'en est qu'un reflet, pour la visibilité par vendeur.
+    await client.query('UPDATE vendor_order SET status = $1, updated_at = now() WHERE order_id = $2', [parsed.data.status, req.params.orderId]);
     await client.query('COMMIT');
     res.json({ success: true, order: result.rows[0] });
   } catch (error) {
