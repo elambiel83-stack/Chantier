@@ -335,8 +335,15 @@ const orderSchema = z.object({
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
-  })).min(1).max(100)
-});
+  })).min(1).max(100),
+  // Position de livraison optionnelle (bouton "Partager ma position" au moment de la commande).
+  // Les deux doivent être fournies ensemble ou omises: une seule coordonnée est inexploitable.
+  deliveryLatitude: z.number().min(-90).max(90).optional(),
+  deliveryLongitude: z.number().min(-180).max(180).optional()
+}).refine(
+  (data) => (data.deliveryLatitude === undefined) === (data.deliveryLongitude === undefined),
+  { message: 'La latitude et la longitude de livraison doivent être fournies ensemble', path: ['deliveryLatitude'] }
+);
 
 const credentialsSchema = z.object({
   email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
@@ -1049,7 +1056,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     return res.status(400).json({ success: false, message: 'Commande invalide', errors: parsedOrder.error.flatten().fieldErrors });
   }
 
-  const { customer, currency, paymentProvider, items } = parsedOrder.data;
+  const { customer, currency, paymentProvider, items, deliveryLatitude, deliveryLongitude } = parsedOrder.data;
   if (paymentProvider === 'paypal' && currency === 'CDF') {
     return res.status(400).json({
       success: false,
@@ -1115,8 +1122,9 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     }
     const subtotal = Number((subtotalUsd * rate).toFixed(2));
     const orderResult = await client.query(
-      'INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount) VALUES ($1, $2, $3, $3) RETURNING id, status, total_amount, currency',
-      [req.auth.customerId, currency, subtotal]
+      `INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount, delivery_latitude, delivery_longitude)
+       VALUES ($1, $2, $3, $3, $4, $5) RETURNING id, status, total_amount, currency`,
+      [req.auth.customerId, currency, subtotal, deliveryLatitude ?? null, deliveryLongitude ?? null]
     );
     const order = orderResult.rows[0];
     for (const [productId, qty] of quantities) {
@@ -1268,6 +1276,7 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
     // Un payment par commande (voir POST /api/orders): la jointure ne duplique pas les lignes.
     const result = await database.query(
       `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
+              orders.delivery_latitude, orders.delivery_longitude,
               customer.full_name, customer.phone, payment.provider AS payment_provider, payment.status AS payment_status
        FROM orders
        JOIN customer ON customer.id = orders.customer_id
@@ -1298,6 +1307,7 @@ app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) =>
   try {
     const orderResult = await database.query(
       `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
+              orders.delivery_latitude, orders.delivery_longitude,
               customer.full_name, customer.phone, payment.provider AS payment_provider, payment.status AS payment_status
        FROM orders
        JOIN customer ON customer.id = orders.customer_id

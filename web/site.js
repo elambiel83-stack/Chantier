@@ -19,7 +19,10 @@
     contact: "Contacts",
     legal: "Mentions",
     footerAbout: "E‑commerce de matériaux et services de construction basé à Kolwezi (RDC). Livraison chantier, paiement flexible.",
-    cartNote: "Astuce: Ajoutez votre localisation Google Maps dans le message WhatsApp pour une livraison plus rapide."
+    cartNote: "Partager votre position aide notre équipe à livrer plus vite — votre commande reste possible sans elle.",
+    shareLocationBtn: "Partager ma position",
+    locationShared: "Position partagée ✓",
+    locationDenied: "Position non partagée (autorisation refusée)."
   };
   const EN = {
     hero1: "Buy",
@@ -41,7 +44,10 @@
     contact: "Contacts",
     legal: "Legal",
     footerAbout: "E‑commerce for construction materials based in Kolwezi (DRC). Site delivery, flexible payment.",
-    cartNote: "Tip: Include your Google Maps location in the WhatsApp message for faster delivery."
+    cartNote: "Sharing your position helps our team deliver faster — your order still works without it.",
+    shareLocationBtn: "Share my position",
+    locationShared: "Position shared ✓",
+    locationDenied: "Position not shared (permission denied)."
   };
   let lang = localStorage.getItem("lang") || "fr";
   let currency = localStorage.getItem("currency") || window.COMMERCE_CONFIG?.defaultCurrency || "USD";
@@ -154,6 +160,35 @@
     document.querySelectorAll('#cart-count').forEach((badge) => {
       badge.textContent = count;
       badge.classList.toggle('hidden', count === 0);
+    });
+  }
+
+  // Position de livraison de la commande en cours (bouton "Partager ma position" dans le
+  // formulaire de commande) — distincte du bouton "Partager ma localisation" de l'accueil, qui
+  // ouvre WhatsApp sans rattacher la position à une commande précise.
+  let deliveryPosition = null;
+  const shareDeliveryLocationBtn = document.getElementById('share-location');
+  if (shareDeliveryLocationBtn) {
+    const locationStatus = document.getElementById('location-status');
+    shareDeliveryLocationBtn.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        locationStatus.textContent = lang === 'fr' ? 'Géolocalisation non supportée par votre navigateur.' : 'Geolocation not supported by your browser.';
+        return;
+      }
+      shareDeliveryLocationBtn.disabled = true;
+      locationStatus.textContent = lang === 'fr' ? 'Localisation...' : 'Getting location...';
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          deliveryPosition = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+          locationStatus.textContent = dict().locationShared;
+          shareDeliveryLocationBtn.disabled = false;
+        },
+        () => {
+          deliveryPosition = null;
+          locationStatus.textContent = dict().locationDenied;
+          shareDeliveryLocationBtn.disabled = false;
+        }
+      );
     });
   }
 
@@ -335,7 +370,8 @@
             customer: { fullName: formData.get("fullName"), phone: formData.get("phone"), email: formData.get("email") || undefined },
             currency: formData.get("currency"),
             paymentProvider,
-            items: cart.map((item) => ({ id: item.id, qty: item.qty }))
+            items: cart.map((item) => ({ id: item.id, qty: item.qty })),
+            ...(deliveryPosition ? { deliveryLatitude: deliveryPosition.latitude, deliveryLongitude: deliveryPosition.longitude } : {})
           }
         });
         localStorage.setItem("lastOrderId", orderResponse.order.id);
@@ -351,6 +387,8 @@
         checkoutForm.reset();
         // reset() rétablit les valeurs du HTML: on remet la devise choisie.
         document.querySelectorAll("#currency, #checkout-currency").forEach((item) => { item.value = currency; });
+        deliveryPosition = null;
+        if (document.getElementById('location-status')) document.getElementById('location-status').textContent = '';
         const payment = orderResponse.payment;
         status.textContent = payment
           ? (lang === "fr"

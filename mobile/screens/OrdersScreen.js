@@ -6,6 +6,7 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
+  Linking,
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
 
@@ -16,6 +17,36 @@ const STATUS_LABELS = {
   completed: 'Terminée',
   cancelled: 'Annulée',
 };
+// Étapes du suivi de commande. 'cancelled' est un état terminal à part, jamais une étape
+// du parcours normal (une commande annulée ne "passe" pas par confirmée/en livraison).
+const STATUS_STEPS = ['pending', 'confirmed', 'delivering', 'completed'];
+
+function StatusStepper({ status }) {
+  if (status === 'cancelled') {
+    return <Text style={styles.cancelledText}>Commande annulée</Text>;
+  }
+  const currentIndex = STATUS_STEPS.indexOf(status);
+  return (
+    <View style={styles.stepperRow}>
+      {STATUS_STEPS.map((step, index) => {
+        const done = index <= currentIndex;
+        return (
+          <View key={step} style={styles.stepperStep}>
+            <View style={styles.stepperDotRow}>
+              <View style={[styles.stepperDot, done && styles.stepperDotDone]}>
+                <Text style={[styles.stepperDotText, done && styles.stepperDotTextDone]}>{index + 1}</Text>
+              </View>
+              {index < STATUS_STEPS.length - 1 && (
+                <View style={[styles.stepperConnector, index < currentIndex && styles.stepperConnectorDone]} />
+              )}
+            </View>
+            <Text style={[styles.stepperLabel, done && styles.stepperLabelDone]}>{STATUS_LABELS[step]}</Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
 const PAYMENT_PROVIDER_LABELS = {
   paypal: 'PayPal',
   airtel_money: 'Airtel Money',
@@ -76,6 +107,12 @@ function OrderCard({ order, authFetch }) {
         Paiement : {PAYMENT_PROVIDER_LABELS[order.payment_provider] || order.payment_provider || '—'}
         {order.payment_status ? ` (${PAYMENT_STATUS_LABELS[order.payment_status] || order.payment_status})` : ''}
       </Text>
+      <StatusStepper status={order.status} />
+      {order.delivery_latitude != null && order.delivery_longitude != null && (
+        <TouchableOpacity onPress={() => Linking.openURL(`https://www.google.com/maps?q=${order.delivery_latitude},${order.delivery_longitude}`)}>
+          <Text style={styles.toggleLink}>Voir la position de livraison</Text>
+        </TouchableOpacity>
+      )}
       <TouchableOpacity onPress={toggle}>
         <Text style={styles.toggleLink}>{expanded ? 'Masquer le détail' : 'Voir le détail'}</Text>
       </TouchableOpacity>
@@ -252,6 +289,62 @@ const styles = StyleSheet.create({
   },
   detailAmount: {
     fontSize: 13,
+    color: '#1e293b',
+    fontWeight: '600',
+  },
+  cancelledText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#dc2626',
+    marginTop: 10,
+  },
+  stepperRow: {
+    flexDirection: 'row',
+    marginTop: 10,
+  },
+  stepperStep: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  stepperDotRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+  },
+  stepperDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#e2e8f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  stepperDotDone: {
+    backgroundColor: '#dc2626',
+  },
+  stepperDotText: {
+    fontSize: 11,
+    color: '#64748b',
+  },
+  stepperDotTextDone: {
+    color: '#fff',
+  },
+  stepperConnector: {
+    flex: 1,
+    height: 2,
+    backgroundColor: '#e2e8f0',
+    marginHorizontal: 2,
+  },
+  stepperConnectorDone: {
+    backgroundColor: '#dc2626',
+  },
+  stepperLabel: {
+    fontSize: 10,
+    color: '#94a3b8',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  stepperLabelDone: {
     color: '#1e293b',
     fontWeight: '600',
   },

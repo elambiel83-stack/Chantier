@@ -6,6 +6,32 @@
     completed: 'Terminée',
     cancelled: 'Annulée'
   };
+  // Étapes du suivi de commande. 'cancelled' est un état terminal à part, jamais une étape
+  // du parcours normal (une commande annulée ne "passe" pas par confirmée/en livraison).
+  const STATUS_STEPS = ['pending', 'confirmed', 'delivering', 'completed'];
+
+  function statusStepper(status) {
+    if (status === 'cancelled') {
+      return '<p class="mt-3 text-sm font-medium text-red-600">Commande annulée</p>';
+    }
+    const currentIndex = STATUS_STEPS.indexOf(status);
+    const steps = STATUS_STEPS.map((step, index) => {
+      const done = index <= currentIndex;
+      const dotClass = done ? 'bg-red-600 text-white' : 'bg-slate-200 text-slate-500';
+      const labelClass = done ? 'text-slate-800 font-medium' : 'text-slate-400';
+      const connectorClass = index < currentIndex ? 'bg-red-600' : 'bg-slate-200';
+      return `
+        <div class="flex flex-1 items-center">
+          <div class="flex flex-col items-center gap-1">
+            <span class="flex h-6 w-6 items-center justify-center rounded-full text-xs ${dotClass}">${index + 1}</span>
+            <span class="text-[11px] text-center ${labelClass}">${STATUS_LABELS[step]}</span>
+          </div>
+          ${index < STATUS_STEPS.length - 1 ? `<span class="mx-1 h-0.5 flex-1 ${connectorClass}"></span>` : ''}
+        </div>
+      `;
+    }).join('');
+    return `<div class="mt-3 flex items-start">${steps}</div>`;
+  }
   const PAYMENT_PROVIDER_LABELS = {
     paypal: 'PayPal',
     airtel_money: 'Airtel Money',
@@ -54,7 +80,11 @@
         Paiement : ${PAYMENT_PROVIDER_LABELS[order.payment_provider] || order.payment_provider || '—'}
         ${order.payment_status ? `(${PAYMENT_STATUS_LABELS[order.payment_status] || order.payment_status})` : ''}
       </p>
-      <button type="button" class="mt-3 text-sm text-red-600 underline detail-toggle">Voir le détail</button>
+      ${statusStepper(order.status)}
+      ${order.delivery_latitude != null && order.delivery_longitude != null
+        ? `<a class="mt-3 inline-block text-sm text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.delivery_latitude},${order.delivery_longitude}">Voir la position de livraison</a>`
+        : ''}
+      <button type="button" class="mt-3 block text-sm text-red-600 underline detail-toggle">Voir le détail</button>
       <div class="mt-3 hidden space-y-1 border-t border-slate-200 pt-3 text-sm detail-content"></div>
     `;
 

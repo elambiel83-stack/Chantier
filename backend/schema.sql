@@ -126,6 +126,12 @@ CREATE TABLE IF NOT EXISTS orders (
 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_to UUID REFERENCES user_account(id) ON DELETE SET NULL;
 
+-- Position de livraison partagée par le client au moment de la commande (bouton "Partager ma
+-- position", géolocalisation du navigateur/appareil) — optionnelle, une commande reste possible
+-- sans elle (numéro de téléphone/adresse verbale restent le repli habituel dans ce marché).
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_latitude DOUBLE PRECISION CHECK (delivery_latitude BETWEEN -90 AND 90);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_longitude DOUBLE PRECISION CHECK (delivery_longitude BETWEEN -180 AND 180);
+
 CREATE TABLE IF NOT EXISTS order_item (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   order_id UUID REFERENCES orders(id) ON DELETE CASCADE,

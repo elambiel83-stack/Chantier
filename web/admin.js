@@ -116,6 +116,9 @@
             <span>${assignmentLabel(order)}</span>
             ${payment ? `<span>${escapeHtml(payment)}</span>` : ''}
           </div>
+          ${order.delivery_latitude != null && order.delivery_longitude != null
+            ? `<a class="mt-2 inline-block text-sm text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.delivery_latitude},${order.delivery_longitude}">Voir la position de livraison</a>`
+            : ''}
           ${actions.length ? `<div class="mt-3 flex flex-wrap gap-2">${actions.map((action, index) => `
             <button type="button" class="order-action px-3 py-2 rounded-lg text-sm ${action.variant === 'signal' ? 'signal-button text-white' : 'outline-button border'}"
               data-order-id="${order.id}" data-action-index="${index}">${action.label}</button>

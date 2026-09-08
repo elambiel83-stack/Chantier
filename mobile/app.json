@@ -28,7 +28,13 @@
     },
     "plugins": [
       "expo-web-browser",
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "MonChantier utilise votre position pour la partager avec l'équipe de livraison lors de votre commande."
+        }
+      ]
     ]
   }
 }
