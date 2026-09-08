@@ -135,17 +135,20 @@ expo start -c
 
 ## 📦 Build pour production
 
-### Android APK
+`expo build:android`/`expo build:ios` (Expo Classic Build) sont retirés depuis des années — le
+build passe maintenant par [EAS Build](https://docs.expo.dev/build/introduction/), déjà
+configuré (`eas.json`) :
 
 ```bash
-expo build:android
+npm install -g eas-cli
+eas login
+eas init                                   # une seule fois : crée le projet EAS
+eas build --profile preview --platform android   # .apk installable directement, sans store
+eas build --profile production --platform ios
+eas build --profile production --platform android
 ```
 
-### iOS App
-
-```bash
-expo build:ios
-```
+Voir `store-listing/README.md` pour la suite (comptes développeur, captures d'écran, soumission).
 
 ## 🎨 Personnalisation
 
@@ -159,21 +162,20 @@ Modifiez les couleurs dans les `styles` de chaque écran :
 ### Logo
 
 Remplacez les images dans `assets/` :
-- `icon.png` (1024x1024)
-- `splash.png` (1284x2778)
-- `adaptive-icon.png` (1024x1024)
+- `icon.png` — 1024×1024, **opaque** (sans canal alpha, exigé par Apple)
+- `adaptive-icon.png` — 1024×1024, transparent, motif centré dans la zone de sécurité Android
+  (`android.adaptiveIcon.backgroundColor` dans `app.json` fournit le fond)
+- `splash.png` — fond transparent ; `resizeMode: "contain"` dans `app.json` l'adapte à tout
+  écran, la taille exacte importe peu tant que le ratio interne reste raisonnable
 
 ## 🌐 Déploiement
 
-### Publication sur Expo
-
-```bash
-expo publish
-```
-
 ### App Stores
 
-Suivez la [documentation Expo](https://docs.expo.dev/distribution/introduction/) pour publier sur Play Store et App Store.
+Fiches App Store/Play Store déjà rédigées dans `store-listing/` (nom, description, mots-clés,
+réponses aux questionnaires de confidentialité). `store-listing/README.md` liste dans l'ordre
+tout ce qui reste à faire manuellement : comptes développeur, `eas build`/`eas submit`,
+captures d'écran.
 
 ## 📝 TODO
 
