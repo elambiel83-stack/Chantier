@@ -7,6 +7,7 @@ import {
   ScrollView,
   Image,
   Linking,
+  Alert,
 } from 'react-native';
 import { useCart } from '../context/CartContext';
 import { API_CONFIG } from '../config';
@@ -16,7 +17,7 @@ export default function HomeScreen({ navigation }) {
 
   const openWhatsApp = () => {
     const url = `whatsapp://send?phone=${API_CONFIG.whatsappNumber.replace(/\D/g, '')}`;
-    Linking.openURL(url);
+    Linking.openURL(url).catch(() => Alert.alert('Erreur', 'WhatsApp non disponible'));
   };
 
   return (

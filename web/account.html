@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mon compte | MonChantier</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+</head>
+<body class="min-h-screen bg-slate-100 text-slate-900">
+  <main class="mx-auto max-w-xl px-4 py-10">
+    <a href="index.html" class="brand-name inline-flex items-center gap-2 font-bold text-xl"><img src="assets/monchantier_logo.svg" alt="" class="h-10 w-auto">MonChantier</a>
+    <h1 class="mt-8 text-3xl font-bold">Mon compte</h1>
+    <section class="page-surface mt-6 border border-slate-200 bg-white p-6 shadow-sm">
+      <p><span class="font-medium">E-mail :</span> <span id="account-email">…</span></p>
+      <p class="mt-2"><span class="font-medium">Statut :</span> <span id="account-verified-badge">…</span></p>
+    </section>
+
+    <section id="verification-section" class="page-surface mt-6 hidden border border-slate-200 bg-white p-6 shadow-sm">
+      <h2 class="text-lg font-semibold">Vérifier mon compte</h2>
+      <p class="mt-2 text-sm text-slate-600">Recevez un code à 6 chiffres pour confirmer votre compte, sur le canal de votre choix.</p>
+
+      <form id="send-code-form" class="mt-4 space-y-3">
+        <div id="channel-choices" class="space-y-2"></div>
+        <button type="submit" id="send-code-button" class="bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700 disabled:opacity-50">Envoyer le code</button>
+      </form>
+      <p id="send-status" class="mt-3 text-sm" role="status" aria-live="polite"></p>
+
+      <form id="confirm-code-form" class="mt-6 hidden space-y-3">
+        <div>
+          <label for="confirm-code" class="block text-sm font-medium">Code reçu</label>
+          <input id="confirm-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required class="mt-1 w-40 border border-slate-300 px-3 py-2 tracking-widest">
+        </div>
+        <button type="submit" class="bg-red-600 px-4 py-2 font-semibold text-white hover:bg-red-700">Confirmer</button>
+      </form>
+      <p id="confirm-status" class="mt-3 text-sm" role="status" aria-live="polite"></p>
+    </section>
+
+    <p id="account-status" class="mt-4 text-sm" role="status" aria-live="polite"></p>
+  </main>
+  <script src="account.js"></script>
+</body>
+</html>

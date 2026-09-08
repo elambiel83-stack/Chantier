@@ -1,3 +1,4 @@
+const Sentry = require('@sentry/node');
 const express = require('express');
 const path = require('path');
 const argon2 = require('argon2');
@@ -8,7 +9,57 @@ const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { Pool } = require('pg');
+const { createOidcVerifier, isOidcTokenError } = require('./oidc');
+const { sendEmail, sendSms, sendWhatsApp, channelAvailability } = require('./notifications');
+const { verifyTurnstileToken } = require('./turnstile');
 require('dotenv').config();
+
+// Champs qui ne doivent jamais atteindre Sentry, quelle que soit la route: mots de passe,
+// jetons, codes de vérification. Sentry capture le corps/les en-têtes de la requête en
+// cas d'erreur (Sentry.setupExpressErrorHandler) — sans ce filtre, une erreur survenant
+// pendant un login enverrait le mot de passe en clair à un tiers.
+const SENSITIVE_FIELDS = ['password', 'idToken', 'identityToken', 'accessToken', 'refreshToken', 'token', 'code', 'authorization', 'cookie', 'cf-turnstile-response'];
+function scrubSensitiveData(value) {
+  if (Array.isArray(value)) return value.map(scrubSensitiveData);
+  if (value && typeof value === 'object') {
+    const scrubbed = {};
+    for (const [key, val] of Object.entries(value)) {
+      scrubbed[key] = SENSITIVE_FIELDS.includes(key.toLowerCase()) ? '[Filtered]' : scrubSensitiveData(val);
+    }
+    return scrubbed;
+  }
+  return value;
+}
+// Sans SENTRY_DSN, Sentry.init n'est pas appelé: captureException reste un no-op sûr
+// (voir captureError plus bas), donc rien d'autre à garder conditionnel.
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    // Défense en profondeur: en plus du filtre ci-dessus sur nos propres appels,
+    // corrige aussi ce que l'intégration Express capture automatiquement (corps et
+    // en-têtes de requête) avant tout envoi à Sentry.
+    beforeSend(event) {
+      if (event.request?.data) event.request.data = scrubSensitiveData(event.request.data);
+      if (event.request?.headers?.authorization) event.request.headers.authorization = '[Filtered]';
+      if (event.request?.headers?.cookie) event.request.headers.cookie = '[Filtered]';
+      return event;
+    }
+  });
+}
+
+function captureError(error) {
+  console.error(error instanceof Error ? error.stack : error);
+  if (process.env.SENTRY_DSN) Sentry.captureException(error);
+}
+
+// Événements de sécurité qui ne sont pas des erreurs applicatives (donc jamais levés en
+// exception) mais qu'on veut pouvoir repérer dans Sentry: CAPTCHA refusé, brute-force sur
+// un code de vérification, quota d'API dépassé...
+function captureSecurityEvent(message, extra) {
+  console.warn(`[sécurité] ${message}`, extra || '');
+  if (process.env.SENTRY_DSN) Sentry.captureMessage(message, { level: 'warning', extra: scrubSensitiveData(extra || {}) });
+}
 
 const app = express();
 // Nombre de proxys de confiance devant l'app (reverse proxy, load balancer...).
@@ -51,6 +102,17 @@ const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
 
+// Connexion Google/Apple: le client (web ou mobile) obtient un jeton d'identité
+// directement du fournisseur puis nous l'envoie; on ne fait confiance qu'à ce que sa
+// signature (vérifiée contre les clés publiques du fournisseur) atteste, jamais à ce que
+// le client prétend en plus dans le corps de la requête. Voir oidc.js (testé isolément).
+const verifyGoogleIdToken = createOidcVerifier('https://www.googleapis.com/oauth2/v3/certs');
+const verifyAppleIdToken = createOidcVerifier('https://appleid.apple.com/auth/keys');
+// Un identifiant par plateforme (web/iOS/Android) émet des jetons avec des audiences
+// différentes pour un même fournisseur: toutes doivent être acceptées.
+const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || '').split(',').map((id) => id.trim()).filter(Boolean);
+const APPLE_CLIENT_IDS = (process.env.APPLE_CLIENT_IDS || '').split(',').map((id) => id.trim()).filter(Boolean);
+
 // Middleware
 app.use(cors({
   origin(origin, callback) {
@@ -68,12 +130,16 @@ app.use(helmet({
       objectSrc: ["'none'"],
       frameAncestors: ["'self'"],
       formAction: ["'self'"],
-      // Le catalogue charge Tailwind par CDN et utilise des gestionnaires d'événements inline.
-      scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com'],
+      // Le catalogue charge Tailwind par CDN et utilise des gestionnaires d'événements
+      // inline; le CAPTCHA Cloudflare Turnstile s'affiche dans une iframe.
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://challenges.cloudflare.com'],
       scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
       imgSrc: ["'self'", 'data:', 'https:'],
-      connectSrc: ["'self'", ...allowedOrigins],
+      frameSrc: ["'self'", 'https://challenges.cloudflare.com'],
+      // connectSrc: le script Turnstile fait ses propres appels réseau vers Cloudflare
+      // (pas seulement dans l'iframe déclarée par frameSrc).
+      connectSrc: ["'self'", ...allowedOrigins, 'https://challenges.cloudflare.com'],
       ...(process.env.NODE_ENV === 'production' ? { upgradeInsecureRequests: [] } : { upgradeInsecureRequests: null })
     }
   }
@@ -96,8 +162,27 @@ app.use('/api', rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 100,
   standardHeaders: 'draft-8',
-  legacyHeaders: false
+  legacyHeaders: false,
+  handler(req, res) {
+    captureSecurityEvent('Quota API dépassé', { path: req.path, ip: req.ip });
+    res.status(429).json({ success: false, message: 'Trop de requêtes, réessayez plus tard' });
+  }
 }));
+// Chaque envoi coûte de l'argent (SMS/WhatsApp) et peut harceler un numéro/e-mail: quota
+// dédié, plus strict que le quota général de l'API.
+const verificationSendLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 3,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  // Par compte plutôt que par IP: la route exige déjà requireAuthentication avant ce
+  // middleware, req.auth est donc toujours renseigné ici.
+  keyGenerator: (req) => req.auth.userId,
+  handler(req, res) {
+    captureSecurityEvent('Quota d’envoi de code de vérification dépassé', { userId: req.auth?.userId, ip: req.ip });
+    res.status(429).json({ success: false, message: 'Trop de demandes de code, réessayez plus tard' });
+  }
+});
 
 // La PWA est servie par le backend: même origine que l'API, donc ni CORS ni contenu mixte.
 app.use(express.static(WEB_DIR, { extensions: ['html'] }));
@@ -256,13 +341,26 @@ const orderSchema = z.object({
 
 const credentialsSchema = z.object({
   email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
-  password: z.string().min(12).max(128)
+  password: z.string().min(12).max(128),
+  // Nom de champ imposé par le widget Turnstile lui-même (input caché qu'il injecte dans
+  // le formulaire): le reprendre tel quel évite tout JS de mappage côté web. Absent si
+  // TURNSTILE_SECRET_KEY n'est pas configuré côté serveur (voir verifyTurnstileToken).
+  'cf-turnstile-response': z.string().max(2048).optional()
 });
 const registrationSchema = credentialsSchema.extend({
   fullName: z.string().trim().min(2).max(120),
   phone: z.string().trim().min(6).max(30)
 });
 const refreshTokenSchema = z.object({ token: z.string().min(32).max(512) });
+const sendVerificationSchema = z.object({ channel: z.enum(['email', 'sms', 'whatsapp']) });
+const confirmVerificationSchema = z.object({ code: z.string().trim().regex(/^\d{6}$/, 'Code à 6 chiffres attendu') });
+const googleAuthSchema = z.object({ idToken: z.string().min(20).max(4096) });
+// Le jeton d'identité Apple ne contient jamais le nom (Apple ne le fournit qu'une fois,
+// hors jeton, lors de la toute première connexion): le client le transmet séparément.
+const appleAuthSchema = z.object({
+  identityToken: z.string().min(20).max(4096),
+  fullName: z.string().trim().min(1).max(120).optional()
+});
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
 const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
@@ -298,6 +396,29 @@ async function createRefreshToken(client, userId) {
   return token;
 }
 
+// column: 'google_sub' ou 'apple_sub'. Retrouve le compte par cet identifiant stable;
+// à défaut, le relie à un compte existant avec le même e-mail (fournisseur garantit cet
+// e-mail vérifié); sinon crée le compte. Appelée à l'intérieur d'une transaction déjà
+// ouverte par l'appelant.
+async function findOrCreateSocialAccount(client, { column, sub, email, fullName }) {
+  const bySub = await client.query(`SELECT id, role, is_active FROM user_account WHERE ${column} = $1`, [sub]);
+  if (bySub.rowCount) return bySub.rows[0];
+  if (email) {
+    const byEmail = await client.query('SELECT id, role, is_active FROM user_account WHERE email = $1', [email]);
+    if (byEmail.rowCount) {
+      await client.query(`UPDATE user_account SET ${column} = $1, updated_at = now() WHERE id = $2`, [sub, byEmail.rows[0].id]);
+      return byEmail.rows[0];
+    }
+  }
+  if (!email) throw Object.assign(new Error('E-mail requis pour créer un compte'), { status: 400 });
+  const customerResult = await client.query('INSERT INTO customer (full_name, email) VALUES ($1, $2) RETURNING id', [fullName || null, email]);
+  const accountResult = await client.query(
+    `INSERT INTO user_account (customer_id, email, ${column}) VALUES ($1, $2, $3) RETURNING id, role, is_active`,
+    [customerResult.rows[0].id, email, sub]
+  );
+  return accountResult.rows[0];
+}
+
 async function requireAuthentication(req, res, next) {
   if (!requireDatabase(res)) return;
   const match = /^Bearer (.+)$/.exec(req.get('authorization') || '');
@@ -329,6 +450,17 @@ function requireDatabase(res) {
     message: 'Le service de commande est temporairement indisponible'
   });
   return false;
+}
+
+// true si la requête peut continuer; répond déjà 403 sinon. Un no-op qui laisse toujours
+// passer si TURNSTILE_SECRET_KEY n'est pas configuré (voir turnstile.js).
+async function checkTurnstile(req, res, token) {
+  const ok = await verifyTurnstileToken(token, req.ip);
+  if (!ok) {
+    captureSecurityEvent('CAPTCHA Turnstile refusé', { path: req.path, ip: req.ip });
+    res.status(403).json({ success: false, message: 'Vérification anti-robot échouée, réessayez' });
+  }
+  return ok;
 }
 
 async function getPaypalAccessToken() {
@@ -577,6 +709,7 @@ app.post('/api/auth/register', async (req, res, next) => {
   }
   const parsed = registrationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Informations d’inscription invalides', errors: parsed.error.flatten().fieldErrors });
+  if (!(await checkTurnstile(req, res, parsed.data['cf-turnstile-response']))) return;
   const { email, password, fullName, phone } = parsed.data;
   const client = await database.connect();
   try {
@@ -606,15 +739,107 @@ app.post('/api/auth/login', async (req, res, next) => {
   }
   const parsed = credentialsSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Identifiants invalides' });
+  if (!(await checkTurnstile(req, res, parsed.data['cf-turnstile-response']))) return;
   try {
     const accountResult = await database.query('SELECT id, email, password_hash, role, is_active FROM user_account WHERE email = $1', [parsed.data.email]);
     const account = accountResult.rows[0];
-    const validPassword = account && account.is_active && await argon2.verify(account.password_hash, parsed.data.password);
+    // password_hash est NULL pour un compte créé via Google/Apple (aucun mot de passe).
+    const validPassword = account && account.is_active && account.password_hash && await argon2.verify(account.password_hash, parsed.data.password);
     if (!validPassword) return res.status(401).json({ success: false, message: 'Adresse e-mail ou mot de passe incorrect' });
     const refreshToken = await createRefreshToken(database, account.id);
     res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: account.email } });
   } catch (error) {
     next(error);
+  }
+});
+
+app.post('/api/auth/google', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  try {
+    requireJwtSecret();
+  } catch (error) {
+    return next(error);
+  }
+  if (!GOOGLE_CLIENT_IDS.length) return res.status(503).json({ success: false, message: 'Connexion Google non configurée' });
+  const parsed = googleAuthSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Jeton Google manquant' });
+  let payload;
+  try {
+    // Vérifié avant d'ouvrir une connexion à la base: pas besoin d'en tenir une inutilisée
+    // pendant l'appel réseau vers les clés publiques de Google.
+    payload = await verifyGoogleIdToken(parsed.data.idToken, {
+      issuer: ['https://accounts.google.com', 'accounts.google.com'],
+      audiences: GOOGLE_CLIENT_IDS
+    });
+  } catch (error) {
+    if (isOidcTokenError(error)) return res.status(401).json({ success: false, message: 'Jeton Google invalide ou expiré' });
+    return next(error);
+  }
+  if (!payload.email || !payload.email_verified) {
+    return res.status(403).json({ success: false, message: 'E-mail Google non vérifié' });
+  }
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const account = await findOrCreateSocialAccount(client, {
+      column: 'google_sub', sub: payload.sub, email: String(payload.email).toLowerCase(), fullName: payload.name
+    });
+    if (!account.is_active) {
+      await client.query('ROLLBACK');
+      return res.status(401).json({ success: false, message: 'Compte désactivé' });
+    }
+    const refreshToken = await createRefreshToken(client, account.id);
+    await client.query('COMMIT');
+    res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: payload.email } });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.status === 400) return res.status(400).json({ success: false, message: error.message });
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/auth/apple', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  try {
+    requireJwtSecret();
+  } catch (error) {
+    return next(error);
+  }
+  if (!APPLE_CLIENT_IDS.length) return res.status(503).json({ success: false, message: 'Connexion Apple non configurée' });
+  const parsed = appleAuthSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Jeton Apple manquant' });
+  let payload;
+  try {
+    payload = await verifyAppleIdToken(parsed.data.identityToken, {
+      issuer: 'https://appleid.apple.com',
+      audiences: APPLE_CLIENT_IDS
+    });
+  } catch (error) {
+    if (isOidcTokenError(error)) return res.status(401).json({ success: false, message: 'Jeton Apple invalide ou expiré' });
+    return next(error);
+  }
+  if (!payload.email) return res.status(403).json({ success: false, message: 'E-mail Apple indisponible' });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const account = await findOrCreateSocialAccount(client, {
+      column: 'apple_sub', sub: payload.sub, email: String(payload.email).toLowerCase(), fullName: parsed.data.fullName
+    });
+    if (!account.is_active) {
+      await client.query('ROLLBACK');
+      return res.status(401).json({ success: false, message: 'Compte désactivé' });
+    }
+    const refreshToken = await createRefreshToken(client, account.id);
+    await client.query('COMMIT');
+    res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: payload.email } });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.status === 400) return res.status(400).json({ success: false, message: error.message });
+    next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -648,8 +873,101 @@ app.post('/api/auth/refresh', async (req, res, next) => {
   }
 });
 
-app.get('/api/auth/me', requireAuthentication, (req, res) => {
-  res.json({ success: true, user: { id: req.auth.userId, role: req.auth.role } });
+app.get('/api/auth/me', requireAuthentication, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const result = await database.query('SELECT email, verified_at FROM user_account WHERE id = $1', [req.auth.userId]);
+    const account = result.rows[0];
+    res.json({
+      success: true,
+      user: { id: req.auth.userId, role: req.auth.role, email: account?.email, verified: Boolean(account?.verified_at) }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Canaux effectivement utilisables (pas seulement supportés en théorie): le frontend ne
+// doit jamais proposer un choix qui échouerait à l'envoi.
+app.get('/api/auth/verification/channels', (req, res) => {
+  res.json({ success: true, channels: channelAvailability() });
+});
+
+app.post('/api/auth/verification/send', requireAuthentication, verificationSendLimiter, async (req, res, next) => {
+  const parsed = sendVerificationSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Canal invalide' });
+  const { channel } = parsed.data;
+  if (!channelAvailability()[channel]) {
+    return res.status(503).json({ success: false, message: `Vérification par ${channel} non configurée` });
+  }
+  try {
+    const result = await database.query(
+      'SELECT user_account.email, customer.phone FROM user_account LEFT JOIN customer ON customer.id = user_account.customer_id WHERE user_account.id = $1',
+      [req.auth.userId]
+    );
+    const destination = channel === 'email' ? result.rows[0].email : result.rows[0].phone;
+    if (!destination) {
+      return res.status(400).json({
+        success: false,
+        message: channel === 'email' ? 'E-mail manquant sur votre compte' : 'Numéro de téléphone manquant sur votre profil'
+      });
+    }
+    const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    // Un seul code actif à la fois par compte: les précédents non consommés sont annulés.
+    await database.query('DELETE FROM verification_code WHERE user_id = $1 AND consumed_at IS NULL', [req.auth.userId]);
+    await database.query(
+      'INSERT INTO verification_code (user_id, channel, code_hash, expires_at) VALUES ($1, $2, $3, $4)',
+      [req.auth.userId, channel, hashToken(code), expiresAt]
+    );
+    const message = `Votre code de vérification MonChantier : ${code} (valable 10 minutes).`;
+    if (channel === 'email') await sendEmail(destination, 'Votre code de vérification MonChantier', message);
+    else if (channel === 'sms') await sendSms(destination, message);
+    else await sendWhatsApp(destination, message);
+    res.status(202).json({ success: true, message: 'Code envoyé' });
+  } catch (error) {
+    if (error.status === 503) return res.status(503).json({ success: false, message: `Vérification par ${channel} non configurée` });
+    next(error);
+  }
+});
+
+app.post('/api/auth/verification/confirm', requireAuthentication, async (req, res, next) => {
+  const parsed = confirmVerificationSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Code invalide' });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT id, code_hash, attempts FROM verification_code
+       WHERE user_id = $1 AND consumed_at IS NULL AND expires_at > now()
+       ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+      [req.auth.userId]
+    );
+    const record = result.rows[0];
+    if (!record) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Aucun code en attente, ou code expiré' });
+    }
+    if (record.attempts >= 5) {
+      await client.query('ROLLBACK');
+      captureSecurityEvent('Trop de tentatives sur un code de vérification', { userId: req.auth.userId });
+      return res.status(429).json({ success: false, message: 'Trop de tentatives, demandez un nouveau code' });
+    }
+    if (!tokensMatch(parsed.data.code, record.code_hash)) {
+      await client.query('UPDATE verification_code SET attempts = attempts + 1 WHERE id = $1', [record.id]);
+      await client.query('COMMIT');
+      return res.status(401).json({ success: false, message: 'Code incorrect' });
+    }
+    await client.query('UPDATE verification_code SET consumed_at = now() WHERE id = $1', [record.id]);
+    await client.query('UPDATE user_account SET verified_at = now(), updated_at = now() WHERE id = $1', [req.auth.userId]);
+    await client.query('COMMIT');
+    res.json({ success: true, verified: true });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
 });
 
 app.post('/api/auth/logout', requireAuthentication, async (req, res, next) => {
@@ -984,10 +1302,15 @@ app.delete('/api/cart/:sessionId', (req, res) => {
   });
 });
 
+if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
+
 // Gestionnaire d'erreurs
 app.use((err, req, res, next) => {
-  console.error(err.stack);
   const isCorsError = err.message === 'Origine non autorisée par CORS';
+  // Une origine rejetée est un refus attendu, pas un bug: on la journalise sans
+  // encombrer le suivi d'erreurs.
+  if (isCorsError) console.error(err.stack);
+  else captureError(err);
   res.status(isCorsError ? 403 : 500).json({
     success: false,
     message: isCorsError ? 'Origine non autorisée' : 'Erreur interne du serveur'
@@ -995,7 +1318,7 @@ app.use((err, req, res, next) => {
 });
 
 // Démarrer le serveur
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`✅ Serveur démarré sur http://localhost:${PORT}`);
   console.log(`📦 ${PRODUCTS.length} produits chargés`);
   console.log(`🌍 CORS activé pour: ${allowedOrigins.join(', ')}${codespaceOriginPattern ? ' (+ ports de ce Codespace)' : ''}`);
@@ -1003,4 +1326,45 @@ app.listen(PORT, () => {
   syncCatalog()
     .then(() => database && console.log('🗄️  Catalogue synchronisé en base'))
     .catch((error) => console.error('⚠️  Synchronisation du catalogue impossible:', error.message));
+});
+
+// Arrêt propre: cesse d'accepter de nouvelles requêtes, laisse les requêtes en cours se
+// terminer, ferme le pool PostgreSQL, puis quitte. Un déploiement (Render, Docker, k8s...)
+// envoie SIGTERM et attend l'arrêt du process avant de le tuer: sans ce gestionnaire, les
+// requêtes en cours et les connexions PostgreSQL sont coupées net à chaque redéploiement.
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n${signal} reçu, arrêt en cours...`);
+  const forceExit = setTimeout(() => {
+    console.error('Arrêt forcé: la fermeture propre a dépassé le délai imparti');
+    process.exit(1);
+  }, 10000);
+  forceExit.unref();
+  try {
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    if (database) await database.end();
+    clearTimeout(forceExit);
+    process.exit(0);
+  } catch (error) {
+    console.error('Erreur pendant l’arrêt:', error);
+    clearTimeout(forceExit);
+    process.exit(1);
+  }
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// Après une exception non interceptée, l'état du process n'est plus fiable: on la
+// journalise puis on s'arrête proprement plutôt que de continuer à servir des requêtes.
+process.on('uncaughtException', (error) => {
+  captureError(error);
+  shutdown('uncaughtException');
+});
+// Un rejet de promesse non intercepté n'affecte pas forcément la requête en cours (toutes
+// les routes retournent déjà leurs erreurs via next()): on le journalise sans arrêter le
+// serveur.
+process.on('unhandledRejection', (reason) => {
+  captureError(reason instanceof Error ? reason : new Error(String(reason)));
 });

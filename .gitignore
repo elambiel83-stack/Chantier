@@ -8,6 +8,9 @@ yarn-error.log*
 backend/.env
 backend/node_modules/
 
+# Docker Compose (POSTGRES_PASSWORD, DOMAIN...)
+/.env
+
 # Web
 web/node_modules/
 

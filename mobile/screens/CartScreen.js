@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -12,34 +12,15 @@ import {
 } from 'react-native';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import { getApiUrl } from '../config';
-
-// Repli hors ligne uniquement: les taux facturés viennent de /api/currency-rates.
-const FALLBACK_RATES = { USD: 1, CDF: 2800, EUR: 0.92 };
 
 export default function CartScreen({ navigation }) {
-  const { cart, removeFromCart, updateQuantity, getTotal, clearCart } = useCart();
+  const { cart, removeFromCart, updateQuantity, getTotal, clearCart, currency, setCurrency, formatAmount } = useCart();
   const { authFetch, isAuthenticated, logout } = useAuth();
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [currency, setCurrency] = useState('USD');
   const [paymentProvider, setPaymentProvider] = useState('airtel_money');
   const [submitting, setSubmitting] = useState(false);
-  const [rates, setRates] = useState(FALLBACK_RATES);
-
-  useEffect(() => {
-    let active = true;
-    fetch(getApiUrl('/currency-rates'))
-      .then((response) => (response.ok ? response.json() : null))
-      .then((data) => {
-        if (active && data?.rates) setRates({ ...FALLBACK_RATES, ...data.rates });
-      })
-      .catch(() => {});
-    return () => { active = false; };
-  }, []);
-
-  const formatAmount = (amountUsd) => `${(amountUsd * (Number(rates[currency]) || 1)).toFixed(2)} ${currency}`;
 
   const promptForLogin = () => {
     Alert.alert(

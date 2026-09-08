@@ -98,3 +98,48 @@ test('POST /api/orders sans base de données répond 503', async () => {
   });
   assert.equal(response.status, 503);
 });
+
+test('POST /api/auth/google sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/auth/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken: 'x'.repeat(30) })
+  });
+  assert.equal(response.status, 503);
+});
+
+test('POST /api/auth/apple sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/auth/apple`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ identityToken: 'x'.repeat(30) })
+  });
+  assert.equal(response.status, 503);
+});
+
+test('GET /api/auth/verification/channels ne propose que des canaux configurés', async () => {
+  const response = await fetch(`${BASE_URL}/api/auth/verification/channels`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.success, true);
+  // Aucune clé d'API email/SMS/WhatsApp dans cet environnement de test.
+  assert.deepEqual(body.channels, { email: false, sms: false, whatsapp: false });
+});
+
+test('POST /api/auth/verification/send sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/auth/verification/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel: 'email' })
+  });
+  assert.equal(response.status, 503);
+});
+
+test('POST /api/auth/verification/confirm sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/auth/verification/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code: '123456' })
+  });
+  assert.equal(response.status, 503);
+});
