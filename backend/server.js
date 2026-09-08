@@ -1205,6 +1205,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
     }
     res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
   } catch (error) {
+    if (error.status === 503) return res.status(503).json({ success: false, message: 'PayPal n’est pas configuré. Contactez-nous.' });
     next(error);
   }
 });
