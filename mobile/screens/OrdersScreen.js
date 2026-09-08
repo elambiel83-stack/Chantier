@@ -69,6 +69,15 @@ function formatDate(iso) {
   }
 }
 
+function timeAgo(iso) {
+  const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+  if (seconds < 60) return 'à l’instant';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `il y a ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  return `il y a ${hours} h`;
+}
+
 function OrderCard({ order, authFetch }) {
   const [expanded, setExpanded] = useState(false);
   const [items, setItems] = useState(null);
@@ -113,6 +122,16 @@ function OrderCard({ order, authFetch }) {
           <Text style={styles.toggleLink}>Voir la position de livraison</Text>
         </TouchableOpacity>
       )}
+      {order.status === 'delivering' && order.driver_latitude != null && order.driver_longitude != null && (
+        <TouchableOpacity onPress={() => Linking.openURL(`https://www.google.com/maps?q=${order.driver_latitude},${order.driver_longitude}`)}>
+          <Text style={styles.toggleLink}>Suivre le livreur en direct ({timeAgo(order.driver_location_updated_at)})</Text>
+        </TouchableOpacity>
+      )}
+      {order.possible_delay && (
+        <View style={styles.delayBanner}>
+          <Text style={styles.delayBannerText}>⚠️ Votre livraison semble retardée en chemin (embouteillage ou imprévu possible). Notre équipe reste en contact avec le livreur.</Text>
+        </View>
+      )}
       <TouchableOpacity onPress={toggle}>
         <Text style={styles.toggleLink}>{expanded ? 'Masquer le détail' : 'Voir le détail'}</Text>
       </TouchableOpacity>
@@ -143,16 +162,33 @@ export default function OrdersScreen() {
       setLoading(false);
       return;
     }
-    (async () => {
+    let cancelled = false;
+    let timer = null;
+
+    // Tant qu'une commande est en livraison, on rafraîchit périodiquement pour refléter la
+    // position du livreur en direct — la boucle s'arrête d'elle-même en ne se replanifiant
+    // pas dès qu'il n'y a plus de commande active.
+    const load = async () => {
       try {
         const { orders: list } = await authFetch('/orders');
+        if (cancelled) return;
         setOrders(list);
+        setError(null);
+        if (list.some((order) => order.status === 'delivering')) {
+          timer = setTimeout(load, 20000);
+        }
       } catch (err) {
-        setError(err.message || 'Impossible de charger vos commandes.');
+        if (!cancelled) setError(err.message || 'Impossible de charger vos commandes.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
-    })();
+    };
+    load();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [isAuthenticated]);
 
   if (!isAuthenticated) {
@@ -297,6 +333,18 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#dc2626',
     marginTop: 10,
+  },
+  delayBanner: {
+    marginTop: 8,
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 8,
+    padding: 8,
+  },
+  delayBannerText: {
+    fontSize: 12,
+    color: '#92400e',
   },
   stepperRow: {
     flexDirection: 'row',

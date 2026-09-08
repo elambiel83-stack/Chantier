@@ -370,6 +370,23 @@ const appleAuthSchema = z.object({
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
 const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
+const driverLocationSchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180)
+});
+// Au-delà de ce délai sans mise à jour de position pendant une livraison en cours, on
+// considère un blocage possible (embouteillage...) et on avertit le client une fois.
+const DELIVERY_DELAY_THRESHOLD_MINUTES = 15;
+
+// true si la commande est en livraison et que la position du livreur n'a plus été
+// rafraîchie depuis DELIVERY_DELAY_THRESHOLD_MINUTES: signale un blocage possible
+// (embouteillage...) côté client, sans prétendre en connaître la cause réelle.
+function withPossibleDelay(order) {
+  const possibleDelay = order.status === 'delivering'
+    && Boolean(order.driver_location_updated_at)
+    && (Date.now() - new Date(order.driver_location_updated_at).getTime()) > DELIVERY_DELAY_THRESHOLD_MINUTES * 60 * 1000;
+  return { ...order, possible_delay: possibleDelay };
+}
 
 function requireJwtSecret() {
   if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) throw new Error('JWT_ACCESS_SECRET doit contenir au moins 32 caracteres');
@@ -614,6 +631,39 @@ ${paymentInstructions}
 
 Vous pouvez suivre l'état de votre commande à tout moment depuis « Mes commandes » sur le site.`;
   return sendEmail(to, `Confirmation de votre commande MonChantier (${order.id.slice(0, 8)})`, text);
+}
+
+// Balayage périodique: avertit une fois le client d'une commande en livraison dont la
+// position du livreur n'a plus été rafraîchie depuis DELIVERY_DELAY_THRESHOLD_MINUTES
+// (blocage/embouteillage possible — on ne prétend pas en connaître la cause exacte, faute
+// d'intégration avec un service de trafic en temps réel). Ne se redéclenche que si le
+// livreur partage de nouveau sa position entre-temps (voir PATCH .../location, qui efface
+// delay_notified_at).
+async function checkDeliveryDelays() {
+  if (!database) return;
+  try {
+    const result = await database.query(
+      `SELECT orders.id, customer.email
+       FROM orders JOIN customer ON customer.id = orders.customer_id
+       WHERE orders.status = 'delivering'
+         AND orders.driver_location_updated_at IS NOT NULL
+         AND orders.driver_location_updated_at < now() - ($1 * interval '1 minute')
+         AND orders.delay_notified_at IS NULL`,
+      [DELIVERY_DELAY_THRESHOLD_MINUTES]
+    );
+    for (const order of result.rows) {
+      await database.query('UPDATE orders SET delay_notified_at = now() WHERE id = $1', [order.id]);
+      if (order.email && channelAvailability().email) {
+        sendEmail(
+          order.email,
+          `Retard possible de votre livraison MonChantier (${order.id.slice(0, 8)})`,
+          `Bonjour,\n\nVotre commande ${order.id} semble retardée en chemin (embouteillage ou imprévu possible). Notre équipe reste en contact avec le livreur et votre commande reste en cours de livraison.\n\nVous pouvez suivre la position du livreur depuis « Mes commandes » sur le site.`
+        ).catch((error) => console.error('⚠️  Notification de retard non envoyée:', error.message));
+      }
+    }
+  } catch (error) {
+    console.error('⚠️  Vérification des retards de livraison impossible:', error.message);
+  }
 }
 
 // Routes API
@@ -1277,6 +1327,7 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
     const result = await database.query(
       `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
               orders.delivery_latitude, orders.delivery_longitude,
+              orders.driver_latitude, orders.driver_longitude, orders.driver_location_updated_at,
               customer.full_name, customer.phone, payment.provider AS payment_provider, payment.status AS payment_status
        FROM orders
        JOIN customer ON customer.id = orders.customer_id
@@ -1284,7 +1335,7 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY orders.created_at DESC`,
       values
     );
-    res.json({ success: true, orders: result.rows });
+    res.json({ success: true, orders: result.rows.map(withPossibleDelay) });
   } catch (error) {
     next(error);
   }
@@ -1308,6 +1359,7 @@ app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) =>
     const orderResult = await database.query(
       `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
               orders.delivery_latitude, orders.delivery_longitude,
+              orders.driver_latitude, orders.driver_longitude, orders.driver_location_updated_at,
               customer.full_name, customer.phone, payment.provider AS payment_provider, payment.status AS payment_status
        FROM orders
        JOIN customer ON customer.id = orders.customer_id
@@ -1323,7 +1375,7 @@ app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) =>
        WHERE order_item.order_id = $1 ORDER BY product.name_fr`,
       [req.params.orderId]
     );
-    res.json({ success: true, order: { ...orderResult.rows[0], items: itemsResult.rows } });
+    res.json({ success: true, order: { ...withPossibleDelay(orderResult.rows[0]), items: itemsResult.rows } });
   } catch (error) {
     next(error);
   }
@@ -1334,6 +1386,34 @@ app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff
   try {
     const result = await database.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId]);
     if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette commande n’est plus disponible pour affectation' });
+    res.json({ success: true, order: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Position en direct du livreur, partagée volontairement et à répétition par le staff
+// assigné (ou un admin) pendant que la commande est confirmée ou en livraison — jamais un
+// suivi permanent en arrière-plan. Chaque mise à jour efface delay_notified_at: le livreur
+// est de nouveau "vu", une éventuelle alerte de retard pourra se redéclencher plus tard.
+app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  const parsed = driverLocationSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Coordonnées invalides' });
+  const values = [req.params.orderId, parsed.data.latitude, parsed.data.longitude];
+  let ownership = '';
+  if (req.auth.role === 'staff') {
+    values.push(req.auth.userId);
+    ownership = ` AND assigned_to = $${values.length}`;
+  }
+  try {
+    const result = await database.query(
+      `UPDATE orders SET driver_latitude = $2, driver_longitude = $3, driver_location_updated_at = now(), delay_notified_at = NULL, updated_at = now()
+       WHERE id = $1 AND status IN ('confirmed', 'delivering')${ownership}
+       RETURNING id, driver_latitude, driver_longitude, driver_location_updated_at`,
+      values
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Position non mise à jour: commande non assignée ou statut inadapté' });
     res.json({ success: true, order: result.rows[0] });
   } catch (error) {
     next(error);
@@ -1412,6 +1492,10 @@ const server = app.listen(PORT, () => {
     .catch((error) => console.error('⚠️  Synchronisation du catalogue impossible:', error.message));
 });
 
+// unref(): un balayage périodique ne doit jamais, à lui seul, empêcher le process de
+// s'arrêter (utile notamment pour les tests, qui tuent le process sans passer par shutdown()).
+const deliveryDelayInterval = database ? setInterval(checkDeliveryDelays, 5 * 60 * 1000).unref() : null;
+
 // Arrêt propre: cesse d'accepter de nouvelles requêtes, laisse les requêtes en cours se
 // terminer, ferme le pool PostgreSQL, puis quitte. Un déploiement (Render, Docker, k8s...)
 // envoie SIGTERM et attend l'arrêt du process avant de le tuer: sans ce gestionnaire, les
@@ -1426,6 +1510,7 @@ async function shutdown(signal) {
     process.exit(1);
   }, 10000);
   forceExit.unref();
+  if (deliveryDelayInterval) clearInterval(deliveryDelayInterval);
   try {
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     if (database) await database.end();

@@ -62,6 +62,15 @@
     }
   }
 
+  function timeAgo(iso) {
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (seconds < 60) return 'à l’instant';
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `il y a ${minutes} min`;
+    const hours = Math.round(minutes / 60);
+    return `il y a ${hours} h`;
+  }
+
   function orderCard(order) {
     const wrapper = document.createElement('div');
     wrapper.className = 'page-surface border border-slate-200 bg-white p-4 shadow-sm';
@@ -83,6 +92,15 @@
       ${statusStepper(order.status)}
       ${order.delivery_latitude != null && order.delivery_longitude != null
         ? `<a class="mt-3 inline-block text-sm text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.delivery_latitude},${order.delivery_longitude}">Voir la position de livraison</a>`
+        : ''}
+      ${order.status === 'delivering' && order.driver_latitude != null && order.driver_longitude != null
+        ? `<p class="mt-2 text-sm">
+             <a class="text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.driver_latitude},${order.driver_longitude}">Suivre le livreur en direct</a>
+             <span class="text-slate-400">(position ${timeAgo(order.driver_location_updated_at)})</span>
+           </p>`
+        : ''}
+      ${order.possible_delay
+        ? `<p class="mt-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">⚠️ Votre livraison semble retardée en chemin (embouteillage ou imprévu possible). Notre équipe reste en contact avec le livreur.</p>`
         : ''}
       <button type="button" class="mt-3 block text-sm text-red-600 underline detail-toggle">Voir le détail</button>
       <div class="mt-3 hidden space-y-1 border-t border-slate-200 pt-3 text-sm detail-content"></div>
@@ -117,17 +135,29 @@
     return wrapper;
   }
 
-  (async () => {
+  // Tant qu'une commande est en livraison, on rafraîchit périodiquement pour refléter la
+  // position du livreur en direct — sans polling permanent une fois plus aucune commande
+  // active (la boucle s'arrête d'elle-même en ne se replanifiant pas).
+  let refreshTimer = null;
+  async function refreshOrders() {
     try {
       const { orders } = await window.apiCall('/orders');
       if (!orders.length) {
         statusEl.textContent = "Vous n'avez pas encore de commande.";
+        listEl.innerHTML = '';
         return;
       }
       statusEl.textContent = '';
+      listEl.innerHTML = '';
       orders.forEach((order) => listEl.appendChild(orderCard(order)));
+      if (orders.some((order) => order.status === 'delivering')) {
+        clearTimeout(refreshTimer);
+        refreshTimer = setTimeout(refreshOrders, 20000);
+      }
     } catch (error) {
       statusEl.textContent = error.message || 'Impossible de charger vos commandes.';
     }
-  })();
+  }
+
+  refreshOrders();
 }());

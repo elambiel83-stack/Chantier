@@ -132,6 +132,18 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_to UUID REFERENCES user_acc
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_latitude DOUBLE PRECISION CHECK (delivery_latitude BETWEEN -90 AND 90);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_longitude DOUBLE PRECISION CHECK (delivery_longitude BETWEEN -180 AND 180);
 
+-- Position en direct du livreur (partagée par le staff assigné depuis web/admin.html
+-- pendant qu'une commande est confirmée/en livraison) — distincte de delivery_latitude/
+-- longitude ci-dessus, qui est la destination fournie par le client. Repose sur un
+-- partage volontaire et répété (PATCH /api/orders/:id/location) plutôt qu'un suivi
+-- permanent en arrière-plan.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_latitude DOUBLE PRECISION CHECK (driver_latitude BETWEEN -90 AND 90);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_longitude DOUBLE PRECISION CHECK (driver_longitude BETWEEN -180 AND 180);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_location_updated_at TIMESTAMPTZ;
+-- Évite de renvoyer une notification de retard à chaque balayage tant que la position n'a
+-- pas été rafraîchie depuis la dernière alerte (voir checkDeliveryDelays dans server.js).
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS delay_notified_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS order_item (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   order_id UUID REFERENCES orders(id) ON DELETE CASCADE,

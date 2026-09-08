@@ -46,6 +46,49 @@
     }
   }
 
+  function timeAgo(iso) {
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (seconds < 60) return 'à l’instant';
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `il y a ${minutes} min`;
+    const hours = Math.round(minutes / 60);
+    return `il y a ${hours} h`;
+  }
+
+  // Partage de position en direct pendant la livraison: le staff/admin active le partage
+  // pour une commande donnée, une position est envoyée immédiatement puis toutes les 15s
+  // tant que le partage reste actif — jamais un suivi permanent en arrière-plan, l'agent
+  // doit explicitement l'activer pour chaque commande.
+  const activeShares = new Map(); // orderId -> intervalId
+
+  function sendLocationUpdate(orderId) {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        window.apiCall(`/orders/${orderId}/location`, {
+          method: 'PATCH',
+          body: { latitude: position.coords.latitude, longitude: position.coords.longitude }
+        }).catch(() => {
+          // Best-effort: une commande passée à un autre statut/agent entre-temps ne doit
+          // pas interrompre bruyamment le partage, il s'arrêtera via toggleShare/stopShare.
+        });
+      },
+      () => {}
+    );
+  }
+
+  function startShare(orderId) {
+    if (activeShares.has(orderId)) return;
+    sendLocationUpdate(orderId);
+    activeShares.set(orderId, setInterval(() => sendLocationUpdate(orderId), 15000));
+  }
+
+  function stopShare(orderId) {
+    const intervalId = activeShares.get(orderId);
+    if (intervalId) clearInterval(intervalId);
+    activeShares.delete(orderId);
+  }
+
   function assignmentLabel(order) {
     if (!order.assigned_to) return 'Non assignée';
     if (order.assigned_to === me.id) return 'Assignée à vous';
@@ -59,6 +102,14 @@
       return `${label} · à vérifier manuellement`;
     }
     return `${label} · ${order.payment_status}`;
+  }
+
+  // Même périmètre que le serveur (voir PATCH /orders/:id/location): un staff ne partage
+  // que sur ses propres commandes assignées, un admin sur n'importe laquelle, seulement
+  // tant qu'elle est confirmée ou en livraison.
+  function canShareLocation(order) {
+    if (!['confirmed', 'delivering'].includes(order.status)) return false;
+    return me.role === 'admin' || order.assigned_to === me.id;
   }
 
   // Boutons proposés: le serveur reste la seule autorité (409 si refusé), ceci n'évite
@@ -119,6 +170,19 @@
           ${order.delivery_latitude != null && order.delivery_longitude != null
             ? `<a class="mt-2 inline-block text-sm text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.delivery_latitude},${order.delivery_longitude}">Voir la position de livraison</a>`
             : ''}
+          ${order.driver_latitude != null && order.driver_longitude != null
+            ? `<p class="mt-2 text-sm">
+                 <a class="text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.driver_latitude},${order.driver_longitude}">Position du livreur</a>
+                 <span class="text-slate-400">(${timeAgo(order.driver_location_updated_at)})</span>
+               </p>`
+            : ''}
+          ${order.possible_delay
+            ? `<p class="mt-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">⚠️ Position du livreur non rafraîchie depuis un moment — blocage possible.</p>`
+            : ''}
+          ${canShareLocation(order)
+            ? `<button type="button" class="location-share px-3 py-2 rounded-lg text-sm outline-button border mt-2"
+                 data-order-id="${order.id}">${activeShares.has(order.id) ? 'Arrêter le partage de ma position' : 'Partager ma position (livraison)'}</button>`
+            : ''}
           ${actions.length ? `<div class="mt-3 flex flex-wrap gap-2">${actions.map((action, index) => `
             <button type="button" class="order-action px-3 py-2 rounded-lg text-sm ${action.variant === 'signal' ? 'signal-button text-white' : 'outline-button border'}"
               data-order-id="${order.id}" data-action-index="${index}">${action.label}</button>
@@ -133,6 +197,19 @@
         const order = currentOrders.find((item) => item.id === orderId);
         const action = availableActions(order)[Number(button.dataset.actionIndex)];
         if (action) runAction(order, action, button);
+      });
+    });
+
+    ordersEl.querySelectorAll('.location-share').forEach((button) => {
+      button.addEventListener('click', () => {
+        const orderId = button.dataset.orderId;
+        if (activeShares.has(orderId)) {
+          stopShare(orderId);
+          button.textContent = 'Partager ma position (livraison)';
+        } else {
+          startShare(orderId);
+          button.textContent = 'Arrêter le partage de ma position';
+        }
       });
     });
   }
@@ -166,6 +243,13 @@
     try {
       const data = await window.apiCall(`/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`);
       currentOrders = data.orders || [];
+      // Une commande qui a changé de statut/affectation entre-temps (ex: marquée terminée
+      // par un autre agent) n'est plus partageable: on coupe l'intervalle, sans quoi il
+      // continuerait à tourner sans qu'aucun bouton ne permette plus de l'arrêter.
+      for (const orderId of [...activeShares.keys()]) {
+        const order = currentOrders.find((item) => item.id === orderId);
+        if (!order || !canShareLocation(order)) stopShare(orderId);
+      }
       renderOrders(currentOrders);
       ordersStatusEl.textContent = '';
     } catch (error) {
