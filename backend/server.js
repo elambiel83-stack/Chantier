@@ -9,6 +9,7 @@ const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
 const { z } = require('zod');
 const { Pool } = require('pg');
+const { createOidcVerifier, isOidcTokenError } = require('./oidc');
 require('dotenv').config();
 
 // Sans SENTRY_DSN, Sentry.init n'est pas appelé: captureException reste un no-op sûr
@@ -62,6 +63,17 @@ const MOBILE_MONEY_PROVIDERS = {
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
+
+// Connexion Google/Apple: le client (web ou mobile) obtient un jeton d'identité
+// directement du fournisseur puis nous l'envoie; on ne fait confiance qu'à ce que sa
+// signature (vérifiée contre les clés publiques du fournisseur) atteste, jamais à ce que
+// le client prétend en plus dans le corps de la requête. Voir oidc.js (testé isolément).
+const verifyGoogleIdToken = createOidcVerifier('https://www.googleapis.com/oauth2/v3/certs');
+const verifyAppleIdToken = createOidcVerifier('https://appleid.apple.com/auth/keys');
+// Un identifiant par plateforme (web/iOS/Android) émet des jetons avec des audiences
+// différentes pour un même fournisseur: toutes doivent être acceptées.
+const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || '').split(',').map((id) => id.trim()).filter(Boolean);
+const APPLE_CLIENT_IDS = (process.env.APPLE_CLIENT_IDS || '').split(',').map((id) => id.trim()).filter(Boolean);
 
 // Middleware
 app.use(cors({
@@ -275,6 +287,13 @@ const registrationSchema = credentialsSchema.extend({
   phone: z.string().trim().min(6).max(30)
 });
 const refreshTokenSchema = z.object({ token: z.string().min(32).max(512) });
+const googleAuthSchema = z.object({ idToken: z.string().min(20).max(4096) });
+// Le jeton d'identité Apple ne contient jamais le nom (Apple ne le fournit qu'une fois,
+// hors jeton, lors de la toute première connexion): le client le transmet séparément.
+const appleAuthSchema = z.object({
+  identityToken: z.string().min(20).max(4096),
+  fullName: z.string().trim().min(1).max(120).optional()
+});
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
 const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
@@ -308,6 +327,29 @@ async function createRefreshToken(client, userId) {
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
   await client.query('INSERT INTO refresh_token (user_id, token_hash, expires_at) VALUES ($1, $2, $3)', [userId, hashRefreshToken(token), expiresAt]);
   return token;
+}
+
+// column: 'google_sub' ou 'apple_sub'. Retrouve le compte par cet identifiant stable;
+// à défaut, le relie à un compte existant avec le même e-mail (fournisseur garantit cet
+// e-mail vérifié); sinon crée le compte. Appelée à l'intérieur d'une transaction déjà
+// ouverte par l'appelant.
+async function findOrCreateSocialAccount(client, { column, sub, email, fullName }) {
+  const bySub = await client.query(`SELECT id, role, is_active FROM user_account WHERE ${column} = $1`, [sub]);
+  if (bySub.rowCount) return bySub.rows[0];
+  if (email) {
+    const byEmail = await client.query('SELECT id, role, is_active FROM user_account WHERE email = $1', [email]);
+    if (byEmail.rowCount) {
+      await client.query(`UPDATE user_account SET ${column} = $1, updated_at = now() WHERE id = $2`, [sub, byEmail.rows[0].id]);
+      return byEmail.rows[0];
+    }
+  }
+  if (!email) throw Object.assign(new Error('E-mail requis pour créer un compte'), { status: 400 });
+  const customerResult = await client.query('INSERT INTO customer (full_name, email) VALUES ($1, $2) RETURNING id', [fullName || null, email]);
+  const accountResult = await client.query(
+    `INSERT INTO user_account (customer_id, email, ${column}) VALUES ($1, $2, $3) RETURNING id, role, is_active`,
+    [customerResult.rows[0].id, email, sub]
+  );
+  return accountResult.rows[0];
 }
 
 async function requireAuthentication(req, res, next) {
@@ -621,12 +663,103 @@ app.post('/api/auth/login', async (req, res, next) => {
   try {
     const accountResult = await database.query('SELECT id, email, password_hash, role, is_active FROM user_account WHERE email = $1', [parsed.data.email]);
     const account = accountResult.rows[0];
-    const validPassword = account && account.is_active && await argon2.verify(account.password_hash, parsed.data.password);
+    // password_hash est NULL pour un compte créé via Google/Apple (aucun mot de passe).
+    const validPassword = account && account.is_active && account.password_hash && await argon2.verify(account.password_hash, parsed.data.password);
     if (!validPassword) return res.status(401).json({ success: false, message: 'Adresse e-mail ou mot de passe incorrect' });
     const refreshToken = await createRefreshToken(database, account.id);
     res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: account.email } });
   } catch (error) {
     next(error);
+  }
+});
+
+app.post('/api/auth/google', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  try {
+    requireJwtSecret();
+  } catch (error) {
+    return next(error);
+  }
+  if (!GOOGLE_CLIENT_IDS.length) return res.status(503).json({ success: false, message: 'Connexion Google non configurée' });
+  const parsed = googleAuthSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Jeton Google manquant' });
+  let payload;
+  try {
+    // Vérifié avant d'ouvrir une connexion à la base: pas besoin d'en tenir une inutilisée
+    // pendant l'appel réseau vers les clés publiques de Google.
+    payload = await verifyGoogleIdToken(parsed.data.idToken, {
+      issuer: ['https://accounts.google.com', 'accounts.google.com'],
+      audiences: GOOGLE_CLIENT_IDS
+    });
+  } catch (error) {
+    if (isOidcTokenError(error)) return res.status(401).json({ success: false, message: 'Jeton Google invalide ou expiré' });
+    return next(error);
+  }
+  if (!payload.email || !payload.email_verified) {
+    return res.status(403).json({ success: false, message: 'E-mail Google non vérifié' });
+  }
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const account = await findOrCreateSocialAccount(client, {
+      column: 'google_sub', sub: payload.sub, email: String(payload.email).toLowerCase(), fullName: payload.name
+    });
+    if (!account.is_active) {
+      await client.query('ROLLBACK');
+      return res.status(401).json({ success: false, message: 'Compte désactivé' });
+    }
+    const refreshToken = await createRefreshToken(client, account.id);
+    await client.query('COMMIT');
+    res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: payload.email } });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.status === 400) return res.status(400).json({ success: false, message: error.message });
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/auth/apple', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  try {
+    requireJwtSecret();
+  } catch (error) {
+    return next(error);
+  }
+  if (!APPLE_CLIENT_IDS.length) return res.status(503).json({ success: false, message: 'Connexion Apple non configurée' });
+  const parsed = appleAuthSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Jeton Apple manquant' });
+  let payload;
+  try {
+    payload = await verifyAppleIdToken(parsed.data.identityToken, {
+      issuer: 'https://appleid.apple.com',
+      audiences: APPLE_CLIENT_IDS
+    });
+  } catch (error) {
+    if (isOidcTokenError(error)) return res.status(401).json({ success: false, message: 'Jeton Apple invalide ou expiré' });
+    return next(error);
+  }
+  if (!payload.email) return res.status(403).json({ success: false, message: 'E-mail Apple indisponible' });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const account = await findOrCreateSocialAccount(client, {
+      column: 'apple_sub', sub: payload.sub, email: String(payload.email).toLowerCase(), fullName: parsed.data.fullName
+    });
+    if (!account.is_active) {
+      await client.query('ROLLBACK');
+      return res.status(401).json({ success: false, message: 'Compte désactivé' });
+    }
+    const refreshToken = await createRefreshToken(client, account.id);
+    await client.query('COMMIT');
+    res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: payload.email } });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.status === 400) return res.status(400).json({ success: false, message: error.message });
+    next(error);
+  } finally {
+    client.release();
   }
 });
 

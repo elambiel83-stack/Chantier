@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, TextInput, ScrollView, Linking, StyleSheet, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, TextInput, ScrollView, Linking, StyleSheet, Alert, ActivityIndicator, Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import CommerceHomeScreen from './screens/HomeScreen';
 import ProductsScreen from './screens/ProductsScreen';
 import CartScreen from './screens/CartScreen';
@@ -35,11 +36,16 @@ const styles = StyleSheet.create({
   dividerText: { marginHorizontal: 8, color: '#999' },
 });
 
-function notifyGoogleUnavailable() {
+function notifyGoogleNotConfigured() {
   Alert.alert(
     'Connexion Google indisponible',
-    "La connexion Google n'est pas encore reliée au serveur MonChantier. Utilisez votre e-mail et votre mot de passe."
+    "La connexion Google n'est pas configurée sur cet appareil. Utilisez votre e-mail et votre mot de passe."
   );
+}
+
+// L'utilisateur a fermé la fenêtre de connexion lui-même: pas une erreur à signaler.
+function isUserCancellation(error) {
+  return error?.code === 'ERR_REQUEST_CANCELED' || error?.code === 'ERR_CANCELED';
 }
 
 const PRODUCTS = [
@@ -52,17 +58,15 @@ const PRODUCTS = [
 
 // Écran de connexion
 function LoginScreen({ navigation }) {
-  const { login, continueAsGuest } = useAuth();
+  const { login, loginWithGoogle, loginWithApple, continueAsGuest } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [request, response, promptAsync] = Google.useAuthRequest(GOOGLE_AUTH_CONFIG);
-
-  React.useEffect(() => {
-    if (response?.type === 'success') {
-      notifyGoogleUnavailable();
-    }
-  }, [response]);
+  const [request, , promptAsync] = Google.useAuthRequest({
+    ...GOOGLE_AUTH_CONFIG,
+    responseType: 'id_token',
+    scopes: ['openid', 'profile', 'email']
+  });
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -80,8 +84,33 @@ function LoginScreen({ navigation }) {
   };
 
   const handleGooglePress = async () => {
-    // Le backend n'expose pas encore d'échange de jeton Google: pas de session factice.
-    notifyGoogleUnavailable();
+    if (!request) return notifyGoogleNotConfigured();
+    try {
+      const result = await promptAsync();
+      if (result.type !== 'success') return;
+      const idToken = result.params?.id_token;
+      if (!idToken) throw new Error('Jeton Google manquant');
+      await loginWithGoogle(idToken);
+    } catch (error) {
+      Alert.alert('Connexion Google impossible', error.message || 'Réessayez.');
+    }
+  };
+
+  const handleApplePress = async () => {
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [AppleAuthentication.AppleAuthenticationScope.FULL_NAME, AppleAuthentication.AppleAuthenticationScope.EMAIL]
+      });
+      // Apple ne renvoie le nom qu'à la toute première connexion: à transmettre maintenant,
+      // le backend ne le reverra plus jamais dans le jeton lui-même.
+      const fullName = credential.fullName?.givenName
+        ? [credential.fullName.givenName, credential.fullName.familyName].filter(Boolean).join(' ')
+        : undefined;
+      await loginWithApple(credential.identityToken, fullName);
+    } catch (error) {
+      if (isUserCancellation(error)) return;
+      Alert.alert('Connexion Apple impossible', error.message || 'Réessayez.');
+    }
   };
 
   return (
@@ -143,6 +172,18 @@ function LoginScreen({ navigation }) {
         <Text style={styles.socialButtonText}>Se connecter avec Gmail</Text>
       </TouchableOpacity>
 
+      {/* Apple / iCloud: uniquement sur iOS, exige le bouton officiel Apple (règles du
+          App Store) plutôt qu'un bouton personnalisé. */}
+      {Platform.OS === 'ios' && (
+        <AppleAuthentication.AppleAuthenticationButton
+          buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+          buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+          cornerRadius={8}
+          style={{ height: 44, marginTop: 10 }}
+          onPress={handleApplePress}
+        />
+      )}
+
       {/* Facebook */}
       <TouchableOpacity
         style={styles.socialButton}
@@ -172,19 +213,17 @@ function LoginScreen({ navigation }) {
 
 // Écran d'inscription
 function RegisterScreen({ navigation }) {
-  const { register } = useAuth();
+  const { register, loginWithGoogle, loginWithApple } = useAuth();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [request, response, promptAsync] = Google.useAuthRequest(GOOGLE_AUTH_CONFIG);
-
-  React.useEffect(() => {
-    if (response?.type === 'success') {
-      notifyGoogleUnavailable();
-    }
-  }, [response]);
+  const [request, , promptAsync] = Google.useAuthRequest({
+    ...GOOGLE_AUTH_CONFIG,
+    responseType: 'id_token',
+    scopes: ['openid', 'profile', 'email']
+  });
 
   const handleRegister = async () => {
     if (!name || !email || !password || !phone) {
@@ -206,7 +245,31 @@ function RegisterScreen({ navigation }) {
   };
 
   const handleGooglePress = async () => {
-    notifyGoogleUnavailable();
+    if (!request) return notifyGoogleNotConfigured();
+    try {
+      const result = await promptAsync();
+      if (result.type !== 'success') return;
+      const idToken = result.params?.id_token;
+      if (!idToken) throw new Error('Jeton Google manquant');
+      await loginWithGoogle(idToken);
+    } catch (error) {
+      Alert.alert('Inscription Google impossible', error.message || 'Réessayez.');
+    }
+  };
+
+  const handleApplePress = async () => {
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [AppleAuthentication.AppleAuthenticationScope.FULL_NAME, AppleAuthentication.AppleAuthenticationScope.EMAIL]
+      });
+      const fullName = credential.fullName?.givenName
+        ? [credential.fullName.givenName, credential.fullName.familyName].filter(Boolean).join(' ')
+        : undefined;
+      await loginWithApple(credential.identityToken, fullName);
+    } catch (error) {
+      if (isUserCancellation(error)) return;
+      Alert.alert('Inscription Apple impossible', error.message || 'Réessayez.');
+    }
   };
 
   return (
@@ -282,6 +345,16 @@ function RegisterScreen({ navigation }) {
         <Text style={{ fontSize: 20 }}>📧</Text>
         <Text style={styles.socialButtonText}>S'inscrire avec Gmail</Text>
       </TouchableOpacity>
+
+      {Platform.OS === 'ios' && (
+        <AppleAuthentication.AppleAuthenticationButton
+          buttonType={AppleAuthentication.AppleAuthenticationButtonType.CONTINUE}
+          buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+          cornerRadius={8}
+          style={{ height: 44, marginTop: 10 }}
+          onPress={handleApplePress}
+        />
+      )}
 
       {/* Connexion */}
       <TouchableOpacity onPress={() => navigation.navigate('Login')}>

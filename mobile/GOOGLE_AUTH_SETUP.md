@@ -49,7 +49,20 @@ EXPO_PUBLIC_GOOGLE_CLIENT_ID_ANDROID=votre-id-android.apps.googleusercontent.com
 Tant qu'une variable est vide, le bouton correspondant reste désactivé plutôt que
 d'utiliser un faux identifiant.
 
-### 6. Test
+### 6. Déclarer les mêmes identifiants côté backend
+
+Le backend vérifie le jeton reçu (signature, émetteur, audience) avant de créer ou relier
+un compte — voir `README.md` > Authentification et rôles, et `backend/oidc.js`. Il doit
+connaître les mêmes identifiants client que ceux ci-dessus : dans `backend/.env`,
+
+```
+GOOGLE_CLIENT_IDS=votre-id.apps.googleusercontent.com,votre-id-ios.apps.googleusercontent.com,votre-id-android.apps.googleusercontent.com
+```
+
+Sans cette variable côté backend, `POST /api/auth/google` répond `503` même si l'app
+mobile obtient bien un jeton de Google.
+
+### 7. Test
 
 - Appuyez sur "Se connecter avec Google"
 - Vous devriez voir l'écran de connexion Google
@@ -59,7 +72,7 @@ d'utiliser un faux identifiant.
 
 - Ne commitez JAMAIS vos clés Google dans Git
 - Utilisez des variables d'environnement
-- Validez TOUJOURS le token côté backend
+- Le token est vérifié côté backend (signature + émetteur + audience, voir `backend/oidc.js`)
 - Utilisez HTTPS pour les appels API
 
 ## 📚 Ressources

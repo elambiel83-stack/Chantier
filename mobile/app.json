@@ -16,7 +16,8 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "net.monchantier.app"
+      "bundleIdentifier": "net.monchantier.app",
+      "usesAppleSignIn": true
     },
     "android": {
       "package": "net.monchantier.app",
@@ -26,7 +27,8 @@
       }
     },
     "plugins": [
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-apple-authentication"
     ]
   }
 }

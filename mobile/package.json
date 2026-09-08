@@ -13,6 +13,7 @@
     "@react-navigation/native": "^6.1.18",
     "@react-navigation/native-stack": "^6.9.26",
     "expo": "~54.0.0",
+    "expo-apple-authentication": "~8.0.8",
     "expo-auth-session": "~7.0.10",
     "expo-secure-store": "~15.0.8",
     "expo-status-bar": "~3.0.9",

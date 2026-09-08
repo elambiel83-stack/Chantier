@@ -107,6 +107,8 @@ mobile/
 - ✅ Recherche de produits
 - ✅ Gestion du panier
 - ✅ Commande via WhatsApp
+- ✅ Authentification (e-mail/mot de passe, Google, Apple)
+- ✅ Paiement (PayPal, Airtel Money, Orange Money)
 - ✅ Design responsive
 
 ## 🐛 Dépannage
@@ -175,11 +177,11 @@ Suivez la [documentation Expo](https://docs.expo.dev/distribution/introduction/)
 
 ## 📝 TODO
 
-- [ ] Authentification utilisateur
+- [x] Authentification utilisateur (e-mail/mot de passe, Google, Apple — voir `GOOGLE_AUTH_SETUP.md`/`APPLE_AUTH_SETUP.md`)
 - [ ] Historique des commandes
 - [ ] Notifications push
 - [ ] Mode hors ligne
-- [ ] Paiement intégré
+- [x] Paiement intégré (PayPal, Airtel Money, Orange Money — voir le README à la racine du dépôt)
 - [ ] Géolocalisation pour livraison
 
 ## 📞 Support

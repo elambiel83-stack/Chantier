@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS user_account (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Connexion Google/Apple: un compte créé par ce biais n'a pas de mot de passe, et se
+-- retrouve par l'identifiant stable ('sub') que renvoie le fournisseur dans son jeton.
+ALTER TABLE user_account ALTER COLUMN password_hash DROP NOT NULL;
+ALTER TABLE user_account ADD COLUMN IF NOT EXISTS google_sub TEXT UNIQUE;
+ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
+
 CREATE TABLE IF NOT EXISTS refresh_token (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,

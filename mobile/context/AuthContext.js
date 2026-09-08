@@ -89,18 +89,31 @@ export const AuthProvider = ({ children }) => {
     return () => { active = false; };
   }, []);
 
-  const login = async (email, password) => {
-    const data = await request('/auth/login', { method: 'POST', body: { email, password } });
+  // Login/register/Google/Apple renvoient tous la même forme ({accessToken, refreshToken,
+  // user}): un seul endroit pour l'appliquer à la session en mémoire et persistée.
+  const applySession = async (data) => {
     const next = { accessToken: data.accessToken, refreshToken: data.refreshToken, user: data.user };
     setSession(next);
     await persistSession(next);
   };
 
+  const login = async (email, password) => {
+    await applySession(await request('/auth/login', { method: 'POST', body: { email, password } }));
+  };
+
   const register = async (payload) => {
-    const data = await request('/auth/register', { method: 'POST', body: payload });
-    const next = { accessToken: data.accessToken, refreshToken: data.refreshToken, user: data.user };
-    setSession(next);
-    await persistSession(next);
+    await applySession(await request('/auth/register', { method: 'POST', body: payload }));
+  };
+
+  // idToken: jeton d'identité obtenu du SDK Google côté client (voir App.js).
+  const loginWithGoogle = async (idToken) => {
+    await applySession(await request('/auth/google', { method: 'POST', body: { idToken } }));
+  };
+
+  // identityToken: jeton d'identité Apple ("Sign in with Apple", authentification iCloud
+  // sur iOS). fullName n'est fourni par Apple qu'à la toute première connexion.
+  const loginWithApple = async (identityToken, fullName) => {
+    await applySession(await request('/auth/apple', { method: 'POST', body: { identityToken, fullName } }));
   };
 
   const continueAsGuest = () => {
@@ -164,6 +177,8 @@ export const AuthProvider = ({ children }) => {
         isAuthenticated: Boolean(session?.accessToken),
         login,
         register,
+        loginWithGoogle,
+        loginWithApple,
         continueAsGuest,
         logout,
         authFetch,

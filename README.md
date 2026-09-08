@@ -141,8 +141,18 @@ Routes d’authentification :
 
 - `POST /api/auth/register` : `{ "email", "password", "fullName", "phone" }` ; le mot de passe doit contenir de 12 à 128 caractères.
 - `POST /api/auth/login` : `{ "email", "password" }`.
+- `POST /api/auth/google` : `{ "idToken" }` — jeton d'identité Google obtenu côté client (web ou mobile).
+- `POST /api/auth/apple` : `{ "identityToken", "fullName"? }` — jeton d'identité Apple ("Sign in with Apple", l'authentification iCloud sur iOS) ; `fullName` n'est fourni par Apple qu'à la toute première connexion, le client doit donc le transmettre à ce moment-là.
 - `POST /api/auth/refresh` : `{ "token" }` ; le jeton précédent devient immédiatement invalide.
 - `GET /api/auth/me` : en-tête `Authorization: Bearer <accessToken>`.
+
+`POST /api/auth/google` et `POST /api/auth/apple` vérifient le jeton reçu contre les clés
+publiques du fournisseur (jamais contre ce que le client affirme dans le corps de la requête) —
+voir `backend/oidc.js`, testé isolément (`backend/test/oidc.test.js`) sans dépendre de vrais
+comptes Google/Apple. Répondent `503` tant que `GOOGLE_CLIENT_IDS`/`APPLE_CLIENT_IDS` (voir
+`backend/.env.example`) ne sont pas définies. Un compte existant avec la même adresse e-mail
+(déjà vérifiée par le fournisseur) est automatiquement relié plutôt que dupliqué ; sinon un
+nouveau compte est créé sans mot de passe.
 
 La création et la liste des commandes nécessitent aussi cet en-tête. Un membre `staff` réclame une commande confirmée au moyen de `POST /api/orders/:orderId/claim`; les membres `staff` et `admin` changent son statut avec `PATCH /api/orders/:orderId/status`. Seul un administrateur peut attribuer un rôle via `PATCH /api/admin/users/:userId/role`.
 
