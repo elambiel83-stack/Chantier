@@ -5,6 +5,30 @@ conception, vérifiée exécutable sur PostgreSQL 16 (`psql -f`), mais **pas** l
 vivante — `backend/schema.sql` reste la source de vérité tant que la migration n'est pas
 décidée et menée.
 
+## État d'avancement dans `backend/schema.sql`
+
+Les phases 1 à 5 ci-dessous ont en réalité été menées directement sur le schéma vivant, de
+façon volontairement plus pragmatique que ce document (pas de renommage `product` →
+`listing`, pas de `payment_intent` générique) pour rester additif et ne jamais casser le
+site en production :
+- **Phase 1** (identité vendeur) : `organization`, `organization_member`, `vendor_document`,
+  `payout_account`, `address`, `product.organization_id`.
+- **Phase 2-3** (catalogue et onboarding) : `GET/POST /api/organizations`,
+  `POST /api/vendor/products`.
+- **Phase 4** (commandes multi-vendeurs) : `vendor_order`, `order_item.vendor_order_id` —
+  `orders.status` reste la seule source de vérité du contrôle staff, `vendor_order` n'en
+  est qu'un miroir.
+- **Phase 5** (commission et versement) : `platform_fee_rule` (15 % par défaut),
+  `payment_split` (calculé à la confirmation, séquestré jusqu'à livraison confirmée),
+  `payout`, `ledger_entry`. Versement manuel opérationnel dès maintenant ; versement
+  automatisé via CinetPay écrit dans `backend/cinetpay.js` mais **non vérifié par
+  exécution réelle** (voir l'avertissement en tête de ce fichier) et désactivé tant que
+  `CINETPAY_API_KEY`/`CINETPAY_TRANSFER_PASSWORD` ne sont pas configurés avec de vrais
+  identifiants validés contre https://docs.cinetpay.com.
+
+Le reste de ce document (devis, jalons de paiement, avis, litiges, logistique
+internationale, fiscalité) n'est pas encore entamé.
+
 ## Pourquoi une refonte et pas des `ALTER TABLE`
 
 Le schéma actuel modélise une boutique mono-vendeur : `product` n'a pas de propriétaire,

@@ -358,3 +358,76 @@ CREATE INDEX IF NOT EXISTS vendor_order_order_id_idx ON vendor_order(order_id);
 CREATE INDEX IF NOT EXISTS vendor_order_organization_id_idx ON vendor_order(organization_id);
 CREATE INDEX IF NOT EXISTS vendor_order_assigned_to_idx ON vendor_order(assigned_to);
 CREATE INDEX IF NOT EXISTS order_item_vendor_order_id_idx ON order_item(vendor_order_id);
+
+-- ============================================================================
+-- Marketplace multi-vendeurs — phase 5 (commission, séquestre, versement)
+-- Voir docs/marketplace-schema-cible.md. Le paiement collecté (`payment`) reste global à
+-- la commande (phase 4, inchangé): cette phase ajoute la couche comptable qui détermine
+-- combien chaque vendeur doit toucher et en garde la trace, indépendamment du moyen
+-- utilisé pour le lui reverser (manuel comme Airtel/Orange Money aujourd'hui, ou une
+-- intégration automatisée — voir backend/cinetpay.js, désactivée tant qu'aucun
+-- identifiant réel n'est configuré). Montants en USD, comme vendor_order.subtotal_amount_usd.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS platform_fee_rule (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  organization_id UUID REFERENCES organization(id), -- NULL = taux par défaut plateforme
+  rate_percent NUMERIC(6,3) NOT NULL CHECK (rate_percent >= 0),
+  valid_from DATE NOT NULL DEFAULT CURRENT_DATE,
+  valid_to DATE
+);
+
+-- Taux par défaut de lancement (décision produit, pas un choix technique): 15%.
+INSERT INTO platform_fee_rule (organization_id, rate_percent)
+SELECT NULL, 15
+WHERE NOT EXISTS (SELECT 1 FROM platform_fee_rule WHERE organization_id IS NULL);
+
+CREATE TABLE IF NOT EXISTS payout (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  organization_id UUID NOT NULL REFERENCES organization(id),
+  payout_account_id UUID REFERENCES payout_account(id),
+  amount_usd NUMERIC(14,2) NOT NULL CHECK (amount_usd >= 0),
+  method TEXT NOT NULL CHECK (method IN ('manual', 'cinetpay_transfer')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'paid', 'failed')) DEFAULT 'pending',
+  provider_reference TEXT,
+  recorded_by UUID REFERENCES user_account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  paid_at TIMESTAMPTZ
+);
+
+-- Une ligne par vendor_order confirmé (paiement encaissé): calculée à la confirmation,
+-- pas à la création de la commande, pour ne prélever de commission que sur ce qui est
+-- réellement payé. escrow_status passe à 'released' quand la livraison est confirmée
+-- (vendor_order 'completed') — avant cela les fonds restent conceptuellement dus mais non
+-- exigibles, pour se prémunir d'un remboursement/litige avant livraison.
+CREATE TABLE IF NOT EXISTS payment_split (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  vendor_order_id UUID NOT NULL REFERENCES vendor_order(id) ON DELETE CASCADE UNIQUE,
+  gross_amount_usd NUMERIC(14,2) NOT NULL,
+  commission_rate_percent NUMERIC(6,3) NOT NULL,
+  commission_amount_usd NUMERIC(14,2) NOT NULL,
+  net_amount_usd NUMERIC(14,2) NOT NULL,
+  escrow_status TEXT NOT NULL CHECK (escrow_status IN ('held', 'released')) DEFAULT 'held',
+  released_at TIMESTAMPTZ,
+  payout_id UUID REFERENCES payout(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Journal append-only: trace de chaque mouvement comptable, indépendante des statuts
+-- mutables ci-dessus. Jamais mis à jour ni supprimé, seulement complété.
+CREATE TABLE IF NOT EXISTS ledger_entry (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  entry_type TEXT NOT NULL CHECK (entry_type IN ('commission_charged', 'commission_reversed', 'escrow_released', 'vendor_payout')),
+  organization_id UUID REFERENCES organization(id),
+  vendor_order_id UUID REFERENCES vendor_order(id),
+  amount_usd NUMERIC(14,2) NOT NULL,
+  reference_table TEXT,
+  reference_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS payout_organization_id_idx ON payout(organization_id);
+CREATE INDEX IF NOT EXISTS payment_split_escrow_status_idx ON payment_split(escrow_status);
+CREATE INDEX IF NOT EXISTS payment_split_payout_id_idx ON payment_split(payout_id);
+CREATE INDEX IF NOT EXISTS ledger_entry_organization_id_idx ON ledger_entry(organization_id);
+CREATE INDEX IF NOT EXISTS ledger_entry_vendor_order_id_idx ON ledger_entry(vendor_order_id);

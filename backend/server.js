@@ -12,6 +12,7 @@ const { Pool } = require('pg');
 const { createOidcVerifier, isOidcTokenError } = require('./oidc');
 const { sendEmail, sendSms, sendWhatsApp, channelAvailability } = require('./notifications');
 const { verifyTurnstileToken } = require('./turnstile');
+const cinetpay = require('./cinetpay');
 require('dotenv').config();
 
 // Champs qui ne doivent jamais atteindre Sentry, quelle que soit la route: mots de passe,
@@ -378,6 +379,10 @@ const organizationSchema = z.object({
   defaultCurrency: z.enum(['USD', 'CDF', 'EUR']).optional()
 });
 const organizationStatusSchema = z.object({ status: z.enum(['pending_verification', 'verified', 'suspended', 'rejected']) });
+const payoutSchema = z.object({
+  method: z.enum(['manual', 'cinetpay_transfer']),
+  providerReference: z.string().trim().max(200).optional()
+});
 const organizationMemberSchema = z.object({
   email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
   orgRole: z.enum(['owner', 'manager', 'sales', 'purchasing', 'finance', 'viewer'])
@@ -670,6 +675,86 @@ function aggregateQuantities(items) {
     quantities.set(item.id, (quantities.get(item.id) || 0) + item.qty);
   }
   return quantities;
+}
+
+// Taux spécifique au vendeur si un platform_fee_rule le cible et est actif à la date du
+// jour, sinon le taux par défaut plateforme (organization_id IS NULL). Un vendeur sans
+// aucun taux configuré n'a pas de sens (le défaut est toujours seedé par schema.sql).
+async function currentCommissionRatePercent(client, organizationId) {
+  const result = await client.query(
+    `SELECT rate_percent FROM platform_fee_rule
+     WHERE (organization_id = $1 OR organization_id IS NULL)
+       AND valid_from <= CURRENT_DATE AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)
+     ORDER BY organization_id NULLS LAST
+     LIMIT 1`,
+    [organizationId]
+  );
+  if (!result.rowCount) throw new Error(`Aucun taux de commission applicable pour l’organisation ${organizationId}`);
+  return Number(result.rows[0].rate_percent);
+}
+
+// Appelée quand un vendor_order passe à 'confirmed' (paiement encaissé, voir capture
+// PayPal et PATCH .../status): prélève la commission de la plateforme sur ce qui est
+// réellement payé, jamais sur ce qui n'est qu'espéré à la création de la commande.
+// ON CONFLICT DO NOTHING car le statut peut être renvoyé à 'confirmed' de façon inchangée
+// par un appel répété, sans devoir facturer la commission deux fois.
+async function createPaymentSplitsForOrder(client, orderId) {
+  const vendorOrders = await client.query('SELECT id, organization_id, subtotal_amount_usd FROM vendor_order WHERE order_id = $1', [orderId]);
+  for (const vendorOrder of vendorOrders.rows) {
+    const rate = await currentCommissionRatePercent(client, vendorOrder.organization_id);
+    const gross = Number(vendorOrder.subtotal_amount_usd);
+    const commission = Number((gross * rate / 100).toFixed(2));
+    const net = Number((gross - commission).toFixed(2));
+    const inserted = await client.query(
+      `INSERT INTO payment_split (vendor_order_id, gross_amount_usd, commission_rate_percent, commission_amount_usd, net_amount_usd)
+       VALUES ($1, $2, $3, $4, $5) ON CONFLICT (vendor_order_id) DO NOTHING RETURNING id`,
+      [vendorOrder.id, gross, rate, commission, net]
+    );
+    if (inserted.rowCount) {
+      await client.query(
+        `INSERT INTO ledger_entry (entry_type, organization_id, vendor_order_id, amount_usd) VALUES ('commission_charged', $1, $2, $3)`,
+        [vendorOrder.organization_id, vendorOrder.id, commission]
+      );
+    }
+  }
+}
+
+// Appelée quand un vendor_order passe à 'completed' (livraison confirmée): les fonds
+// deviennent exigibles par le vendeur. Avant cela ils restent 'held', pour ne pas devoir
+// réclamer un remboursement au vendeur en cas de litige avant livraison.
+async function releaseEscrowForOrder(client, orderId) {
+  const result = await client.query(
+    `UPDATE payment_split SET escrow_status = 'released', released_at = now()
+     FROM vendor_order WHERE vendor_order.id = payment_split.vendor_order_id
+       AND vendor_order.order_id = $1 AND payment_split.escrow_status = 'held'
+     RETURNING payment_split.vendor_order_id, payment_split.net_amount_usd, vendor_order.organization_id`,
+    [orderId]
+  );
+  for (const row of result.rows) {
+    await client.query(
+      `INSERT INTO ledger_entry (entry_type, organization_id, vendor_order_id, amount_usd) VALUES ('escrow_released', $1, $2, $3)`,
+      [row.organization_id, row.vendor_order_id, row.net_amount_usd]
+    );
+  }
+}
+
+// Appelée quand un vendor_order déjà confirmé (donc déjà facturé en commission) est
+// annulé: supprime le séquestre correspondant, jamais exigible puisque la vente ne se
+// fera plus, et journalise l'inverse pour garder trace du montant initialement prélevé.
+async function reversePaymentSplitsForOrder(client, orderId) {
+  const result = await client.query(
+    `DELETE FROM payment_split USING vendor_order
+     WHERE vendor_order.id = payment_split.vendor_order_id AND vendor_order.order_id = $1
+       AND payment_split.payout_id IS NULL
+     RETURNING payment_split.vendor_order_id, payment_split.commission_amount_usd, vendor_order.organization_id`,
+    [orderId]
+  );
+  for (const row of result.rows) {
+    await client.query(
+      `INSERT INTO ledger_entry (entry_type, organization_id, vendor_order_id, amount_usd) VALUES ('commission_reversed', $1, $2, $3)`,
+      [row.organization_id, row.vendor_order_id, row.commission_amount_usd]
+    );
+  }
 }
 
 // Routes API
@@ -1290,6 +1375,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
       await client.query("UPDATE payment SET status = 'paid', confirmation_token_hash = NULL, updated_at = now() WHERE id = $1", [pendingPayment.id]);
       await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [req.params.orderId]);
       await client.query("UPDATE vendor_order SET status = 'confirmed', updated_at = now() WHERE order_id = $1", [req.params.orderId]);
+      await createPaymentSplitsForOrder(client, req.params.orderId);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1410,6 +1496,7 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
          FROM order_item WHERE order_item.order_id = $1 AND product.id = order_item.product_id`,
         [req.params.orderId]
       );
+      await reversePaymentSplitsForOrder(client, req.params.orderId);
     }
     if (parsed.data.status === 'confirmed') {
       // Airtel/Orange Money n'ont pas de capture automatique: confirmer la commande vaut
@@ -1418,6 +1505,10 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
         "UPDATE payment SET status = 'paid', updated_at = now() WHERE order_id = $1 AND provider IN ('airtel_money', 'orange_money') AND status = 'pending'",
         [req.params.orderId]
       );
+      await createPaymentSplitsForOrder(client, req.params.orderId);
+    }
+    if (parsed.data.status === 'completed') {
+      await releaseEscrowForOrder(client, req.params.orderId);
     }
     // orders.status reste la source de vérité du contrôle staff (transitions, affectation);
     // vendor_order.status n'en est qu'un reflet, pour la visibilité par vendeur.
@@ -1539,6 +1630,120 @@ app.post('/api/admin/organizations/:organizationId/members', requireAuthenticati
   } catch (error) {
     if (error.code === '23503') return res.status(404).json({ success: false, message: 'Organisation introuvable' });
     next(error);
+  }
+});
+
+// Ce qui reste dû à chaque vendeur: séquestre déjà libéré (livraison confirmée) mais pas
+// encore versé. C'est la liste sur laquelle le staff/admin s'appuie pour déclencher des
+// versements (voir POST .../payouts ci-dessous).
+app.get('/api/admin/payouts/pending', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  try {
+    const result = await database.query(
+      `SELECT vendor_order.organization_id, COALESCE(organization.trade_name, organization.legal_name) AS vendor_name,
+              COUNT(*) AS orders_count, SUM(payment_split.net_amount_usd) AS total_net_usd
+       FROM payment_split
+       JOIN vendor_order ON vendor_order.id = payment_split.vendor_order_id
+       JOIN organization ON organization.id = vendor_order.organization_id
+       WHERE payment_split.escrow_status = 'released' AND payment_split.payout_id IS NULL
+       GROUP BY vendor_order.organization_id, vendor_name
+       ORDER BY total_net_usd DESC`
+    );
+    const pending = result.rows.map((row) => ({
+      organizationId: row.organization_id,
+      vendorName: row.vendor_name,
+      ordersCount: Number(row.orders_count),
+      totalNetUsd: Number(row.total_net_usd)
+    }));
+    res.json({ success: true, pending });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Verse à un vendeur tout ce qui lui est dû (séquestre libéré, pas encore versé).
+// method='manual': enregistre un versement déjà effectué par le staff par ses propres
+// moyens (virement, mobile money marchand-à-marchand...), comme pour la confirmation
+// Airtel/Orange Money d'une commande. method='cinetpay_transfer': déclenche un transfert
+// réel via CinetPay (voir cinetpay.js — NON VÉRIFIÉ PAR EXÉCUTION RÉELLE, désactivé tant
+// que CINETPAY_API_KEY/CINETPAY_TRANSFER_PASSWORD ne sont pas configurés).
+app.post('/api/admin/organizations/:organizationId/payouts', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.organizationId).success) return res.status(400).json({ success: false, message: 'Identifiant d’organisation invalide' });
+  const parsed = payoutSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Versement invalide' });
+  const { method, providerReference } = parsed.data;
+  if (method === 'cinetpay_transfer' && !cinetpay.isConfigured()) {
+    return res.status(503).json({ success: false, message: 'CinetPay n’est pas configuré' });
+  }
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    // Verrouille ce qu'il y a à verser pour éviter qu'un double clic (ou deux membres du
+    // staff agissant en même temps) ne déclenche deux versements pour le même montant.
+    // Le verrou reste posé pendant l'appel CinetPay ci-dessous par simplicité: à l'échelle
+    // actuelle de la plateforme, la durée de verrou n'est pas un problème réel.
+    const splitsResult = await client.query(
+      `SELECT payment_split.id, payment_split.net_amount_usd
+       FROM payment_split JOIN vendor_order ON vendor_order.id = payment_split.vendor_order_id
+       WHERE vendor_order.organization_id = $1 AND payment_split.escrow_status = 'released' AND payment_split.payout_id IS NULL
+       FOR UPDATE OF payment_split`,
+      [req.params.organizationId]
+    );
+    if (!splitsResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Rien à verser pour ce vendeur actuellement' });
+    }
+    const totalUsd = Number(splitsResult.rows.reduce((sum, row) => sum + Number(row.net_amount_usd), 0).toFixed(2));
+
+    let resolvedReference = providerReference || null;
+    if (method === 'cinetpay_transfer') {
+      const accountResult = await client.query(
+        'SELECT details, currency FROM payout_account WHERE organization_id = $1 AND is_default = true LIMIT 1',
+        [req.params.organizationId]
+      );
+      const details = accountResult.rows[0]?.details;
+      if (!accountResult.rowCount || !details?.phone || !details?.countryPrefix) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Aucun compte de versement mobile money (téléphone/indicatif) configuré pour ce vendeur' });
+      }
+      const rateResult = await client.query('SELECT units_per_usd FROM currency_rate WHERE currency = $1', [accountResult.rows[0].currency]);
+      if (!rateResult.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: 'Devise de versement indisponible' });
+      }
+      // CinetPay paie en devise locale, pas en USD (voir cinetpay.js).
+      const localAmount = totalUsd * Number(rateResult.rows[0].units_per_usd);
+      try {
+        const transferResult = await cinetpay.sendTransfer({
+          phone: details.phone,
+          countryPrefix: details.countryPrefix,
+          amount: localAmount,
+          reference: `payout-${req.params.organizationId}-${Date.now()}`
+        });
+        resolvedReference = transferResult.providerReference;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        return res.status(502).json({ success: false, message: `Échec du transfert CinetPay: ${error.message}` });
+      }
+    }
+
+    const payoutResult = await client.query(
+      `INSERT INTO payout (organization_id, amount_usd, method, status, provider_reference, recorded_by, paid_at)
+       VALUES ($1, $2, $3, 'paid', $4, $5, now()) RETURNING id, amount_usd, method, status, provider_reference, paid_at`,
+      [req.params.organizationId, totalUsd, method, resolvedReference, req.auth.userId]
+    );
+    const payout = payoutResult.rows[0];
+    await client.query('UPDATE payment_split SET payout_id = $1 WHERE id = ANY($2::uuid[])', [payout.id, splitsResult.rows.map((row) => row.id)]);
+    await client.query(
+      "INSERT INTO ledger_entry (entry_type, organization_id, amount_usd, reference_table, reference_id) VALUES ('vendor_payout', $1, $2, 'payout', $3)",
+      [req.params.organizationId, totalUsd, payout.id]
+    );
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, payout, splitsSettled: splitsResult.rows.length });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
   }
 });
 

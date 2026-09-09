@@ -77,6 +77,41 @@ paths:
           description: Droits insuffisants sur ce produit
         '404':
           $ref: '#/components/responses/NotFound'
+  /admin/payouts/pending:
+    get:
+      summary: Montant net dû à chaque vendeur (séquestre libéré, pas encore versé)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Un élément par vendeur ayant quelque chose en attente de versement
+        '401':
+          description: Authentification requise
+        '403':
+          description: Droits insuffisants (réservé aux admins)
+  /admin/organizations/{organizationId}/payouts:
+    post:
+      summary: Verse à un vendeur tout ce qui lui est dû
+      description: >-
+        method=manual enregistre un versement déjà effectué par le staff par ses propres
+        moyens. method=cinetpay_transfer déclenche un transfert automatisé via CinetPay
+        (voir backend/cinetpay.js — non vérifié par exécution réelle, répond 503 tant que
+        CINETPAY_API_KEY/CINETPAY_TRANSFER_PASSWORD ne sont pas configurés).
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Versement enregistré, séquestre correspondant marqué comme versé
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '403':
+          description: Droits insuffisants (réservé aux admins)
+        '502':
+          description: Le transfert CinetPay a échoué
+        '503':
+          description: CinetPay n'est pas configuré
   /currency-rates:
     get:
       summary: Taux de change officiels utilisés pour la facturation
