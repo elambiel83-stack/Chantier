@@ -203,3 +203,34 @@ test('POST /api/auth/verification/confirm sans base de données répond 503', as
   });
   assert.equal(response.status, 503);
 });
+
+test('GET /api/services sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/services`);
+  assert.equal(response.status, 503);
+});
+
+test('POST /api/vendor/services sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/vendor/services`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' },
+    body: JSON.stringify({ organizationId: '00000000-0000-0000-0000-000000000001', nameFr: 'X test', nameEn: 'X test' })
+  });
+  assert.equal(response.status, 503);
+});
+
+test('POST /api/appointments sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/appointments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' },
+    body: JSON.stringify({
+      serviceOfferingId: '00000000-0000-0000-0000-000000000001',
+      siteLine1: '1 rue Test', siteCity: 'Kinshasa', siteCountryCode: 'CD', contactPhone: '+243900000000'
+    })
+  });
+  assert.equal(response.status, 503);
+});
+
+test('GET /api/appointments sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/appointments`, { headers: { Authorization: 'Bearer x' } });
+  assert.equal(response.status, 503);
+});

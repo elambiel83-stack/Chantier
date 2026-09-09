@@ -407,6 +407,39 @@ const vendorProductUpdateSchema = z.object({
   stock: z.number().min(0).max(1_000_000).optional()
 }).refine((data) => Object.keys(data).length > 0, { message: 'Aucune modification fournie' });
 
+const serviceOfferingCreateSchema = z.object({
+  organizationId: z.string().uuid(),
+  nameFr: z.string().trim().min(2).max(160),
+  nameEn: z.string().trim().min(2).max(160),
+  description: z.string().trim().max(2000).optional(),
+  category: z.string().trim().min(1).max(40).optional()
+});
+const serviceOfferingUpdateSchema = z.object({
+  nameFr: z.string().trim().min(2).max(160).optional(),
+  nameEn: z.string().trim().min(2).max(160).optional(),
+  description: z.string().trim().max(2000).optional(),
+  category: z.string().trim().min(1).max(40).optional(),
+  status: z.enum(['active', 'paused']).optional()
+}).refine((data) => Object.keys(data).length > 0, { message: 'Aucune modification fournie' });
+
+const appointmentCreateSchema = z.object({
+  serviceOfferingId: z.string().uuid(),
+  requestedAt: z.string().datetime().optional(),
+  siteLine1: z.string().trim().min(3).max(200),
+  siteCity: z.string().trim().min(1).max(100),
+  siteCountryCode: z.string().trim().length(2).transform((code) => code.toUpperCase()),
+  siteLatitude: z.number().min(-90).max(90).optional(),
+  siteLongitude: z.number().min(-180).max(180).optional(),
+  contactPhone: z.string().trim().min(6).max(30),
+  notes: z.string().trim().max(2000).optional()
+});
+const appointmentStatusSchema = z.object({
+  status: z.enum(['confirmed', 'completed', 'cancelled', 'no_show']),
+  scheduledAt: z.string().datetime().optional(),
+  quotedAmountUsd: z.number().min(0).max(1_000_000).optional(),
+  quoteNote: z.string().trim().max(2000).optional()
+});
+
 function requireJwtSecret() {
   if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) throw new Error('JWT_ACCESS_SECRET doit contenir au moins 32 caracteres');
 }
@@ -1859,6 +1892,205 @@ app.patch('/api/vendor/products/:id', requireAuthentication, async (req, res, ne
     values.push(req.params.id);
     await database.query(`UPDATE product SET ${assignments.join(', ')} WHERE id = $${values.length}`, values);
     res.json({ success: true, product: await findProduct(req.params.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Prestations (électricité, plomberie, gros œuvre sur mesure...): contrairement à
+// `product`, sans prix ni stock — le prix se fixe après la visite de terrain (voir
+// PATCH /api/appointments/:id/status ci-dessous). Mêmes règles d'autorisation que le
+// catalogue produit (canManageCatalog: membre habilité d'un vendeur vérifié, ou admin).
+app.post('/api/vendor/services', requireAuthentication, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const parsed = serviceOfferingCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Prestation invalide' });
+  const { organizationId, nameFr, nameEn, description, category } = parsed.data;
+  try {
+    if (!(await canManageCatalog(req, res, organizationId))) return;
+    const orgResult = await database.query('SELECT org_type FROM organization WHERE id = $1', [organizationId]);
+    if (!orgResult.rowCount) return res.status(404).json({ success: false, message: 'Organisation introuvable' });
+    if (!['vendor', 'both'].includes(orgResult.rows[0].org_type)) {
+      return res.status(400).json({ success: false, message: 'Cette organisation n’est pas un vendeur' });
+    }
+    const result = await database.query(
+      `INSERT INTO service_offering (organization_id, name_fr, name_en, description, category)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, organization_id, name_fr, name_en, description, category, status`,
+      [organizationId, nameFr, nameEn, description || null, category || 'services']
+    );
+    res.status(201).json({ success: true, service: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/vendor/services/:id', requireAuthentication, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de prestation invalide' });
+  const parsed = serviceOfferingUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Modification invalide' });
+  try {
+    const existing = await database.query('SELECT organization_id FROM service_offering WHERE id = $1', [req.params.id]);
+    if (!existing.rowCount) return res.status(404).json({ success: false, message: 'Prestation introuvable' });
+    if (!(await canManageCatalog(req, res, existing.rows[0].organization_id))) return;
+    const columnByKey = { nameFr: 'name_fr', nameEn: 'name_en', description: 'description', category: 'category', status: 'status' };
+    const assignments = ['updated_at = now()'];
+    const values = [];
+    for (const [key, column] of Object.entries(columnByKey)) {
+      if (parsed.data[key] !== undefined) {
+        values.push(parsed.data[key]);
+        assignments.push(`${column} = $${values.length}`);
+      }
+    }
+    values.push(req.params.id);
+    const result = await database.query(
+      `UPDATE service_offering SET ${assignments.join(', ')} WHERE id = $${values.length}
+       RETURNING id, organization_id, name_fr, name_en, description, category, status`,
+      values
+    );
+    res.json({ success: true, service: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Annuaire public des prestations: mêmes règles de visibilité que le catalogue produit
+// (vendeur 'verified' uniquement, voir listCatalog) — pas de repli hors base, ce
+// catalogue n'a jamais existé sous forme codée en dur comme PRODUCTS.
+app.get('/api/services', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const result = await database.query(
+      `SELECT service_offering.id, service_offering.name_fr, service_offering.name_en, service_offering.description,
+              service_offering.category, service_offering.organization_id,
+              COALESCE(organization.trade_name, organization.legal_name) AS vendor_name
+       FROM service_offering JOIN organization ON organization.id = service_offering.organization_id
+       WHERE service_offering.status = 'active' AND organization.status = 'verified'
+       ORDER BY service_offering.name_fr`
+    );
+    const services = result.rows.map((row) => ({
+      id: row.id,
+      nameFr: row.name_fr,
+      nameEn: row.name_en,
+      description: row.description,
+      category: row.category,
+      vendor: { id: row.organization_id, name: row.vendor_name }
+    }));
+    res.json({ success: true, count: services.length, services });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Demande de rendez-vous de visite: le client choisit une prestation active d'un vendeur
+// vérifié et propose un créneau/adresse ; le vendeur confirme ensuite (voir PATCH
+// .../status) un créneau (identique ou différent) puis, après la visite, y consigne le
+// montant chiffré. Convertir ce devis en commande payante reste hors périmètre ici.
+app.post('/api/appointments', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const parsed = appointmentCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Rendez-vous invalide' });
+  const { serviceOfferingId, requestedAt, siteLine1, siteCity, siteCountryCode, siteLatitude, siteLongitude, contactPhone, notes } = parsed.data;
+  try {
+    const serviceResult = await database.query(
+      `SELECT service_offering.organization_id FROM service_offering
+       JOIN organization ON organization.id = service_offering.organization_id
+       WHERE service_offering.id = $1 AND service_offering.status = 'active' AND organization.status = 'verified'`,
+      [serviceOfferingId]
+    );
+    if (!serviceResult.rowCount) return res.status(404).json({ success: false, message: 'Prestation introuvable' });
+    const result = await database.query(
+      `INSERT INTO service_appointment
+         (service_offering_id, organization_id, customer_id, requested_by, requested_at, site_line1, site_city, site_country_code, site_latitude, site_longitude, contact_phone, notes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING id, status, requested_at, scheduled_at`,
+      [serviceOfferingId, serviceResult.rows[0].organization_id, req.auth.customerId, req.auth.userId, requestedAt || null, siteLine1, siteCity, siteCountryCode, siteLatitude ?? null, siteLongitude ?? null, contactPhone, notes || null]
+    );
+    res.status(201).json({ success: true, appointment: result.rows[0] });
+  } catch (error) {
+    if (error.code === '23503') return res.status(400).json({ success: false, message: 'Pays inconnu' });
+    next(error);
+  }
+});
+
+// Un compte peut être à la fois client (customer_id) et membre d'un ou plusieurs vendeurs
+// (organization_member): voit ses propres demandes ET celles adressées à ses organisations.
+app.get('/api/appointments', requireAuthentication, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const statusParsed = z.enum(['requested', 'confirmed', 'completed', 'cancelled', 'no_show']).safeParse(req.query.status);
+  if (req.query.status && !statusParsed.success) return res.status(400).json({ success: false, message: 'Statut de rendez-vous invalide' });
+  try {
+    const values = [];
+    const filters = [];
+    if (req.auth.role !== 'admin') {
+      const memberResult = await database.query('SELECT organization_id FROM organization_member WHERE user_id = $1', [req.auth.userId]);
+      values.push(req.auth.customerId);
+      values.push(memberResult.rows.map((row) => row.organization_id));
+      filters.push(`(service_appointment.customer_id = $${values.length - 1} OR service_appointment.organization_id = ANY($${values.length}::uuid[]))`);
+    }
+    if (statusParsed.success) {
+      values.push(statusParsed.data);
+      filters.push(`service_appointment.status = $${values.length}`);
+    }
+    const result = await database.query(
+      `SELECT service_appointment.id, service_appointment.status, service_appointment.requested_at, service_appointment.scheduled_at,
+              service_appointment.site_line1, service_appointment.site_city, service_appointment.site_country_code,
+              service_appointment.contact_phone, service_appointment.notes, service_appointment.quoted_amount_usd,
+              service_appointment.quote_note, service_appointment.organization_id,
+              service_offering.name_fr AS service_name_fr, service_offering.name_en AS service_name_en,
+              COALESCE(organization.trade_name, organization.legal_name) AS vendor_name,
+              customer.full_name AS customer_name, customer.phone AS customer_phone
+       FROM service_appointment
+       JOIN service_offering ON service_offering.id = service_appointment.service_offering_id
+       JOIN organization ON organization.id = service_appointment.organization_id
+       JOIN customer ON customer.id = service_appointment.customer_id
+       ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+       ORDER BY service_appointment.created_at DESC`,
+      values
+    );
+    res.json({ success: true, appointments: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/appointments/:appointmentId/status', requireAuthentication, async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.appointmentId).success) return res.status(400).json({ success: false, message: 'Identifiant de rendez-vous invalide' });
+  const parsed = appointmentStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut de rendez-vous invalide' });
+  if (parsed.data.status === 'confirmed' && !parsed.data.scheduledAt) {
+    return res.status(400).json({ success: false, message: 'Un créneau confirmé (scheduledAt) est requis pour passer à "confirmed"' });
+  }
+  try {
+    const existing = await database.query('SELECT organization_id, status FROM service_appointment WHERE id = $1', [req.params.appointmentId]);
+    if (!existing.rowCount) return res.status(404).json({ success: false, message: 'Rendez-vous introuvable' });
+    if (!(await canManageCatalog(req, res, existing.rows[0].organization_id))) return;
+    const allowedPreviousStatuses = { confirmed: ['requested'], completed: ['confirmed'], cancelled: ['requested', 'confirmed'], no_show: ['confirmed'] };
+    if (!allowedPreviousStatuses[parsed.data.status].includes(existing.rows[0].status)) {
+      return res.status(409).json({ success: false, message: 'Transition de statut non autorisée' });
+    }
+    const assignments = ['status = $1', 'updated_at = now()'];
+    const values = [parsed.data.status];
+    if (parsed.data.scheduledAt !== undefined) {
+      values.push(parsed.data.scheduledAt);
+      assignments.push(`scheduled_at = $${values.length}`);
+    }
+    if (parsed.data.quotedAmountUsd !== undefined) {
+      values.push(parsed.data.quotedAmountUsd);
+      assignments.push(`quoted_amount_usd = $${values.length}`);
+    }
+    if (parsed.data.quoteNote !== undefined) {
+      values.push(parsed.data.quoteNote);
+      assignments.push(`quote_note = $${values.length}`);
+    }
+    values.push(req.params.appointmentId);
+    const result = await database.query(
+      `UPDATE service_appointment SET ${assignments.join(', ')} WHERE id = $${values.length}
+       RETURNING id, status, scheduled_at, quoted_amount_usd, quote_note`,
+      values
+    );
+    res.json({ success: true, appointment: result.rows[0] });
   } catch (error) {
     next(error);
   }

@@ -77,6 +77,95 @@ paths:
           description: Droits insuffisants sur ce produit
         '404':
           $ref: '#/components/responses/NotFound'
+  /services:
+    get:
+      summary: Annuaire public des prestations sur devis (nécessitant une visite de terrain)
+      responses:
+        '200':
+          description: Prestations actives de vendeurs vérifiés
+        '503':
+          description: Service indisponible (base de données non configurée)
+  /vendor/services:
+    post:
+      summary: Crée une prestation pour le compte d'une organisation vendeur
+      description: >-
+        Contrairement à un produit, une prestation n'a ni prix ni stock: le prix se fixe
+        après la visite de terrain, consigné sur le rendez-vous correspondant (voir
+        PATCH /appointments/{appointmentId}/status).
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Prestation créée
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '403':
+          description: Droits insuffisants sur cette organisation
+        '404':
+          description: Organisation introuvable
+  /vendor/services/{id}:
+    patch:
+      summary: Modifie une prestation existante appartenant à l'organisation du compte authentifié
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Prestation modifiée
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '403':
+          description: Droits insuffisants sur cette prestation
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /appointments:
+    post:
+      summary: Demande un rendez-vous de visite pour une prestation sur devis
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Rendez-vous créé au statut 'requested'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '404':
+          description: Prestation introuvable (inexistante, inactive, ou vendeur non vérifié)
+    get:
+      summary: Liste les rendez-vous du compte authentifié (ses demandes, et ceux de ses organisations vendeur)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Rendez-vous visibles par le compte authentifié
+        '401':
+          description: Authentification requise
+  /appointments/{appointmentId}/status:
+    patch:
+      summary: Fait transiter un rendez-vous (confirmation du créneau, puis devis chiffré après la visite)
+      description: >-
+        Réservé à un membre catalogue de l'organisation vendeur concernée, ou à un admin.
+        scheduledAt est requis pour confirmer un rendez-vous. quotedAmountUsd/quoteNote se
+        renseignent typiquement en même temps que le passage à 'completed'.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Rendez-vous mis à jour
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '403':
+          description: Droits insuffisants sur cette organisation
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Transition de statut non autorisée
   /admin/payouts/pending:
     get:
       summary: Montant net dû à chaque vendeur (séquestre libéré, pas encore versé)

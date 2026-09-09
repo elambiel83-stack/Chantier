@@ -28,8 +28,22 @@ site en production :
   `CINETPAY_API_KEY` n'est pas configuré avec un vrai identifiant validé contre un compte
   de test réel.
 
-Le reste de ce document (devis, jalons de paiement, avis, litiges, logistique
-internationale, fiscalité) n'est pas encore entamé.
+- **Phase 6** (prestations sur devis) : `service_offering`, `service_appointment` —
+  une prestation nécessitant une visite de terrain (électricité, plomberie...) n'a ni prix
+  ni stock à l'avance, donc volontairement séparée de `product`/`listing`. Le client
+  demande un rendez-vous (`POST /api/appointments`), le vendeur confirme un créneau puis
+  y consigne le montant chiffré après la visite (`quoted_amount_usd`/`quote_note` sur
+  `service_appointment`). Convertir ce devis en commande payante n'est pas construit — ce
+  serait le `quote_request`/`quote` de la cible ci-dessous, plus général (négociation,
+  lignes multiples), pas encore justifié par un besoin concret.
+- **Correctif de sécurité (hors phasage)** : `organization.status` (`verified` requis) est
+  désormais vérifié à chaque point qui expose ou fait circuler de l'argent — création/
+  modification de produit et de prestation (`canManageCatalog`), catalogue public
+  (produits et prestations), commande, rendez-vous, et versement — pas seulement dans
+  l'annuaire public comme au départ. Voir la revue de sécurité menée sur la branche.
+
+Le reste de ce document (devis multi-lignes négociés, jalons de paiement, avis, litiges,
+logistique internationale, fiscalité) n'est pas encore entamé.
 
 ## Pourquoi une refonte et pas des `ALTER TABLE`
 

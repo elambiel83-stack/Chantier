@@ -431,3 +431,55 @@ CREATE INDEX IF NOT EXISTS payment_split_escrow_status_idx ON payment_split(escr
 CREATE INDEX IF NOT EXISTS payment_split_payout_id_idx ON payment_split(payout_id);
 CREATE INDEX IF NOT EXISTS ledger_entry_organization_id_idx ON ledger_entry(organization_id);
 CREATE INDEX IF NOT EXISTS ledger_entry_vendor_order_id_idx ON ledger_entry(vendor_order_id);
+
+-- ============================================================================
+-- Marketplace multi-vendeurs — phase 6 (prestations sur devis et rendez-vous de visite)
+-- Volontairement séparé de `product`: une prestation qui nécessite une visite de terrain
+-- n'a pas de prix connu à l'avance (ni de stock), donc ne peut pas passer par le panier/
+-- verrouillage de stock existant. Le prix se fixe après la visite (quoted_amount_usd sur
+-- le rendez-vous) — convertir ce devis en commande payante reste hors périmètre de cette
+-- phase (voir docs/marketplace-schema-cible.md, quote_request/quote de la cible complète).
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS service_offering (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  organization_id UUID NOT NULL REFERENCES organization(id),
+  name_fr TEXT NOT NULL,
+  name_en TEXT NOT NULL,
+  description TEXT,
+  category TEXT NOT NULL DEFAULT 'services',
+  status TEXT NOT NULL CHECK (status IN ('active', 'paused')) DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- organization_id dupliqué depuis service_offering: évite une jointure supplémentaire pour
+-- filtrer "les rendez-vous de mon organisation", le cas d'accès le plus fréquent.
+CREATE TABLE IF NOT EXISTS service_appointment (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  service_offering_id UUID NOT NULL REFERENCES service_offering(id),
+  organization_id UUID NOT NULL REFERENCES organization(id),
+  customer_id UUID NOT NULL REFERENCES customer(id),
+  requested_by UUID NOT NULL REFERENCES user_account(id),
+  status TEXT NOT NULL CHECK (status IN ('requested', 'confirmed', 'completed', 'cancelled', 'no_show')) DEFAULT 'requested',
+  requested_at TIMESTAMPTZ,
+  scheduled_at TIMESTAMPTZ,
+  site_line1 TEXT NOT NULL,
+  site_city TEXT NOT NULL,
+  site_country_code CHAR(2) NOT NULL REFERENCES country(code),
+  site_latitude DOUBLE PRECISION,
+  site_longitude DOUBLE PRECISION,
+  contact_phone TEXT NOT NULL,
+  notes TEXT,
+  quoted_amount_usd NUMERIC(14,2),
+  quote_note TEXT,
+  assigned_to UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS service_offering_organization_id_idx ON service_offering(organization_id);
+CREATE INDEX IF NOT EXISTS service_appointment_service_offering_id_idx ON service_appointment(service_offering_id);
+CREATE INDEX IF NOT EXISTS service_appointment_organization_id_idx ON service_appointment(organization_id);
+CREATE INDEX IF NOT EXISTS service_appointment_customer_id_idx ON service_appointment(customer_id);
+CREATE INDEX IF NOT EXISTS service_appointment_status_idx ON service_appointment(status);
