@@ -85,7 +85,7 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/')) {
     // Une réponse authentifiée est personnelle: elle ne doit jamais atterrir dans un
     // cache partagé par tous les utilisateurs du navigateur.
-    const isPersonal = request.headers.has('Authorization') || url.pathname.startsWith('/api/auth/') || url.pathname.startsWith('/api/orders');
+    const isPersonal = request.headers.has('Authorization') || url.pathname.startsWith('/api/auth/') || url.pathname.startsWith('/api/orders') || url.pathname.startsWith('/api/import-requests');
     event.respondWith(
       networkFirst(request, API_CACHE, { cacheable: !isPersonal })
         .catch(() => offlineJson('Hors ligne: données indisponibles.'))

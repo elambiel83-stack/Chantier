@@ -99,6 +99,15 @@ test('POST /api/orders sans base de données répond 503', async () => {
   assert.equal(response.status, 503);
 });
 
+test('POST /api/import-requests sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/import-requests`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  });
+  assert.equal(response.status, 503);
+});
+
 test('POST /api/auth/google sans base de données répond 503', async () => {
   const response = await fetch(`${BASE_URL}/api/auth/google`, {
     method: 'POST',

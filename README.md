@@ -41,6 +41,26 @@ PayPal. Le montant réellement encaissé est comparé à celui de la commande av
 `APP_URL` (voir `backend/.env.example`) doit pointer vers le domaine public du site en production :
 c’est lui qui sert à construire ces URLs de retour PayPal.
 
+### CinetPay (Mobile Money automatisé)
+
+CinetPay (https://cinetpay.com) agrège les paiements Mobile Money (Airtel Money, Orange Money,
+M-Pesa...) avec une API de collecte automatisée, contrairement à Airtel/Orange Money ci-dessous.
+Ne prend en charge que `USD` et `CDF` (pas `EUR`).
+
+`POST /api/orders/:orderId/cinetpay` exige le jeton du client propriétaire de la commande et
+renvoie `paymentUrl` (à ouvrir pour payer) ainsi qu’un jeton de confirmation à usage unique, placé
+dans l’URL de retour (paramètre `ct`) comme pour PayPal. `POST /api/orders/:orderId/cinetpay/check`
+l’exige pour confirmer le paiement depuis la page de retour, sans session ouverte.
+
+Le statut réel n’est jamais déduit de ce que renvoie le client ou la notification CinetPay :
+`POST /api/cinetpay/notify` (webhook serveur-à-serveur, appelé directement par CinetPay) ne
+contient que l’identifiant de transaction, qui sert uniquement à déclencher un appel à l’API
+CinetPay `/v2/payment/check` — seule source de vérité sur le statut et le montant encaissés. Cette
+notification arrive indépendamment du retour du client dans son navigateur (utile en Mobile Money,
+où le client peut fermer l’onglet avant la validation) ; la page de retour revérifie aussi le
+statut au cas où la notification n’est pas encore arrivée, et peut donc répondre `pending`.
+`APP_URL` sert à construire à la fois l’URL de retour client et l’URL de notification.
+
 ### Airtel Money et Orange Money
 
 Aucune API de collecte automatisée n’est branchée pour ces deux opérateurs : la confirmation est
@@ -53,6 +73,51 @@ client utilise pour envoyer son paiement. Si le numéro marchand correspondant n
 Une fois le paiement reçu et vérifié manuellement (SMS, relevé marchand...), un membre `staff` ou
 `admin` confirme la commande via `PATCH /api/orders/:orderId/status` (`{"status": "confirmed"}`),
 ce qui marque aussi le paiement correspondant comme `paid`.
+
+## Sourcing produits et demandes d’importation
+
+Objectif : permettre à un client de demander l’importation d’un produit repéré chez un
+fournisseur (Chine ou ailleurs) que le catalogue MonChantier ne propose pas encore, en gardant
+la conformité aux normes et à la réglementation douanière comme étape humaine obligatoire —
+jamais automatisée.
+
+### Pourquoi pas de scraping automatique des sites fournisseurs
+
+- **Alibaba.com** expose une API officielle (`open.alibaba.com`/`openapi.alibaba.com`), mais
+  réservée aux ISV enregistrés et approuvés par Alibaba — pas d’accès self-service.
+- **1688.com** (marché domestique chinois) a aussi une API officielle (`open.1688.com`), mais elle
+  exige une vérification d’entreprise et un accord de partenariat signé avec Alibaba ; le site est
+  en outre pensé pour des achats à l’intérieur de la Chine, en chinois.
+- Scraper ces deux sites sans passer par leur API officielle viole leurs conditions
+  d’utilisation : risque de blocage IP et de litige contractuel, sans garantie de fiabilité.
+- **CJdropshipping** (`developers.cjdropshipping.com`) est en revanche accessible à un compte
+  développeur classique, hors Chine : API REST officielle pour la recherche produit et le suivi
+  de stock, **et** un service de sourcing (soumettre un lien/une image, leur équipe source auprès
+  d’usines partenaires) — exactement le besoin ici. C’est la piste à privilégier si une
+  intégration automatisée de recherche produit est ajoutée plus tard ; aucune clé n’est
+  configurée pour l’instant, la fonctionnalité ci-dessous fonctionne sans elle.
+
+### Fonctionnement actuel : `POST /api/import-requests`
+
+En l’absence d’intégration automatisée, le client décrit lui-même le produit (lien optionnel,
+description, quantité) ; un membre `staff` traite ensuite la demande à travers une machine à
+états dédiée (voir `backend/openapi.yaml` pour le détail de chaque route) :
+
+```
+submitted → quoted → compliance_cleared → ordered → delivered
+              ↘ rejected (motif requis)      ↘ cancelled
+```
+
+Point important : le statut `ordered` n’est atteignable que depuis `compliance_cleared` — le
+serveur refuse (409) toute tentative de sauter cette étape. `POST /import-requests/:id/compliance`
+exige que le staff documente explicitement (10 caractères minimum) les normes applicables, le
+code douanier (SH) et les certificats fournisseur vérifiés avant qu’une commande fournisseur
+puisse être déclarée passée. Le logiciel n’atteste jamais lui-même de la conformité légale : il
+force seulement qu’une personne l’ait vérifiée et l’ait consigné avant de continuer.
+
+Interfaces web : `web/import.html` (client, soumission + suivi de ses demandes) et
+`web/admin-imports.html` (staff/admin, mêmes rôles et logique d’affectation que
+`web/admin.html` pour les commandes).
 
 ## Authentification et rôles
 

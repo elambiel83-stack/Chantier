@@ -132,6 +132,10 @@ ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('p
 -- Jeton à usage unique transmis dans l'URL de retour PayPal (capture sans session).
 ALTER TABLE payment ADD COLUMN IF NOT EXISTS confirmation_token_hash TEXT;
 
+-- CinetPay: agrégateur Mobile Money automatisé (voir POST /orders/{orderId}/cinetpay).
+ALTER TABLE payment DROP CONSTRAINT IF EXISTS payment_provider_check;
+ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('paypal', 'cinetpay', 'airtel_money', 'orange_money'));
+
 -- Code de vérification (e-mail, SMS ou WhatsApp, au choix du client). Stocké haché comme
 -- refresh_token; expire et se limite en tentatives pour résister au brute-force.
 CREATE TABLE IF NOT EXISTS verification_code (
@@ -145,7 +149,30 @@ CREATE TABLE IF NOT EXISTS verification_code (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Demande d'importation: le client décrit un produit repéré chez un fournisseur (lien +
+-- description) plutôt que de faire confiance à un scraping automatisé du site fournisseur.
+-- compliance_notes doit être renseigné (voir POST /import-requests/:id/compliance) avant
+-- qu'une demande puisse passer à 'ordered' — voir server.js pour la machine à états complète.
+CREATE TABLE IF NOT EXISTS import_request (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  customer_id UUID NOT NULL REFERENCES customer(id) ON DELETE CASCADE,
+  source_url TEXT,
+  description TEXT NOT NULL,
+  target_qty NUMERIC(12,3) NOT NULL CHECK (target_qty > 0),
+  status TEXT NOT NULL CHECK (status IN ('submitted', 'quoted', 'compliance_cleared', 'ordered', 'delivered', 'rejected', 'cancelled')) DEFAULT 'submitted',
+  quote_amount NUMERIC(14,2),
+  quote_currency CHAR(3) CHECK (quote_currency IN ('USD', 'CDF', 'EUR')),
+  compliance_notes TEXT,
+  staff_notes TEXT,
+  assigned_to UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS product_category_idx ON product(category);
+CREATE INDEX IF NOT EXISTS import_request_customer_id_idx ON import_request(customer_id);
+CREATE INDEX IF NOT EXISTS import_request_assigned_to_idx ON import_request(assigned_to);
+CREATE INDEX IF NOT EXISTS import_request_status_idx ON import_request(status);
 CREATE INDEX IF NOT EXISTS orders_customer_id_idx ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS orders_assigned_to_idx ON orders(assigned_to);
 CREATE INDEX IF NOT EXISTS payment_order_id_idx ON payment(order_id);

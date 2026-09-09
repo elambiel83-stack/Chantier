@@ -158,6 +158,207 @@ paths:
           description: Jeton de confirmation invalide
         '404':
           $ref: '#/components/responses/NotFound'
+  /orders/{orderId}/cinetpay:
+    post:
+      summary: Crée un paiement CinetPay (Mobile Money automatisé) pour une commande USD ou CDF du client authentifié
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: >-
+            URL de paiement CinetPay créée. La réponse contient aussi le jeton de
+            confirmation à usage unique, également placé dans l'URL de retour (paramètre ct).
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /orders/{orderId}/cinetpay/check:
+    post:
+      summary: Vérifie et finalise un paiement CinetPay auprès de l'API CinetPay
+      description: >-
+        Appelée par la page de retour CinetPay, sans session: l'accès est prouvé par le
+        jeton de confirmation reçu à la création du paiement. Le statut et le montant
+        renvoyés proviennent toujours d'un appel à l'API CinetPay /v2/payment/check.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirmationToken]
+              properties:
+                confirmationToken:
+                  type: string
+                  description: Jeton reçu dans l'URL de retour (paramètre ct)
+      responses:
+        '200':
+          description: >-
+            Paiement confirmé (status=confirmed) ou encore en attente de validation
+            Mobile Money côté CinetPay (status=pending, à revérifier plus tard)
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '403':
+          description: Jeton de confirmation invalide
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /cinetpay/notify:
+    post:
+      summary: Notification serveur-à-serveur CinetPay (webhook)
+      description: >-
+        Appelée directement par CinetPay en application/x-www-form-urlencoded. Le corps
+        n'est jamais pris pour argent comptant: seul l'identifiant de transaction
+        (cpm_trans_id) est utilisé pour déclencher une revérification via l'API CinetPay.
+      responses:
+        '200':
+          description: Notification traitée (paiement retrouvé et statut revérifié)
+        '404':
+          description: Transaction CinetPay inconnue
+  /import-requests:
+    post:
+      summary: Soumet une demande d'importation (produit repéré chez un fournisseur)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportRequestInput'
+      responses:
+        '201':
+          description: Demande créée avec le statut 'submitted'
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+    get:
+      summary: Liste les demandes d'importation visibles par le rôle du client authentifié
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [submitted, quoted, compliance_cleared, ordered, delivered, rejected, cancelled]
+      responses:
+        '200':
+          description: Liste des demandes
+        '401':
+          description: Authentification requise
+  /import-requests/{id}/claim:
+    post:
+      summary: Un membre staff s'affecte une demande non assignée au statut 'submitted'
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ImportRequestId'
+      responses:
+        '200':
+          description: Demande affectée
+        '409':
+          description: Demande déjà affectée ou plus au statut 'submitted'
+  /import-requests/{id}/quote:
+    post:
+      summary: Chiffre une demande (produit + transport + douane estimée)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ImportRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quoteAmount, quoteCurrency]
+              properties:
+                quoteAmount:
+                  type: number
+                quoteCurrency:
+                  type: string
+                  enum: [USD, CDF, EUR]
+                staffNotes:
+                  type: string
+      responses:
+        '200':
+          description: Demande chiffrée, passe au statut 'quoted'
+        '409':
+          description: Demande pas au statut 'submitted', ou non affectée à ce membre staff
+  /import-requests/{id}/compliance:
+    post:
+      summary: >-
+        Enregistre le contrôle de conformité (normes applicables, code douanier, certificats
+        fournisseur vérifiés) — étape obligatoire avant de pouvoir déclarer la demande commandée.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ImportRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [complianceNotes]
+              properties:
+                complianceNotes:
+                  type: string
+                  minLength: 10
+      responses:
+        '200':
+          description: Conformité enregistrée, passe au statut 'compliance_cleared'
+        '409':
+          description: Demande pas au statut 'quoted', ou non affectée à ce membre staff
+  /import-requests/{id}/status:
+    patch:
+      summary: Fait avancer une demande vers 'ordered', 'delivered', 'rejected' ou 'cancelled'
+      description: >-
+        'ordered' n'est atteignable que depuis 'compliance_cleared': aucune commande fournisseur
+        ne peut être déclarée passée sans contrôle de conformité enregistré au préalable.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ImportRequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [ordered, delivered, rejected, cancelled]
+                staffNotes:
+                  type: string
+                  description: Requis si status = rejected (motif du refus)
+      responses:
+        '200':
+          description: Statut mis à jour
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '409':
+          description: Transition non autorisée depuis le statut actuel
+  /import-requests/{id}/cancel:
+    post:
+      summary: Le client annule sa propre demande, tant qu'elle n'a pas encore été commandée
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ImportRequestId'
+      responses:
+        '200':
+          description: Demande annulée
+        '409':
+          description: Demande déjà commandée ou finalisée, impossible à annuler
 components:
   securitySchemes:
     bearerAuth:
@@ -181,6 +382,13 @@ components:
     OrderId:
       in: path
       name: orderId
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ImportRequestId:
+      in: path
+      name: id
       required: true
       schema:
         type: string
@@ -239,10 +447,26 @@ components:
           enum: [USD, CDF, EUR]
         paymentProvider:
           type: string
-          enum: [paypal, airtel_money, orange_money]
+          enum: [paypal, cinetpay, airtel_money, orange_money]
         items:
           type: array
           minItems: 1
           maxItems: 100
           items:
             $ref: '#/components/schemas/CartItem'
+    ImportRequestInput:
+      type: object
+      required: [description, targetQty]
+      properties:
+        sourceUrl:
+          type: string
+          format: uri
+          maxLength: 2048
+        description:
+          type: string
+          minLength: 10
+          maxLength: 2000
+        targetQty:
+          type: number
+          exclusiveMinimum: 0
+          maximum: 1000000

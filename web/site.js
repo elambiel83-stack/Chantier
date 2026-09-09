@@ -87,6 +87,7 @@
   const authLink = document.getElementById('auth-link');
   const logoutButton = document.getElementById('logout-button');
   const staffLink = document.getElementById('staff-link');
+  const staffImportsLink = document.getElementById('staff-imports-link');
   const authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
   if (authLink && authUser) {
     authLink.textContent = authUser.email || 'Mon compte';
@@ -94,8 +95,9 @@
     authLink.classList.add('max-w-36', 'truncate');
     logoutButton?.classList.remove('hidden');
   }
-  if (staffLink && authUser && ['staff', 'admin'].includes(authUser.role)) {
-    staffLink.classList.remove('hidden');
+  if (authUser && ['staff', 'admin'].includes(authUser.role)) {
+    staffLink?.classList.remove('hidden');
+    staffImportsLink?.classList.remove('hidden');
   }
   if (logoutButton) {
     logoutButton.addEventListener('click', async () => {
@@ -313,11 +315,13 @@
           }
         });
         localStorage.setItem("lastOrderId", orderResponse.order.id);
-        if (paymentProvider === "paypal") {
-          status.textContent = lang === "fr" ? "Redirection sécurisée vers PayPal..." : "Redirecting securely to PayPal...";
-          const paymentResponse = await window.apiCall(`/orders/${orderResponse.order.id}/paypal`, { method: "POST" });
-          if (!paymentResponse.approvalUrl) throw new Error("Lien d’approbation PayPal indisponible");
-          window.location.assign(paymentResponse.approvalUrl);
+        if (paymentProvider === "paypal" || paymentProvider === "cinetpay") {
+          const providerLabel = paymentProvider === "paypal" ? "PayPal" : "CinetPay";
+          status.textContent = lang === "fr" ? `Redirection sécurisée vers ${providerLabel}...` : `Redirecting securely to ${providerLabel}...`;
+          const paymentResponse = await window.apiCall(`/orders/${orderResponse.order.id}/${paymentProvider}`, { method: "POST" });
+          const redirectUrl = paymentProvider === "paypal" ? paymentResponse.approvalUrl : paymentResponse.paymentUrl;
+          if (!redirectUrl) throw new Error(`Lien de paiement ${providerLabel} indisponible`);
+          window.location.assign(redirectUrl);
           return;
         }
         localStorage.removeItem("cart");
