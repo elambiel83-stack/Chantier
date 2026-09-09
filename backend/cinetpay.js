@@ -2,61 +2,49 @@
 // vendeurs dont le pays n'est pas couvert par un moyen de versement classique — voir
 // docs/marketplace-schema-cible.md (phase 5) pour le contexte marketplace multi-vendeurs.
 //
-// NON VÉRIFIÉE PAR EXÉCUTION RÉELLE. Écrite sans accès à un compte CinetPay confirmé:
-// l'accès à cinetpay.com/docs.cinetpay.com était bloqué depuis cet environnement, et les
-// identifiants transmis pendant son écriture ne correspondaient pas au schéma
-// d'authentification documenté par CinetPay (apikey + site_id, format `sk_test_...` propre
-// à Stripe). La forme des requêtes ci-dessous suit le schéma habituel de leur API de
-// transfert (authentification séparée par apikey+mot de passe renvoyant un jeton, puis un
-// envoi vers ce jeton) mais AUCUN champ exact (URL, noms de paramètres, forme de la
-// réponse) n'a été confirmé. À valider avec de vrais identifiants sandbox
-// (CINETPAY_API_KEY, CINETPAY_TRANSFER_PASSWORD) contre https://docs.cinetpay.com avant
-// toute activation en production.
+// Base d'API et authentification confirmées par l'exploitant du projet en session (nouveau
+// back-office CinetPay, distinct de l'ancien documenté sur docs.cinetpay.com):
+//   - Base: https://api.cinetpay.net
+//   - Authentification: un jeton API unique (Authorization: Bearer), plus de paire
+//     apikey + site_id / mot de passe séparée comme sur l'ancien back-office.
 //
-// Reste inactive tant que ces variables ne sont pas renseignées: voir isConfigured() et
-// son usage dans server.js (POST /api/admin/organizations/:id/payouts), qui répond 503
-// plutôt que de simuler un succès.
+// TOUJOURS NON VÉRIFIÉ PAR EXÉCUTION RÉELLE au-delà de ces deux points: l'accès à
+// cinetpay.net était bloqué depuis cet environnement de développement, donc ni le chemin
+// exact de l'endpoint de transfert, ni les noms de champs de la requête/réponse n'ont pu
+// être confirmés contre un compte réel. Deux hypothèses sur trois tirées de la
+// documentation "ancien back-office" (domaine, authentification) se sont déjà révélées
+// fausses pour le nouveau — traiter tout le reste ci-dessous comme une hypothèse de
+// travail à vérifier en priorité (avec un compte de test réel) avant toute activation en
+// production, jamais comme une intégration terminée.
+//
+// Reste inactive tant que CINETPAY_API_KEY n'est pas configuré: voir isConfigured() et son
+// usage dans server.js (POST /api/admin/organizations/:id/payouts), qui répond 503 plutôt
+// que de simuler un succès.
 
 function isConfigured() {
-  return Boolean(process.env.CINETPAY_API_KEY && process.env.CINETPAY_TRANSFER_PASSWORD);
+  return Boolean(process.env.CINETPAY_API_KEY);
 }
 
 function apiBase() {
-  return process.env.CINETPAY_API_BASE || 'https://client.cinetpay.com';
-}
-
-// CinetPay authentifie l'API de transfert séparément de l'API de paiement (apikey + mot de
-// passe marchand, pas de site_id ici) et renvoie un jeton à courte durée de vie.
-async function getTransferToken() {
-  const response = await fetch(`${apiBase()}/v1/auth/login?lang=fr`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      apikey: process.env.CINETPAY_API_KEY,
-      password: process.env.CINETPAY_TRANSFER_PASSWORD
-    })
-  });
-  if (!response.ok) throw new Error('Authentification CinetPay refusée');
-  const data = await response.json();
-  const token = data?.data?.token;
-  if (!token) throw new Error('Authentification CinetPay: jeton absent de la réponse');
-  return token;
+  return process.env.CINETPAY_API_BASE || 'https://api.cinetpay.net';
 }
 
 // amount est déjà dans la devise locale du vendeur (ex. CDF en RDC): l'API de transfert
 // CinetPay paie en devise locale, pas en USD — la conversion est à la charge de l'appelant.
 async function sendTransfer({ phone, countryPrefix, amount, reference }) {
   if (!isConfigured()) throw new Error('CinetPay n’est pas configuré');
-  const token = await getTransferToken();
-  const response = await fetch(`${apiBase()}/v1/transfer/money/send/contact?token=${encodeURIComponent(token)}&lang=fr`, {
+  const response = await fetch(`${apiBase()}/v1/transfer/money/send/contact`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
+    headers: {
+      Authorization: `Bearer ${process.env.CINETPAY_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
       prefix: countryPrefix,
       phone,
-      amount: String(Math.round(amount)),
-      notify_url: process.env.CINETPAY_NOTIFY_URL || '',
-      client_transaction_id: reference
+      amount: Math.round(amount),
+      client_transaction_id: reference,
+      ...(process.env.CINETPAY_NOTIFY_URL ? { notify_url: process.env.CINETPAY_NOTIFY_URL } : {})
     })
   });
   if (!response.ok) throw new Error('Envoi du transfert CinetPay refusé');

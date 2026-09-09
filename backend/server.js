@@ -1665,7 +1665,7 @@ app.get('/api/admin/payouts/pending', requireAuthentication, requireRole('admin'
 // moyens (virement, mobile money marchand-à-marchand...), comme pour la confirmation
 // Airtel/Orange Money d'une commande. method='cinetpay_transfer': déclenche un transfert
 // réel via CinetPay (voir cinetpay.js — NON VÉRIFIÉ PAR EXÉCUTION RÉELLE, désactivé tant
-// que CINETPAY_API_KEY/CINETPAY_TRANSFER_PASSWORD ne sont pas configurés).
+// que CINETPAY_API_KEY n'est pas configuré).
 app.post('/api/admin/organizations/:organizationId/payouts', requireAuthentication, requireRole('admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.organizationId).success) return res.status(400).json({ success: false, message: 'Identifiant d’organisation invalide' });
   const parsed = payoutSchema.safeParse(req.body);

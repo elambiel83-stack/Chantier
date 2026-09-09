@@ -1,6 +1,6 @@
 // Teste cinetpay.js sans dépendre d'un vrai compte CinetPay: la garantie la plus
 // importante à ce stade est que l'intégration reste inerte tant qu'elle n'est pas
-// configurée (voir l'avertissement en tête de cinetpay.js — la forme exacte des requêtes
+// configurée (voir l'avertissement en tête de cinetpay.js — la forme exacte de la requête
 // contre l'API réelle n'est elle-même pas vérifiée par ces tests).
 const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
@@ -25,7 +25,6 @@ function freshCinetpay() {
 
 test('non configuré: isConfigured() est faux et sendTransfer échoue sans appeler le réseau', async () => {
   delete process.env.CINETPAY_API_KEY;
-  delete process.env.CINETPAY_TRANSFER_PASSWORD;
   let called = false;
   global.fetch = async () => { called = true; return { ok: true, json: async () => ({}) }; };
   const { isConfigured, sendTransfer } = freshCinetpay();
@@ -34,45 +33,36 @@ test('non configuré: isConfigured() est faux et sendTransfer échoue sans appel
   assert.equal(called, false);
 });
 
-test('configuré, authentification et transfert réussis: renvoie la référence', async () => {
-  process.env.CINETPAY_API_KEY = 'test-key';
-  process.env.CINETPAY_TRANSFER_PASSWORD = 'test-password';
-  const calls = [];
-  global.fetch = async (url) => {
-    calls.push(url.toString());
-    if (url.toString().includes('/v1/auth/login')) {
-      return { ok: true, json: async () => ({ data: { token: 'jeton-test' } }) };
-    }
+test('configuré, transfert réussi: envoie le jeton en Bearer et renvoie la référence', async () => {
+  process.env.CINETPAY_API_KEY = 'test-token';
+  let capturedUrl, capturedOptions;
+  global.fetch = async (url, options) => {
+    capturedUrl = url.toString();
+    capturedOptions = options;
     return { ok: true, json: async () => ({ code: '0' }) };
   };
   const { sendTransfer } = freshCinetpay();
   const result = await sendTransfer({ phone: '900000000', countryPrefix: '243', amount: 15000, reference: 'ref-1' });
   assert.equal(result.providerReference, 'ref-1');
-  assert.equal(calls.length, 2);
-  assert.match(calls[1], /token=jeton-test/);
+  assert.equal(capturedUrl, 'https://api.cinetpay.net/v1/transfer/money/send/contact');
+  assert.equal(capturedOptions.headers.Authorization, 'Bearer test-token');
+  const body = JSON.parse(capturedOptions.body);
+  assert.equal(body.phone, '900000000');
+  assert.equal(body.prefix, '243');
+  assert.equal(body.amount, 15000);
+  assert.equal(body.client_transaction_id, 'ref-1');
 });
 
-test('configuré, authentification refusée: échoue avant tout appel de transfert', async () => {
-  process.env.CINETPAY_API_KEY = 'test-key';
-  process.env.CINETPAY_TRANSFER_PASSWORD = 'test-password';
-  let transferCalled = false;
-  global.fetch = async (url) => {
-    if (url.toString().includes('/v1/auth/login')) return { ok: false, status: 401 };
-    transferCalled = true;
-    return { ok: true, json: async () => ({ code: '0' }) };
-  };
+test('configuré, requête HTTP refusée: échoue', async () => {
+  process.env.CINETPAY_API_KEY = 'test-token';
+  global.fetch = async () => ({ ok: false, status: 401 });
   const { sendTransfer } = freshCinetpay();
   await assert.rejects(() => sendTransfer({ phone: '900000000', countryPrefix: '243', amount: 1000, reference: 'x' }));
-  assert.equal(transferCalled, false);
 });
 
-test('configuré, transfert refusé par CinetPay (code différent de 0): échoue', async () => {
-  process.env.CINETPAY_API_KEY = 'test-key';
-  process.env.CINETPAY_TRANSFER_PASSWORD = 'test-password';
-  global.fetch = async (url) => {
-    if (url.toString().includes('/v1/auth/login')) return { ok: true, json: async () => ({ data: { token: 'jeton-test' } }) };
-    return { ok: true, json: async () => ({ code: '600', message: 'Solde insuffisant' }) };
-  };
+test('configuré, transfert refusé par CinetPay (code différent de 0): échoue avec le message', async () => {
+  process.env.CINETPAY_API_KEY = 'test-token';
+  global.fetch = async () => ({ ok: true, json: async () => ({ code: '600', message: 'Solde insuffisant' }) });
   const { sendTransfer } = freshCinetpay();
   await assert.rejects(() => sendTransfer({ phone: '900000000', countryPrefix: '243', amount: 1000, reference: 'x' }), /Solde insuffisant/);
 });

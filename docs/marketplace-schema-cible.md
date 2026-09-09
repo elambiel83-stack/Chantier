@@ -21,10 +21,12 @@ site en production :
 - **Phase 5** (commission et versement) : `platform_fee_rule` (15 % par défaut),
   `payment_split` (calculé à la confirmation, séquestré jusqu'à livraison confirmée),
   `payout`, `ledger_entry`. Versement manuel opérationnel dès maintenant ; versement
-  automatisé via CinetPay écrit dans `backend/cinetpay.js` mais **non vérifié par
-  exécution réelle** (voir l'avertissement en tête de ce fichier) et désactivé tant que
-  `CINETPAY_API_KEY`/`CINETPAY_TRANSFER_PASSWORD` ne sont pas configurés avec de vrais
-  identifiants validés contre https://docs.cinetpay.com.
+  automatisé via CinetPay écrit dans `backend/cinetpay.js` (nouveau back-office: base
+  `api.cinetpay.net`, jeton API unique — confirmés par l'exploitant du projet) mais dont
+  le chemin exact de l'endpoint et la forme de la requête/réponse restent **non vérifiés
+  par exécution réelle** (voir l'avertissement en tête de ce fichier) ; désactivé tant que
+  `CINETPAY_API_KEY` n'est pas configuré avec un vrai identifiant validé contre un compte
+  de test réel.
 
 Le reste de ce document (devis, jalons de paiement, avis, litiges, logistique
 internationale, fiscalité) n'est pas encore entamé.

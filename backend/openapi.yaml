@@ -96,7 +96,7 @@ paths:
         method=manual enregistre un versement déjà effectué par le staff par ses propres
         moyens. method=cinetpay_transfer déclenche un transfert automatisé via CinetPay
         (voir backend/cinetpay.js — non vérifié par exécution réelle, répond 503 tant que
-        CINETPAY_API_KEY/CINETPAY_TRANSFER_PASSWORD ne sont pas configurés).
+        CINETPAY_API_KEY n'est pas configuré).
       security:
         - bearerAuth: []
       responses:
