@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Demandes d'importation — MonChantier</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <header class="bg-white shadow-sm sticky top-0 z-30">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+      <a href="index.html" class="brand-name flex items-center gap-2 font-bold text-xl">
+        <img src="assets/monchantier_logo.svg" alt="MonChantier" class="h-10 w-auto">MonChantier
+      </a>
+      <div class="flex items-center gap-2 text-sm md:text-base">
+        <a href="admin.html" class="px-2 md:px-3 py-2 rounded-lg border">Commandes</a>
+        <span id="whoami" class="text-slate-500 hidden sm:inline"></span>
+        <button id="logout-button" type="button" class="px-2 py-2 font-medium text-slate-600 hover:text-red-700">Déconnexion</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-surface max-w-5xl mx-auto px-4 py-4 md:py-8">
+    <h1 class="text-2xl md:text-3xl font-bold mb-1">Demandes d'importation</h1>
+    <p id="scope-note" class="text-slate-500 text-sm mb-4"></p>
+
+    <div id="denied" class="hidden bg-white rounded-xl p-6 shadow text-slate-700">
+      Cet espace est réservé au personnel MonChantier (staff/admin). <a href="index.html" class="text-red-600 underline">Retour au site</a>.
+    </div>
+
+    <div id="dashboard" class="hidden">
+      <div class="flex flex-wrap items-center gap-2 mb-4">
+        <label class="text-sm font-medium" for="status-filter">Statut</label>
+        <select id="status-filter" class="border rounded-lg px-3 py-2 text-sm">
+          <option value="">Toutes (selon mes droits)</option>
+          <option value="submitted">Envoyée</option>
+          <option value="quoted">Devis proposé</option>
+          <option value="compliance_cleared">Conformité validée</option>
+          <option value="ordered">Commandée</option>
+          <option value="delivered">Livrée</option>
+          <option value="rejected">Refusée</option>
+          <option value="cancelled">Annulée</option>
+        </select>
+        <button id="refresh" type="button" class="ml-auto px-3 py-2 rounded-lg border text-sm hover:bg-slate-100">Actualiser</button>
+      </div>
+      <p id="requests-status" class="text-sm mb-3" role="status" aria-live="polite"></p>
+      <div id="requests" class="space-y-3"></div>
+    </div>
+  </main>
+
+  <script src="admin-imports.js"></script>
+</body>
+</html>

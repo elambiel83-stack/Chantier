@@ -4,9 +4,16 @@
 const params = new URLSearchParams(window.location.search);
 const orderId = params.get('orderId');
 const confirmationToken = params.get('ct');
+const provider = params.get('provider') || 'paypal';
 const status = document.getElementById('status');
 if (!orderId || !confirmationToken) { status.textContent = 'Lien de confirmation incomplet. Contactez le support avec votre référence de commande.'; } else {
-  window.apiCall(`/orders/${orderId}/paypal/capture`, { method: 'POST', body: { confirmationToken } }).then((response) => {
+  const endpoint = provider === 'cinetpay' ? `/orders/${orderId}/cinetpay/check` : `/orders/${orderId}/paypal/capture`;
+  window.apiCall(endpoint, { method: 'POST', body: { confirmationToken } }).then((response) => {
+    if (response.status === 'pending') {
+      localStorage.removeItem('cart');
+      status.textContent = `Paiement en cours de confirmation par CinetPay pour la commande ${orderId}. Actualisez cette page dans quelques instants, ou consultez vos commandes plus tard.`;
+      return;
+    }
     localStorage.removeItem('cart');
     if (localStorage.getItem('accessToken')) window.apiCall('/cart', { method: 'DELETE' }).catch(() => {});
     status.textContent = `Paiement confirmé. Votre commande ${response.orderId} est confirmée.`;

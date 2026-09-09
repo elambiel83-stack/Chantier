@@ -98,6 +98,8 @@ const MOBILE_MONEY_PROVIDERS = {
   airtel_money: { label: 'Airtel Money', payoutNumber: process.env.AIRTEL_MONEY_PAYOUT_NUMBER },
   orange_money: { label: 'Orange Money', payoutNumber: process.env.ORANGE_MONEY_PAYOUT_NUMBER }
 };
+// CinetPay (paiement Mobile Money automatisé) ne prend en charge que USD et CDF ici.
+const CINETPAY_SUPPORTED_CURRENCIES = ['USD', 'CDF'];
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
@@ -331,7 +333,7 @@ const orderSchema = z.object({
     email: z.string().trim().email().max(254).optional()
   }),
   currency: z.enum(['USD', 'CDF', 'EUR']),
-  paymentProvider: z.enum(['paypal', 'airtel_money', 'orange_money']),
+  paymentProvider: z.enum(['paypal', 'cinetpay', 'airtel_money', 'orange_money']),
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
@@ -427,6 +429,29 @@ function withPossibleDelay(order) {
     && (Date.now() - new Date(order.driver_location_updated_at).getTime()) > DELIVERY_DELAY_THRESHOLD_MINUTES * 60 * 1000;
   return { ...order, possible_delay: possibleDelay };
 }
+
+const importRequestSchema = z.object({
+  sourceUrl: z.string().trim().url().max(2048).optional(),
+  description: z.string().trim().min(10).max(2000),
+  targetQty: z.number().positive().max(1000000)
+});
+const importQuoteSchema = z.object({
+  quoteAmount: z.number().positive().max(10000000),
+  quoteCurrency: z.enum(['USD', 'CDF', 'EUR']),
+  staffNotes: z.string().trim().max(2000).optional()
+});
+// Le staff documente ici les normes/certificats/code douanier vérifiés: obligatoire avant
+// qu'une demande puisse passer à 'ordered' (voir PATCH /import-requests/:id/status).
+const importComplianceSchema = z.object({
+  complianceNotes: z.string().trim().min(10).max(2000)
+});
+const importStatusSchema = z.object({
+  status: z.enum(['ordered', 'delivered', 'rejected', 'cancelled']),
+  staffNotes: z.string().trim().max(2000).optional()
+}).refine((data) => data.status !== 'rejected' || Boolean(data.staffNotes?.trim()), {
+  message: 'Un motif est requis pour refuser une demande d’importation',
+  path: ['staffNotes']
+});
 
 function requireJwtSecret() {
   if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) throw new Error('JWT_ACCESS_SECRET doit contenir au moins 32 caracteres');
@@ -556,6 +581,97 @@ async function getPaypalAccessToken() {
   });
   if (!response.ok) throw new Error('Authentification PayPal refusée');
   return (await response.json()).access_token;
+}
+
+function requireCinetpayCredentials() {
+  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = process.env;
+  if (!CINETPAY_API_KEY || !CINETPAY_SITE_ID) throw new Error('CinetPay n’est pas configuré');
+  return { CINETPAY_API_KEY, CINETPAY_SITE_ID };
+}
+
+async function initCinetpayPayment({ transactionId, amount, currency, description, customerName, customerPhone, returnUrl, notifyUrl }) {
+  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = requireCinetpayCredentials();
+  const response = await fetch('https://api-cinetpay.com/v2/payment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      apikey: CINETPAY_API_KEY,
+      site_id: CINETPAY_SITE_ID,
+      transaction_id: transactionId,
+      amount,
+      currency,
+      description,
+      customer_name: customerName,
+      customer_phone_number: customerPhone,
+      notify_url: notifyUrl,
+      return_url: returnUrl,
+      channels: 'ALL',
+      lang: 'fr'
+    })
+  });
+  const body = await response.json();
+  if (!response.ok || body.code !== '201' || !body.data?.payment_url) {
+    throw new Error(body.message || 'Création du paiement CinetPay refusée');
+  }
+  return body.data.payment_url;
+}
+
+// Seule source de vérité sur le statut d'un paiement CinetPay: la notification
+// serveur-à-serveur (POST /api/cinetpay/notify) ne contient que l'identifiant de
+// transaction, jamais le statut ni le montant, précisément pour forcer cet appel.
+async function checkCinetpayPayment(transactionId) {
+  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = requireCinetpayCredentials();
+  const response = await fetch('https://api-cinetpay.com/v2/payment/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apikey: CINETPAY_API_KEY, site_id: CINETPAY_SITE_ID, transaction_id: transactionId })
+  });
+  return response.json();
+}
+
+// Appelée à la fois par la page de retour client (POST /orders/:id/cinetpay/check) et par
+// le webhook CinetPay: dans les deux cas on revérifie le statut réel auprès de CinetPay
+// avant de confirmer quoi que ce soit, et on n'agit que si le paiement est encore 'pending'
+// (idempotent en cas de double appel).
+async function finalizeCinetpayPayment(transactionId) {
+  const paymentResult = await database.query(
+    `SELECT payment.id, payment.order_id, payment.amount, payment.currency, payment.status
+     FROM payment WHERE payment.provider = 'cinetpay' AND payment.provider_reference = $1`,
+    [transactionId]
+  );
+  const payment = paymentResult.rows[0];
+  if (!payment) return null;
+  if (payment.status !== 'pending') return { orderId: payment.order_id, status: payment.status === 'paid' ? 'confirmed' : payment.status };
+
+  const result = await checkCinetpayPayment(transactionId);
+  let accepted = result.code === '00' && result.data?.status === 'ACCEPTED';
+  if (accepted) {
+    const paidAmount = Number(result.data.amount);
+    const paidCurrency = String(result.data.currency || '').trim();
+    if (paidCurrency !== payment.currency.trim() || paidAmount !== Number(payment.amount)) {
+      console.error('Montant CinetPay incohérent', { transactionId, received: result.data, expected: { amount: payment.amount, currency: payment.currency } });
+      accepted = false;
+    }
+  }
+  if (!accepted && result.code !== '00' && result.data?.status !== 'REFUSED') {
+    // Statut encore indéterminé côté CinetPay (ex: en attente de validation Mobile Money):
+    // on ne marque rien comme échoué, un prochain appel (webhook ou retour client) retentera.
+    return { orderId: payment.order_id, status: 'pending' };
+  }
+
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE payment SET status = $1, updated_at = now() WHERE id = $2', [accepted ? 'paid' : 'failed', payment.id]);
+    if (accepted) await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [payment.order_id]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+  return { orderId: payment.order_id, status: accepted ? 'confirmed' : 'failed' };
 }
 
 async function ensureCatalog(client) {
@@ -1367,6 +1483,12 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       message: 'PayPal ne prend pas en charge le CDF. Sélectionnez USD ou EUR.'
     });
   }
+  if (paymentProvider === 'cinetpay' && !CINETPAY_SUPPORTED_CURRENCIES.includes(currency)) {
+    return res.status(400).json({
+      success: false,
+      message: 'CinetPay ne prend pas en charge l’EUR. Sélectionnez USD ou CDF.'
+    });
+  }
   const mobileMoneyProvider = MOBILE_MONEY_PROVIDERS[paymentProvider];
   if (mobileMoneyProvider && !mobileMoneyProvider.payoutNumber) {
     return res.status(503).json({
@@ -1563,6 +1685,94 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
   }
 });
 
+app.post('/api/orders/:orderId/cinetpay', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  try {
+    const paymentResult = await database.query(
+      `SELECT payment.id, payment.amount, payment.currency FROM payment
+       JOIN orders ON orders.id = payment.order_id
+       WHERE payment.order_id = $1 AND orders.customer_id = $2 AND payment.provider = 'cinetpay' AND payment.status = 'pending'`,
+      [req.params.orderId, req.auth.customerId]
+    );
+    if (paymentResult.rowCount !== 1) return res.status(404).json({ success: false, message: 'Paiement CinetPay introuvable ou déjà traité' });
+    const payment = paymentResult.rows[0];
+    const currency = payment.currency.trim();
+    if (!CINETPAY_SUPPORTED_CURRENCIES.includes(currency)) {
+      return res.status(400).json({ success: false, message: 'CinetPay ne prend pas en charge l’EUR. Sélectionnez USD ou CDF.' });
+    }
+    const applicationUrl = process.env.APP_URL || 'http://localhost:3002';
+    const confirmationToken = crypto.randomBytes(32).toString('base64url');
+    // Un identifiant de transaction CinetPay ne peut être réutilisé: on en dérive un nouveau
+    // à chaque tentative, même pour une commande déjà tentée sans succès.
+    const transactionId = `${req.params.orderId}-${crypto.randomBytes(4).toString('hex')}`;
+    const customerResult = await database.query('SELECT full_name, phone FROM customer WHERE id = $1', [req.auth.customerId]);
+    const customer = customerResult.rows[0];
+    const paymentUrl = await initCinetpayPayment({
+      transactionId,
+      amount: Number(payment.amount),
+      currency,
+      description: `Commande MonChantier ${req.params.orderId}`,
+      customerName: customer?.full_name || 'Client MonChantier',
+      customerPhone: customer?.phone || '',
+      notifyUrl: `${applicationUrl}/api/cinetpay/notify`,
+      returnUrl: `${applicationUrl}/payment-success.html?orderId=${req.params.orderId}&ct=${confirmationToken}&provider=cinetpay`
+    });
+    await database.query(
+      'UPDATE payment SET provider_reference = $1, confirmation_token_hash = $2, updated_at = now() WHERE id = $3',
+      [transactionId, hashToken(confirmationToken), payment.id]
+    );
+    res.json({ success: true, paymentUrl, confirmationToken });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Appelée par la page de retour CinetPay, sans session: l'accès est prouvé par le jeton de
+// confirmation reçu à la création du paiement, comme /orders/:orderId/paypal/capture.
+app.post('/api/orders/:orderId/cinetpay/check', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  const parsedCheck = paypalCaptureSchema.safeParse(req.body);
+  if (!parsedCheck.success) return res.status(400).json({ success: false, message: 'Jeton de confirmation manquant' });
+  try {
+    const paymentResult = await database.query(
+      `SELECT provider_reference, confirmation_token_hash, status FROM payment
+       WHERE order_id = $1 AND provider = 'cinetpay'`,
+      [req.params.orderId]
+    );
+    const payment = paymentResult.rows[0];
+    if (!payment || !payment.provider_reference) return res.status(404).json({ success: false, message: 'Paiement CinetPay introuvable' });
+    if (!tokensMatch(parsedCheck.data.confirmationToken, payment.confirmation_token_hash)) {
+      return res.status(403).json({ success: false, message: 'Jeton de confirmation invalide' });
+    }
+    const outcome = payment.status === 'pending'
+      ? await finalizeCinetpayPayment(payment.provider_reference)
+      : { orderId: req.params.orderId, status: payment.status === 'paid' ? 'confirmed' : payment.status };
+    if (outcome.status === 'confirmed') return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+    if (outcome.status === 'pending') return res.json({ success: true, orderId: req.params.orderId, status: 'pending', message: 'Paiement en attente de confirmation par CinetPay' });
+    return res.status(400).json({ success: false, message: 'Le paiement CinetPay n’a pas abouti' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Notification serveur-à-serveur CinetPay: envoyée en application/x-www-form-urlencoded,
+// avec pour seule information fiable l'identifiant de transaction (voir finalizeCinetpayPayment
+// pour la vérification du statut réel). Toujours répondre 200 pour éviter des relances inutiles
+// de CinetPay une fois la commande retrouvée; une commande introuvable retourne 404 pour signal.
+app.post('/api/cinetpay/notify', express.urlencoded({ extended: false, limit: '10kb' }), async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const transactionId = req.body?.cpm_trans_id;
+  if (typeof transactionId !== 'string' || !transactionId) return res.status(400).end();
+  try {
+    const outcome = await finalizeCinetpayPayment(transactionId);
+    if (!outcome) return res.status(404).end();
+    res.status(200).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/orders', requireAuthentication, async (req, res, next) => {
   // Un partenaire ne voit que ses propres lignes de commande, jamais la commande entière
   // (qui peut contenir des articles d'autres partenaires concurrents): voir GET
@@ -1730,6 +1940,159 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
   }
 });
 
+// Demande d'importation: le client décrit un produit repéré chez un fournisseur (lien +
+// description) qu'il souhaite voir importé, plutôt que de faire confiance à un scraping
+// automatisé des sites fournisseurs (voir README > Sourcing produits): un membre du staff
+// sourcing chiffre la demande puis documente sa conformité aux normes applicables et au
+// code douanier avant qu'elle puisse être déclarée commandée — cette étape n'est jamais
+// automatique ni contournable (voir allowedPreviousStatuses ci-dessous).
+app.post('/api/import-requests', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  const parsed = importRequestSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Demande d’importation invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    const result = await database.query(
+      'INSERT INTO import_request (customer_id, source_url, description, target_qty) VALUES ($1, $2, $3, $4) RETURNING id, status, created_at',
+      [req.auth.customerId, parsed.data.sourceUrl || null, parsed.data.description, parsed.data.targetQty]
+    );
+    res.status(201).json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/import-requests', requireAuthentication, async (req, res, next) => {
+  const status = z.enum(['submitted', 'quoted', 'compliance_cleared', 'ordered', 'delivered', 'rejected', 'cancelled']).safeParse(req.query.status);
+  if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de demande invalide' });
+  const filters = [];
+  const values = [];
+  if (req.auth.role === 'customer') {
+    values.push(req.auth.customerId);
+    filters.push(`import_request.customer_id = $${values.length}`);
+  } else if (req.auth.role === 'staff') {
+    values.push(req.auth.userId);
+    filters.push(`(import_request.assigned_to = $${values.length} OR (import_request.assigned_to IS NULL AND import_request.status = 'submitted'))`);
+  }
+  if (status.success) {
+    values.push(status.data);
+    filters.push(`import_request.status = $${values.length}`);
+  }
+  try {
+    const result = await database.query(
+      `SELECT import_request.id, import_request.source_url, import_request.description, import_request.target_qty,
+              import_request.status, import_request.quote_amount, import_request.quote_currency,
+              import_request.compliance_notes, import_request.staff_notes, import_request.assigned_to,
+              import_request.created_at, import_request.updated_at, customer.full_name, customer.phone
+       FROM import_request
+       JOIN customer ON customer.id = import_request.customer_id
+       ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY import_request.created_at DESC`,
+      values
+    );
+    res.json({ success: true, requests: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/import-requests/:id/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  try {
+    const result = await database.query(
+      "UPDATE import_request SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'submitted' RETURNING id, status, assigned_to",
+      [req.auth.userId, req.params.id]
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande n’est plus disponible pour affectation' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Un staff ne peut agir que sur les demandes qui lui sont affectées; un admin peut toujours agir.
+function importRequestOwnership(req, values) {
+  if (req.auth.role !== 'staff') return '';
+  values.push(req.auth.userId);
+  return ` AND assigned_to = $${values.length}`;
+}
+
+app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  const parsed = importQuoteSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Devis invalide', errors: parsed.error.flatten().fieldErrors });
+  const values = [req.params.id, parsed.data.quoteAmount, parsed.data.quoteCurrency, parsed.data.staffNotes || null];
+  const ownership = importRequestOwnership(req, values);
+  try {
+    const result = await database.query(
+      `UPDATE import_request SET quote_amount = $2, quote_currency = $3, staff_notes = COALESCE($4, staff_notes), status = 'quoted', updated_at = now()
+       WHERE id = $1 AND status = 'submitted'${ownership} RETURNING id, status, quote_amount, quote_currency`,
+      values
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande ne peut pas être chiffrée dans son état actuel' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  const parsed = importComplianceSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Constat de conformité invalide : précisez les normes, le code douanier et les certificats fournisseur vérifiés', errors: parsed.error.flatten().fieldErrors });
+  const values = [req.params.id, parsed.data.complianceNotes];
+  const ownership = importRequestOwnership(req, values);
+  try {
+    const result = await database.query(
+      `UPDATE import_request SET compliance_notes = $2, status = 'compliance_cleared', updated_at = now()
+       WHERE id = $1 AND status = 'quoted'${ownership} RETURNING id, status, compliance_notes`,
+      values
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande doit d’abord être chiffrée avant le contrôle de conformité' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/import-requests/:id/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  const parsed = importStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Transition invalide', errors: parsed.error.flatten().fieldErrors });
+  // 'ordered' n'est atteignable qu'après 'compliance_cleared': impossible de déclarer une
+  // commande fournisseur passée sans être passé par le contrôle de conformité.
+  const allowedPreviousStatuses = {
+    ordered: ['compliance_cleared'],
+    delivered: ['ordered'],
+    rejected: ['submitted', 'quoted', 'compliance_cleared'],
+    cancelled: ['submitted', 'quoted', 'compliance_cleared', 'ordered']
+  };
+  const values = [req.params.id, parsed.data.status, allowedPreviousStatuses[parsed.data.status], parsed.data.staffNotes || null];
+  const ownership = importRequestOwnership(req, values);
+  try {
+    const result = await database.query(
+      `UPDATE import_request SET status = $2, staff_notes = COALESCE($4, staff_notes), updated_at = now()
+       WHERE id = $1 AND status = ANY($3::text[])${ownership} RETURNING id, status`,
+      values
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Transition de statut non autorisée' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/import-requests/:id/cancel', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
+  try {
+    const result = await database.query(
+      `UPDATE import_request SET status = 'cancelled', updated_at = now()
+       WHERE id = $1 AND customer_id = $2 AND status IN ('submitted', 'quoted') RETURNING id, status`,
+      [req.params.id, req.auth.customerId]
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande ne peut plus être annulée' });
+    res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
 
 if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 
