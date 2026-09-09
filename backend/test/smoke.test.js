@@ -234,3 +234,12 @@ test('GET /api/appointments sans base de données répond 503', async () => {
   const response = await fetch(`${BASE_URL}/api/appointments`, { headers: { Authorization: 'Bearer x' } });
   assert.equal(response.status, 503);
 });
+
+test('POST /api/appointments/:id/order sans base de données répond 503', async () => {
+  const response = await fetch(`${BASE_URL}/api/appointments/00000000-0000-0000-0000-000000000001/order`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' },
+    body: JSON.stringify({ currency: 'USD', paymentProvider: 'airtel_money' })
+  });
+  assert.equal(response.status, 503);
+});

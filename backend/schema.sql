@@ -483,3 +483,32 @@ CREATE INDEX IF NOT EXISTS service_appointment_service_offering_id_idx ON servic
 CREATE INDEX IF NOT EXISTS service_appointment_organization_id_idx ON service_appointment(organization_id);
 CREATE INDEX IF NOT EXISTS service_appointment_customer_id_idx ON service_appointment(customer_id);
 CREATE INDEX IF NOT EXISTS service_appointment_status_idx ON service_appointment(status);
+
+-- ============================================================================
+-- Marketplace multi-vendeurs — phase 7 (conversion d'un devis chiffré en commande)
+-- Réutilise orders/vendor_order/order_item/payment tels quels (un devis complété devient
+-- une commande à un seul vendeur, une seule ligne) plutôt qu'un chemin de paiement
+-- parallèle: la capture PayPal, les transitions de statut, le calcul de commission et le
+-- séquestre (phases 4-5) s'appliquent donc sans aucune modification.
+-- ============================================================================
+
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS service_offering_id UUID REFERENCES service_offering(id);
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS service_appointment_id UUID REFERENCES service_appointment(id);
+
+-- Une ligne de commande vient soit du catalogue produit, soit d'un devis de prestation
+-- (jamais les deux, jamais ni l'un ni l'autre).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'order_item_product_xor_service') THEN
+    ALTER TABLE order_item ADD CONSTRAINT order_item_product_xor_service CHECK (
+      (product_id IS NOT NULL AND service_offering_id IS NULL AND service_appointment_id IS NULL) OR
+      (product_id IS NULL AND service_offering_id IS NOT NULL AND service_appointment_id IS NOT NULL)
+    );
+  END IF;
+END $$;
+
+-- Un seul order_item par rendez-vous: empêche de convertir deux fois le même devis en
+-- commande (index unique plutôt qu'une contrainte de table: NULL multiples autorisés,
+-- seules les lignes "service" sont concernées).
+CREATE UNIQUE INDEX IF NOT EXISTS order_item_service_appointment_id_unique_idx ON order_item(service_appointment_id) WHERE service_appointment_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS order_item_service_offering_id_idx ON order_item(service_offering_id);

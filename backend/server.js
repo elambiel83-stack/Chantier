@@ -343,6 +343,10 @@ const orderSchema = z.object({
     qty: z.number().int().min(1).max(10000)
   })).min(1).max(100)
 });
+const appointmentOrderSchema = z.object({
+  currency: z.enum(['USD', 'CDF', 'EUR']),
+  paymentProvider: z.enum(['paypal', 'airtel_money', 'orange_money'])
+});
 
 const credentialsSchema = z.object({
   email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
@@ -2093,6 +2097,101 @@ app.patch('/api/appointments/:appointmentId/status', requireAuthentication, asyn
     res.json({ success: true, appointment: result.rows[0] });
   } catch (error) {
     next(error);
+  }
+});
+
+// Convertit un rendez-vous complété (devis chiffré) en commande payante: réutilise
+// orders/vendor_order/order_item/payment tels quels (une seule ligne, un seul vendeur) —
+// capture PayPal, transitions de statut, commission et séquestre s'appliquent ensuite sans
+// modification, exactement comme pour une commande issue du panier produit.
+app.post('/api/appointments/:appointmentId/order', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  if (!z.string().uuid().safeParse(req.params.appointmentId).success) return res.status(400).json({ success: false, message: 'Identifiant de rendez-vous invalide' });
+  const parsed = appointmentOrderSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Commande invalide' });
+  const { currency, paymentProvider } = parsed.data;
+  if (paymentProvider === 'paypal' && currency === 'CDF') {
+    return res.status(400).json({ success: false, message: 'PayPal ne prend pas en charge le CDF. Sélectionnez USD ou EUR.' });
+  }
+  const mobileMoneyProvider = MOBILE_MONEY_PROVIDERS[paymentProvider];
+  if (mobileMoneyProvider && !mobileMoneyProvider.payoutNumber) {
+    return res.status(503).json({ success: false, message: `Le paiement ${mobileMoneyProvider.label} n’est pas encore configuré. Contactez-nous.` });
+  }
+
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const appointmentResult = await client.query(
+      `SELECT service_appointment.customer_id, service_appointment.organization_id, service_appointment.status,
+              service_appointment.quoted_amount_usd, service_appointment.service_offering_id,
+              organization.status AS organization_status
+       FROM service_appointment JOIN organization ON organization.id = service_appointment.organization_id
+       WHERE service_appointment.id = $1 FOR UPDATE OF service_appointment`,
+      [req.params.appointmentId]
+    );
+    if (!appointmentResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Rendez-vous introuvable' });
+    }
+    const appointment = appointmentResult.rows[0];
+    if (appointment.customer_id !== req.auth.customerId) {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, message: 'Ce rendez-vous ne vous appartient pas' });
+    }
+    if (appointment.status !== 'completed' || appointment.quoted_amount_usd === null) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Ce rendez-vous n’a pas encore de devis chiffré' });
+    }
+    if (appointment.organization_status !== 'verified') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Ce vendeur n’est pas (ou plus) vérifié' });
+    }
+    // Verrouillé par le FOR UPDATE ci-dessus: aucune conversion concurrente ne peut passer
+    // ce point avant que la nôtre n'ait committé l'order_item qui déclenche l'index unique.
+    const alreadyConverted = await client.query('SELECT id FROM order_item WHERE service_appointment_id = $1', [req.params.appointmentId]);
+    if (alreadyConverted.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Ce rendez-vous a déjà été converti en commande' });
+    }
+
+    const rateResult = await client.query('SELECT units_per_usd FROM currency_rate WHERE currency = $1', [currency]);
+    if (rateResult.rowCount !== 1) throw new Error('Devise indisponible');
+    const rate = Number(rateResult.rows[0].units_per_usd);
+    const quotedUsd = Number(appointment.quoted_amount_usd);
+    const subtotal = Number((quotedUsd * rate).toFixed(2));
+
+    const orderResult = await client.query(
+      'INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount) VALUES ($1, $2, $3, $3) RETURNING id, status, total_amount, currency',
+      [req.auth.customerId, currency, subtotal]
+    );
+    const order = orderResult.rows[0];
+    const vendorOrderResult = await client.query(
+      'INSERT INTO vendor_order (order_id, organization_id, subtotal_amount_usd) VALUES ($1, $2, $3) RETURNING id',
+      [order.id, appointment.organization_id, quotedUsd]
+    );
+    await client.query(
+      `INSERT INTO order_item (order_id, vendor_order_id, service_offering_id, service_appointment_id, qty, unit_price_usd)
+       VALUES ($1, $2, $3, $4, 1, $5)`,
+      [order.id, vendorOrderResult.rows[0].id, appointment.service_offering_id, req.params.appointmentId, quotedUsd]
+    );
+    await client.query(
+      'INSERT INTO payment (order_id, provider, amount, currency) VALUES ($1, $2, $3, $4)',
+      [order.id, paymentProvider, order.total_amount, order.currency]
+    );
+    await client.query('COMMIT');
+    const payment = mobileMoneyProvider
+      ? { provider: paymentProvider, label: mobileMoneyProvider.label, payoutNumber: mobileMoneyProvider.payoutNumber, reference: order.id }
+      : undefined;
+    res.status(201).json({
+      success: true,
+      order: { id: order.id, status: order.status, totalAmount: order.total_amount, currency: order.currency, paymentProvider },
+      ...(payment ? { payment } : {})
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
   }
 });
 

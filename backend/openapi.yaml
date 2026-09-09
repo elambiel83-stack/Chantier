@@ -166,6 +166,28 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           description: Transition de statut non autorisée
+  /appointments/{appointmentId}/order:
+    post:
+      summary: Convertit un rendez-vous complété (devis chiffré) en commande payante
+      description: >-
+        Réservé au client propriétaire du rendez-vous. Réutilise le même cycle de paiement
+        qu'une commande issue du panier (capture PayPal, confirmation Airtel/Orange Money,
+        commission, séquestre) — une seule ligne, un seul vendeur.
+      security:
+        - bearerAuth: []
+      responses:
+        '201':
+          description: Commande créée à partir du devis
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Authentification requise
+        '403':
+          description: Ce rendez-vous n'appartient pas au compte authentifié
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Ce rendez-vous a déjà été converti en commande
   /admin/payouts/pending:
     get:
       summary: Montant net dû à chaque vendeur (séquestre libéré, pas encore versé)

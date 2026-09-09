@@ -33,9 +33,15 @@ site en production :
   ni stock à l'avance, donc volontairement séparée de `product`/`listing`. Le client
   demande un rendez-vous (`POST /api/appointments`), le vendeur confirme un créneau puis
   y consigne le montant chiffré après la visite (`quoted_amount_usd`/`quote_note` sur
-  `service_appointment`). Convertir ce devis en commande payante n'est pas construit — ce
-  serait le `quote_request`/`quote` de la cible ci-dessous, plus général (négociation,
-  lignes multiples), pas encore justifié par un besoin concret.
+  `service_appointment`).
+- **Phase 7** (conversion du devis en commande) : `order_item.service_offering_id`/
+  `service_appointment_id` (mutuellement exclusifs avec `product_id` via une contrainte
+  CHECK), `POST /api/appointments/:id/order`. Un rendez-vous 'completed' avec devis chiffré
+  devient une commande à un seul vendeur/une seule ligne, sur `orders`/`vendor_order`/
+  `payment` inchangés: capture PayPal, transitions de statut, commission (phase 5) et
+  séquestre s'appliquent donc sans aucune modification. La négociation multi-lignes
+  (`quote_request`/`quote` de la cible ci-dessous) reste hors périmètre, non justifiée par
+  un besoin concret pour l'instant.
 - **Correctif de sécurité (hors phasage)** : `organization.status` (`verified` requis) est
   désormais vérifié à chaque point qui expose ou fait circuler de l'argent — création/
   modification de produit et de prestation (`canManageCatalog`), catalogue public
