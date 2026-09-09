@@ -507,13 +507,21 @@ async function organizationRoleFor(userId, organizationId) {
 }
 
 // true si l'appelant peut gérer le catalogue de cette organisation (membre avec un rôle
-// catalogue, ou admin plateforme pour la modération) ; répond déjà 403 sinon.
+// catalogue ET organisation vérifiée, ou admin plateforme qui peut agir avant vérification
+// ou sur une organisation suspendue à des fins de modération) ; répond déjà 403 sinon.
 async function canManageCatalog(req, res, organizationId) {
   if (req.auth.role === 'admin') return true;
   const role = await organizationRoleFor(req.auth.userId, organizationId);
-  if (role && CATALOG_MANAGER_ROLES.includes(role)) return true;
-  res.status(403).json({ success: false, message: 'Droits insuffisants sur cette organisation' });
-  return false;
+  if (!role || !CATALOG_MANAGER_ROLES.includes(role)) {
+    res.status(403).json({ success: false, message: 'Droits insuffisants sur cette organisation' });
+    return false;
+  }
+  const orgResult = await database.query('SELECT status FROM organization WHERE id = $1', [organizationId]);
+  if (orgResult.rows[0]?.status !== 'verified') {
+    res.status(403).json({ success: false, message: 'Cette organisation n’est pas (ou plus) vérifiée' });
+    return false;
+  }
+  return true;
 }
 
 // Identifiant produit lisible mais garanti unique tous vendeurs confondus: product.id
@@ -617,8 +625,10 @@ function mapProductRow(row) {
 const PRODUCT_COLUMNS = `product.id, product.name_fr, product.name_en, product.unit, product.price_usd,
        product.image_url, product.category, product.stock_qty, product.organization_id,
        COALESCE(organization.trade_name, organization.legal_name) AS vendor_name`;
-const PRODUCT_FROM = 'FROM product LEFT JOIN organization ON organization.id = product.organization_id';
+const PRODUCT_FROM = 'FROM product JOIN organization ON organization.id = product.organization_id';
 
+// Vue publique du catalogue (recherche, panier): n'expose jamais un produit dont le
+// vendeur n'est pas 'verified', qu'il soit encore en attente de vérification ou suspendu.
 async function listCatalog({ category, search, vendorId } = {}) {
   if (!database) {
     const searchLower = (search || '').toLowerCase();
@@ -633,7 +643,7 @@ async function listCatalog({ category, search, vendorId } = {}) {
   }
   await syncCatalog();
   const values = [];
-  const filters = [];
+  const filters = [`organization.status = 'verified'`];
   if (category) {
     values.push(category);
     filters.push(`product.category = $${values.length}`);
@@ -648,21 +658,24 @@ async function listCatalog({ category, search, vendorId } = {}) {
     filters.push(`(lower(product.name_fr) LIKE ${placeholder} ESCAPE '\\' OR lower(product.name_en) LIKE ${placeholder} ESCAPE '\\' OR lower(product.id) LIKE ${placeholder} ESCAPE '\\')`);
   }
   const result = await database.query(
-    `SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM}
-     ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY product.id`,
+    `SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM} WHERE ${filters.join(' AND ')} ORDER BY product.id`,
     values
   );
   return result.rows.map(mapProductRow);
 }
 
-async function findProduct(id) {
+// requireVerifiedVendor: true pour une consultation publique (le produit doit être
+// caché si son vendeur n'est pas/plus vérifié, comme listCatalog) ; false pour une
+// consultation interne (réponse à un vendeur/admin juste après avoir créé ou modifié
+// son propre produit, qui doit voir le résultat même avant vérification de son organisation).
+async function findProduct(id, { requireVerifiedVendor = false } = {}) {
   if (!database) {
     const product = PRODUCTS.find((product) => product.id === id);
     return product ? { ...product, vendor: DEFAULT_VENDOR } : null;
   }
   await syncCatalog();
   const result = await database.query(
-    `SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM} WHERE product.id = $1`,
+    `SELECT ${PRODUCT_COLUMNS} ${PRODUCT_FROM} WHERE product.id = $1${requireVerifiedVendor ? " AND organization.status = 'verified'" : ''}`,
     [id]
   );
   return result.rowCount ? mapProductRow(result.rows[0]) : null;
@@ -807,7 +820,7 @@ app.get('/api/currency-rates', async (req, res, next) => {
 // Récupérer un produit par ID
 app.get('/api/products/:id', async (req, res, next) => {
   try {
-    const product = await findProduct(req.params.id);
+    const product = await findProduct(req.params.id, { requireVerifiedVendor: true });
     if (!product) return res.status(404).json({ success: false, message: 'Produit non trouvé' });
     res.json({ success: true, product });
   } catch (error) {
@@ -1203,13 +1216,24 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     await client.query('BEGIN');
     // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
     // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
+    // FOR UPDATE OF product: seule product a besoin d'être verrouillée, pas organization.
     const productResult = await client.query(
-      'SELECT id, price_usd, stock_qty, organization_id FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
+      `SELECT product.id, product.price_usd, product.stock_qty, product.organization_id, organization.status AS organization_status
+       FROM product JOIN organization ON organization.id = product.organization_id
+       WHERE product.id = ANY($1::text[]) ORDER BY product.id FOR UPDATE OF product`,
       [productIds]
     );
     if (productResult.rowCount !== productIds.length) {
       await client.query('ROLLBACK');
       return res.status(400).json({ success: false, message: 'Un produit du panier est introuvable' });
+    }
+    // Un vendeur non (ou plus) vérifié ne peut pas vendre, même si un produit déjà publié
+    // reste techniquement en base (voir canManageCatalog/listCatalog pour les mêmes règles
+    // à la publication et à la recherche).
+    const unavailableProduct = productResult.rows.find((row) => row.organization_status !== 'verified');
+    if (unavailableProduct) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: `Produit temporairement indisponible: ${unavailableProduct.id}` });
     }
     const products = new Map(productResult.rows.map((row) => [row.id, row]));
 
@@ -1677,6 +1701,18 @@ app.post('/api/admin/organizations/:organizationId/payouts', requireAuthenticati
   const client = await database.connect();
   try {
     await client.query('BEGIN');
+    // Un vendeur suspendu/rejeté après coup ne doit plus recevoir de versement automatique:
+    // le montant reste dû (les payment_split ne sont pas touchés) mais son déblocage passe
+    // par une revue manuelle, pas par cette route.
+    const orgResult = await client.query('SELECT status FROM organization WHERE id = $1', [req.params.organizationId]);
+    if (!orgResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Organisation introuvable' });
+    }
+    if (orgResult.rows[0].status !== 'verified') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Cette organisation n’est pas (ou plus) vérifiée: versement bloqué' });
+    }
     // Verrouille ce qu'il y a à verser pour éviter qu'un double clic (ou deux membres du
     // staff agissant en même temps) ne déclenche deux versements pour le même montant.
     // Le verrou reste posé pendant l'appel CinetPay ci-dessous par simplicité: à l'échelle
