@@ -453,6 +453,31 @@ const importStatusSchema = z.object({
   path: ['staffNotes']
 });
 
+const ticketChannelSchema = z.enum(['web', 'whatsapp', 'email', 'phone']);
+const ticketStatusSchema = z.enum(['open', 'pending', 'resolved', 'closed']);
+// Un client connecté ou un visiteur anonyme n'écrit jamais que depuis le web: seul le
+// staff/admin peut déclarer qu'un ticket vient d'un autre canal (voir POST /tickets), en
+// y rattachant soit un customerId existant, soit des coordonnées de contact directes.
+const ticketCreateSchema = z.object({
+  subject: z.string().trim().min(3).max(200),
+  message: z.string().trim().min(1).max(5000),
+  channel: ticketChannelSchema.optional(),
+  customerId: z.string().uuid().optional(),
+  contactName: z.string().trim().min(1).max(200).optional(),
+  contactPhone: z.string().trim().min(1).max(50).optional(),
+  contactEmail: z.string().trim().email().max(320).optional(),
+  'cf-turnstile-response': z.string().max(2048).optional()
+});
+const ticketMessageSchema = z.object({
+  message: z.string().trim().min(1).max(5000)
+});
+const ticketStatusUpdateSchema = z.object({
+  status: ticketStatusSchema
+});
+const ticketAssignSchema = z.object({
+  assigneeUserId: z.string().uuid().nullable()
+});
+
 function requireJwtSecret() {
   if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) throw new Error('JWT_ACCESS_SECRET doit contenir au moins 32 caracteres');
 }
@@ -541,6 +566,32 @@ function requireRole(...roles) {
 // notamment publier un produit sans propriétaire (indiscernable du catalogue MonChantier).
 function requireVendorProfile(req, res, next) {
   if (!req.auth.vendorId) return res.status(403).json({ success: false, message: 'Profil partenaire introuvable — contactez un administrateur' });
+  next();
+}
+
+// Comme requireAuthentication, mais ne bloque jamais: un jeton absent, invalide ou expiré
+// laisse simplement req.auth à null plutôt que de répondre 401. Seul POST /api/tickets en a
+// besoin — c'est le seul point d'écriture où un visiteur anonyme doit pouvoir passer, tout en
+// bénéficiant d'un customerId reconnu quand il se trouve être connecté.
+async function attachOptionalAuth(req, res, next) {
+  const match = /^Bearer (.+)$/.exec(req.get('authorization') || '');
+  if (!match || !database) { req.auth = null; return next(); }
+  try {
+    requireJwtSecret();
+    const payload = jwt.verify(match[1], JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
+    const accountResult = await database.query(
+      `SELECT user_account.id, user_account.customer_id, user_account.role, user_account.is_active, vendor.id AS vendor_id
+       FROM user_account LEFT JOIN vendor ON vendor.user_id = user_account.id
+       WHERE user_account.id = $1`,
+      [payload.sub]
+    );
+    const account = accountResult.rows[0];
+    req.auth = (account && account.is_active)
+      ? { userId: account.id, customerId: account.customer_id, role: account.role, vendorId: account.vendor_id }
+      : null;
+  } catch (error) {
+    req.auth = null;
+  }
   next();
 }
 
@@ -2089,6 +2140,250 @@ app.post('/api/import-requests/:id/cancel', requireAuthentication, requireRole('
     );
     if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande ne peut plus être annulée' });
     res.json({ success: true, request: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Support multicanal: un client connecté ouvre lui-même un ticket depuis le web: le visiteur
+// anonyme peut aussi écrire (protégé par Turnstile, voir attachOptionalAuth ci-dessus), et le
+// staff/admin peut consigner un ticket reçu par WhatsApp, e-mail ou téléphone — canaux sans
+// intégration entrante réelle dans cet environnement (voir backend/notifications.js et
+// README > Sourcing produits pour le même choix sur les demandes d'importation).
+app.post('/api/tickets', attachOptionalAuth, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const parsed = ticketCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Ticket invalide', errors: parsed.error.flatten().fieldErrors });
+  // Seul le visiteur anonyme n'a encore rien prouvé (pas de mot de passe, pas de jeton):
+  // sans CAPTCHA ce point d'entrée public deviendrait un formulaire de spam ouvert.
+  if (!req.auth && !(await checkTurnstile(req, res, parsed.data['cf-turnstile-response']))) return;
+
+  const isStaff = req.auth && ['staff', 'admin'].includes(req.auth.role);
+  let channel = 'web';
+  let customerId = null;
+  let contactName = null;
+  let contactPhone = null;
+  let contactEmail = null;
+
+  if (req.auth && req.auth.role === 'customer') {
+    if (!req.auth.customerId) return res.status(403).json({ success: false, message: 'Profil client introuvable' });
+    customerId = req.auth.customerId;
+  } else if (isStaff) {
+    channel = parsed.data.channel || 'web';
+    if (parsed.data.customerId) {
+      try {
+        const customerCheck = await database.query('SELECT id FROM customer WHERE id = $1', [parsed.data.customerId]);
+        if (!customerCheck.rowCount) return res.status(400).json({ success: false, message: 'Client introuvable' });
+      } catch (error) {
+        return next(error);
+      }
+      customerId = parsed.data.customerId;
+    } else {
+      contactName = parsed.data.contactName || null;
+      contactPhone = parsed.data.contactPhone || null;
+      contactEmail = parsed.data.contactEmail || null;
+      if (!contactName || (!contactPhone && !contactEmail)) {
+        return res.status(400).json({ success: false, message: 'Indiquez un client existant ou des coordonnées de contact (nom + téléphone ou e-mail)' });
+      }
+    }
+  } else {
+    // Visiteur anonyme, ou compte authentifié sans rôle dédié ici (ex: 'vendor'): jamais
+    // rattaché à un canal externe ni à un compte qu'il n'a pas prouvé être le sien.
+    contactName = parsed.data.contactName || null;
+    contactPhone = parsed.data.contactPhone || null;
+    contactEmail = parsed.data.contactEmail || null;
+    if (!contactName || (!contactPhone && !contactEmail)) {
+      return res.status(400).json({ success: false, message: 'Indiquez votre nom et un téléphone ou e-mail pour qu’on puisse vous répondre' });
+    }
+  }
+
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const ticketResult = await client.query(
+      `INSERT INTO ticket (channel, customer_id, contact_name, contact_phone, contact_email, subject)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, channel, status, created_at`,
+      [channel, customerId, contactName, contactPhone, contactEmail, parsed.data.subject]
+    );
+    const ticket = ticketResult.rows[0];
+    await client.query(
+      'INSERT INTO ticket_message (ticket_id, author_type, author_user_id, body) VALUES ($1, $2, $3, $4)',
+      [ticket.id, isStaff ? 'staff' : 'customer', req.auth ? req.auth.userId : null, parsed.data.message]
+    );
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, ticket });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/tickets', requireAuthentication, async (req, res, next) => {
+  const statusParsed = req.query.status ? ticketStatusSchema.safeParse(req.query.status) : null;
+  if (req.query.status && !statusParsed.success) return res.status(400).json({ success: false, message: 'Statut de ticket invalide' });
+  const filters = [];
+  const values = [];
+  if (req.auth.role === 'customer') {
+    if (!req.auth.customerId) return res.json({ success: true, tickets: [] });
+    values.push(req.auth.customerId);
+    filters.push(`ticket.customer_id = $${values.length}`);
+  } else if (!['staff', 'admin'].includes(req.auth.role)) {
+    return res.status(403).json({ success: false, message: 'Droits insuffisants' });
+  } else if (req.query.assigned === 'me') {
+    values.push(req.auth.userId);
+    filters.push(`ticket.assigned_to = $${values.length}`);
+  } else if (req.query.assigned === 'unassigned') {
+    filters.push('ticket.assigned_to IS NULL');
+  }
+  if (statusParsed?.success) {
+    values.push(statusParsed.data);
+    filters.push(`ticket.status = $${values.length}`);
+  }
+  try {
+    const result = await database.query(
+      `SELECT ticket.*, customer.full_name AS customer_name, customer.phone AS customer_phone, customer.email AS customer_email
+       FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id
+       ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+       ORDER BY ticket.updated_at DESC`,
+      values
+    );
+    res.json({ success: true, tickets: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// 404 plutôt que 403 si le ticket existe mais n'appartient pas à l'appelant: même choix que
+// GET /orders/:orderId, pour ne pas confirmer l'existence d'un ticket à un tiers.
+app.get('/api/tickets/:id', requireAuthentication, async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+  try {
+    const ticketResult = await database.query(
+      `SELECT ticket.*, customer.full_name AS customer_name, customer.phone AS customer_phone, customer.email AS customer_email
+       FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id
+       WHERE ticket.id = $1`,
+      [req.params.id]
+    );
+    const ticket = ticketResult.rows[0];
+    const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
+    const isStaff = ['staff', 'admin'].includes(req.auth.role);
+    if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+    const messagesResult = await database.query(
+      'SELECT id, author_type, author_user_id, body, sent_via_channel, created_at FROM ticket_message WHERE ticket_id = $1 ORDER BY created_at ASC',
+      [req.params.id]
+    );
+    res.json({ success: true, ticket, messages: messagesResult.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+  const parsed = ticketMessageSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Message invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    const ticketResult = await database.query(
+      `SELECT ticket.*, customer.phone AS customer_phone, customer.email AS customer_email
+       FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id WHERE ticket.id = $1`,
+      [req.params.id]
+    );
+    const ticket = ticketResult.rows[0];
+    const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
+    const isStaff = ['staff', 'admin'].includes(req.auth.role);
+    if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+
+    // Une réponse staff sur un ticket 'email'/'whatsapp'/'phone' part réellement vers le
+    // client (Resend / Africa's Talking, comme les autres notifications sortantes du dépôt);
+    // 'web' reste consultable uniquement ici, le client y étant déjà connecté. Toujours
+    // best-effort: un envoi externe qui échoue ne doit jamais faire perdre le message déjà
+    // consigné (voir sendOrderConfirmationEmail pour le même principe).
+    let sentViaChannel = false;
+    if (isStaff && ticket.channel !== 'web') {
+      const destinationEmail = ticket.contact_email || ticket.customer_email;
+      const destinationPhone = ticket.contact_phone || ticket.customer_phone;
+      const availability = channelAvailability();
+      try {
+        if (ticket.channel === 'email' && destinationEmail && availability.email) {
+          await sendEmail(destinationEmail, `Réponse à votre ticket MonChantier (${ticket.id.slice(0, 8)}) — ${ticket.subject}`, parsed.data.message);
+          sentViaChannel = true;
+        } else if (ticket.channel === 'whatsapp' && destinationPhone && availability.whatsapp) {
+          await sendWhatsApp(destinationPhone, parsed.data.message);
+          sentViaChannel = true;
+        } else if (ticket.channel === 'phone' && destinationPhone && availability.sms) {
+          await sendSms(destinationPhone, parsed.data.message);
+          sentViaChannel = true;
+        }
+      } catch (error) {
+        console.warn(`Envoi de la réponse ticket via ${ticket.channel} échoué:`, error.message);
+      }
+    }
+
+    const messageResult = await database.query(
+      `INSERT INTO ticket_message (ticket_id, author_type, author_user_id, body, sent_via_channel)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, author_type, author_user_id, body, sent_via_channel, created_at`,
+      [ticket.id, isOwner ? 'customer' : 'staff', req.auth.userId, parsed.data.message, sentViaChannel]
+    );
+    await database.query('UPDATE ticket SET updated_at = now() WHERE id = $1', [ticket.id]);
+    res.status(201).json({ success: true, message: messageResult.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
+  try {
+    const result = await database.query(
+      'UPDATE ticket SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL RETURNING id, status, assigned_to',
+      [req.auth.userId, req.params.id]
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Ce ticket n’est plus disponible pour affectation' });
+    res.json({ success: true, ticket: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Contrairement aux demandes d'importation, tout statut peut transiter vers tout autre
+// (rouvrir un ticket fermé, le repasser 'pending'...): pas de pipeline strict à faire
+// respecter ici, et n'importe quel membre staff/admin peut agir, pas seulement l'agent
+// affecté — un ticket non réclamé doit rester traitable par toute l'équipe en attendant.
+app.patch('/api/tickets/:id/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
+  const parsed = ticketStatusUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
+  try {
+    const result = await database.query(
+      'UPDATE ticket SET status = $2, updated_at = now() WHERE id = $1 RETURNING id, status',
+      [req.params.id, parsed.data.status]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+    res.json({ success: true, ticket: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Réservé à l'admin: réaffecter ou libérer un ticket va au-delà de l'auto-affectation par
+// claim ci-dessus (déjà ouverte à tout le staff).
+app.patch('/api/tickets/:id/assign', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
+  const parsed = ticketAssignSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Affectation invalide' });
+  try {
+    if (parsed.data.assigneeUserId) {
+      const staffCheck = await database.query("SELECT id FROM user_account WHERE id = $1 AND role IN ('staff', 'admin')", [parsed.data.assigneeUserId]);
+      if (!staffCheck.rowCount) return res.status(400).json({ success: false, message: 'Agent introuvable' });
+    }
+    const result = await database.query(
+      'UPDATE ticket SET assigned_to = $2, updated_at = now() WHERE id = $1 RETURNING id, assigned_to',
+      [req.params.id, parsed.data.assigneeUserId]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+    res.json({ success: true, ticket: result.rows[0] });
   } catch (error) {
     next(error);
   }

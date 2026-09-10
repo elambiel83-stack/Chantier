@@ -261,6 +261,49 @@ CREATE TABLE IF NOT EXISTS import_request (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Ticket de support multicanal: un client connecté l'ouvre lui-même depuis le web, mais le
+-- staff peut aussi en créer un pour quelqu'un qui l'a contacté par WhatsApp, e-mail ou
+-- téléphone (canaux sans intégration entrante réelle dans cet environnement — voir
+-- backend/notifications.js). customer_id reste NULL dans ce cas (ou pour un visiteur qui
+-- écrit sans compte) et les coordonnées de contact sont alors obligatoires, faute de quoi le
+-- staff n'aurait aucun moyen de recontacter la personne.
+CREATE TABLE IF NOT EXISTS ticket (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  channel TEXT NOT NULL CHECK (channel IN ('web', 'whatsapp', 'email', 'phone')),
+  customer_id UUID REFERENCES customer(id) ON DELETE SET NULL,
+  contact_name TEXT,
+  contact_phone TEXT,
+  contact_email TEXT,
+  subject TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'pending', 'resolved', 'closed')) DEFAULT 'open',
+  assigned_to UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT ticket_contact_or_customer CHECK (
+    customer_id IS NOT NULL OR (contact_name IS NOT NULL AND (contact_phone IS NOT NULL OR contact_email IS NOT NULL))
+  )
+);
+
+-- Fil de messages d'un ticket. 'system' documente une action automatique (ex: changement de
+-- statut) sans lui prêter un auteur humain qu'elle n'a pas. sent_via_channel distingue un
+-- message réellement transmis au client par e-mail/WhatsApp/SMS (voir POST
+-- /tickets/:id/messages) d'un message seulement consigné (canal 'web', ou historique d'un
+-- appel téléphonique — aucune API SMS/WhatsApp entrante réelle ici).
+CREATE TABLE IF NOT EXISTS ticket_message (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  ticket_id UUID NOT NULL REFERENCES ticket(id) ON DELETE CASCADE,
+  author_type TEXT NOT NULL CHECK (author_type IN ('customer', 'staff', 'system')),
+  author_user_id UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  body TEXT NOT NULL,
+  sent_via_channel BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ticket_customer_id_idx ON ticket(customer_id);
+CREATE INDEX IF NOT EXISTS ticket_assigned_to_idx ON ticket(assigned_to);
+CREATE INDEX IF NOT EXISTS ticket_status_idx ON ticket(status);
+CREATE INDEX IF NOT EXISTS ticket_message_ticket_id_idx ON ticket_message(ticket_id);
+
 CREATE INDEX IF NOT EXISTS product_category_idx ON product(category);
 CREATE INDEX IF NOT EXISTS import_request_customer_id_idx ON import_request(customer_id);
 CREATE INDEX IF NOT EXISTS import_request_assigned_to_idx ON import_request(assigned_to);

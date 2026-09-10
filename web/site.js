@@ -106,6 +106,7 @@
   const vendorLink = document.getElementById('vendor-link');
   const ordersLink = document.getElementById('orders-link');
   const staffImportsLink = document.getElementById('staff-imports-link');
+  const staffTicketsLink = document.getElementById('staff-tickets-link');
   const authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
   if (authLink && authUser) {
     authLink.textContent = authUser.email || 'Mon compte';
@@ -116,6 +117,7 @@
   if (authUser && ['staff', 'admin'].includes(authUser.role)) {
     staffLink?.classList.remove('hidden');
     staffImportsLink?.classList.remove('hidden');
+    staffTicketsLink?.classList.remove('hidden');
   }
   if (vendorLink && authUser && authUser.role === 'vendor') {
     vendorLink.classList.remove('hidden');
