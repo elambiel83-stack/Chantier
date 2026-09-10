@@ -44,6 +44,16 @@ export const AuthProvider = ({ children }) => {
     setSession({ accessToken: data.accessToken, refreshToken: data.refreshToken, user: data.user });
   };
 
+  const loginWithGoogle = async (idToken) => {
+    const data = await request('/auth/google', { method: 'POST', body: { credential: idToken } });
+    setSession({ accessToken: data.accessToken, refreshToken: data.refreshToken, user: data.user });
+  };
+
+  const loginWithFacebook = async (accessToken) => {
+    const data = await request('/auth/facebook', { method: 'POST', body: { accessToken } });
+    setSession({ accessToken: data.accessToken, refreshToken: data.refreshToken, user: data.user });
+  };
+
   const continueAsGuest = () => {
     setSession({ guest: true, user: { email: null, name: 'Visiteur' } });
   };
@@ -101,6 +111,8 @@ export const AuthProvider = ({ children }) => {
         isAuthenticated: Boolean(session?.accessToken),
         login,
         register,
+        loginWithGoogle,
+        loginWithFacebook,
         continueAsGuest,
         logout,
         authFetch,

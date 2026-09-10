@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="MonChantier - Administration">
+  <meta name="theme-color" content="#17212b">
+  <title>MonChantier - Administration</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="assets/monchantier_logo.svg" type="image/svg+xml">
+  <script src="config.js"></script>
+</head>
+<body>
+  <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-white focus:px-3 focus:py-2">Aller au contenu principal</a>
+  <header class="bg-white sticky top-0 z-30">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+      <a href="index.html" class="flex items-center gap-2" aria-label="Retour à MonChantier">
+        <img src="assets/monchantier_logo.svg" alt="" class="h-10 w-auto">
+        <span class="brand-name font-bold text-xl">MonChantier</span>
+      </a>
+      <div class="flex items-center gap-3 text-sm">
+        <span id="admin-identity" class="hidden sm:inline text-slate-600"></span>
+        <button id="logout-button" type="button" class="outline-button border px-3 py-2">Déconnexion</button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main-content" class="max-w-6xl mx-auto px-4 py-8" tabindex="-1">
+    <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
+      <div>
+        <p class="text-sm font-semibold uppercase tracking-wide text-red-700">Espace sécurisé</p>
+        <h1 class="text-3xl font-extrabold mt-1">Administration</h1>
+        <p class="text-slate-600 mt-2">Supervision des commandes et des accès.</p>
+      </div>
+      <button id="refresh-button" type="button" class="dark-button text-white px-4 py-2">Actualiser</button>
+    </div>
+
+    <div id="page-status" class="hidden mb-6 rounded-lg border px-4 py-3" role="status" aria-live="polite"></div>
+
+    <section aria-labelledby="overview-title" class="mb-8">
+      <h2 id="overview-title" class="text-lg font-bold mb-3">Vue d’ensemble</h2>
+      <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div class="admin-stat"><span>Total</span><strong id="stat-total">-</strong></div>
+        <div class="admin-stat"><span>En attente</span><strong id="stat-pending">-</strong></div>
+        <div class="admin-stat"><span>Confirmées</span><strong id="stat-confirmed">-</strong></div>
+        <div class="admin-stat"><span>En livraison</span><strong id="stat-delivering">-</strong></div>
+        <div class="admin-stat"><span>Terminées</span><strong id="stat-completed">-</strong></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="orders-title" class="page-surface p-4 md:p-6 mb-8">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+        <div>
+          <h2 id="orders-title" class="text-xl font-bold">Commandes</h2>
+          <p class="text-sm text-slate-600">Les transitions sont contrôlées par le serveur.</p>
+        </div>
+        <label class="text-sm font-medium">Filtrer
+          <select id="order-filter" class="ml-2 px-3 py-2 border">
+            <option value="">Toutes</option>
+            <option value="pending">En attente</option>
+            <option value="confirmed">Confirmées</option>
+            <option value="delivering">En livraison</option>
+            <option value="completed">Terminées</option>
+            <option value="cancelled">Annulées</option>
+          </select>
+        </label>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="admin-table">
+          <thead><tr><th>Commande</th><th>Client</th><th>Total</th><th>Créée le</th><th>Statut</th><th>Affectée à</th></tr></thead>
+          <tbody id="orders-body"><tr><td colspan="6" class="empty-state">Chargement...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="grid lg:grid-cols-[1.2fr_.8fr] gap-8">
+      <section aria-labelledby="users-title" class="page-surface p-4 md:p-6">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+          <div><h2 id="users-title" class="text-xl font-bold">Utilisateurs</h2><p class="text-sm text-slate-600">Attribuer un rôle exige une permission administrateur.</p></div>
+          <label class="sr-only" for="user-search">Rechercher un utilisateur</label>
+          <input id="user-search" type="search" placeholder="Rechercher par e-mail" class="px-3 py-2 border w-full sm:w-52">
+        </div>
+        <div class="overflow-x-auto">
+          <table class="admin-table">
+            <thead><tr><th>E-mail</th><th>Rôle</th><th>État</th></tr></thead>
+            <tbody id="users-body"><tr><td colspan="3" class="empty-state">Chargement...</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section aria-labelledby="audit-title" class="page-surface p-4 md:p-6">
+        <div class="mb-4"><h2 id="audit-title" class="text-xl font-bold">Journal d’audit</h2><p class="text-sm text-slate-600">Dernières actions sensibles.</p></div>
+        <ol id="audit-list" class="audit-list"><li class="empty-state">Chargement...</li></ol>
+      </section>
+    </div>
+  </main>
+  <script src="admin.js"></script>
+</body>
+</html>

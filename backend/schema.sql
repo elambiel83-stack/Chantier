@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS user_account (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Comptes créés ou reliés via Google/Facebook: pas de mot de passe local.
+ALTER TABLE user_account ALTER COLUMN password_hash DROP NOT NULL;
+ALTER TABLE user_account ADD COLUMN IF NOT EXISTS google_sub TEXT UNIQUE;
+ALTER TABLE user_account ADD COLUMN IF NOT EXISTS facebook_id TEXT UNIQUE;
+
 CREATE TABLE IF NOT EXISTS refresh_token (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
@@ -53,6 +58,31 @@ CREATE TABLE IF NOT EXISTS refresh_token (
   revoked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS password_reset_token (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  channel TEXT NOT NULL CHECK (channel IN ('email', 'sms', 'whatsapp')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS password_reset_token_user_idx ON password_reset_token(user_id, created_at DESC);
+
+-- Journal des actions sensibles d'autorisation et d'administration.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  actor_user_id UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  target_user_id UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  details JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS audit_log_actor_idx ON audit_log(actor_user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_log_target_idx ON audit_log(target_user_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS customer_address (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -102,7 +132,7 @@ CREATE TABLE IF NOT EXISTS order_item (
 CREATE TABLE IF NOT EXISTS payment (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL CHECK (provider IN ('paypal', 'mobile_money')),
+  provider TEXT NOT NULL CHECK (provider IN ('paypal', 'mobile_money', 'stripe_card', 'google_pay')),
   status TEXT NOT NULL CHECK (status IN ('pending', 'authorized', 'paid', 'failed', 'cancelled', 'refunded')) DEFAULT 'pending',
   amount NUMERIC(14,2) NOT NULL CHECK (amount >= 0),
   currency CHAR(3) NOT NULL CHECK (currency IN ('USD', 'CDF', 'EUR')),
@@ -110,6 +140,9 @@ CREATE TABLE IF NOT EXISTS payment (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE payment DROP CONSTRAINT IF EXISTS payment_provider_check;
+ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('paypal', 'mobile_money', 'stripe_card', 'google_pay'));
 
 -- Jeton à usage unique transmis dans l'URL de retour PayPal (capture sans session).
 ALTER TABLE payment ADD COLUMN IF NOT EXISTS confirmation_token_hash TEXT;

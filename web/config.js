@@ -35,6 +35,17 @@ const API_CONFIG = {
     cart: '/cart',
     cartById: (sessionId) => `/cart/${sessionId}`,
     orders: '/orders',
+    authMe: '/auth/me',
+    forgotPassword: '/auth/forgot-password',
+    resetPassword: '/auth/reset-password',
+    socialConfig: '/auth/social-config',
+    authGoogle: '/auth/google',
+    authFacebook: '/auth/facebook',
+    adminUsers: '/admin/users',
+    adminAuditLog: '/admin/audit-log',
+    orderStatus: (orderId) => `/orders/${orderId}/status`,
+    userRole: (userId) => `/admin/users/${userId}/role`,
+    stripeOrder: (orderId) => `/orders/${orderId}/stripe`,
     paypalOrder: (orderId) => `/orders/${orderId}/paypal`,
     paypalCapture: (orderId) => `/orders/${orderId}/paypal/capture`
   },
@@ -42,6 +53,9 @@ const API_CONFIG = {
   // Timeout pour les requêtes (en ms)
   timeout: 10000
 };
+
+// Utile pour diagnostiquer une erreur réseau depuis la console du navigateur.
+window.API_CONFIG = API_CONFIG;
 
 // Les taux ci-dessous ne sont qu'un repli hors ligne: la référence est /api/currency-rates,
 // c'est-à-dire la table utilisée par le backend pour facturer.
@@ -111,8 +125,18 @@ window.apiCall = async function(endpoint, options = {}, allowRefresh = true) {
     config.body = JSON.stringify(options.body);
   }
 
+  let response;
   try {
-    const response = await fetch(url, config);
+    response = await fetch(url, config);
+  } catch (networkError) {
+    // fetch ne rejette ainsi que si la requête n'est jamais partie: mauvaise origine,
+    // serveur arrêté, contenu mixte ou port non exposé. Le message par défaut
+    // ("Failed to fetch") ne dit pas quelle adresse a été tentée.
+    console.error('Erreur API: API injoignable', url, networkError);
+    throw new Error(`API injoignable à ${API_CONFIG.baseURL}. Vérifiez que le backend tourne et que la page est ouverte sur la même adresse que l'API.`);
+  }
+
+  try {
     const data = await response.json().catch(() => ({}));
 
     // Jeton expiré: on le renouvelle une seule fois puis on rejoue la requête.
@@ -123,7 +147,9 @@ window.apiCall = async function(endpoint, options = {}, allowRefresh = true) {
     }
 
     if (!response.ok) {
-      throw new Error(data.message || 'Erreur API');
+      // Sans corps JSON (passerelle, quota dépassé, serveur arrêté), le code HTTP est
+      // la seule information utile: il ne faut pas la perdre.
+      throw new Error(data.message || `Erreur API (HTTP ${response.status} sur ${endpoint})`);
     }
 
     return data;
