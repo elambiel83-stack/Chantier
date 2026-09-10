@@ -10,6 +10,7 @@ import {
   Alert,
   TextInput,
 } from 'react-native';
+import * as Location from 'expo-location';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
 
@@ -21,6 +22,27 @@ export default function CartScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [paymentProvider, setPaymentProvider] = useState('airtel_money');
   const [submitting, setSubmitting] = useState(false);
+  const [deliveryPosition, setDeliveryPosition] = useState(null);
+  const [locatingDelivery, setLocatingDelivery] = useState(false);
+
+  // Optionnelle: une commande reste possible sans position (numéro de téléphone/adresse
+  // verbale restent le repli habituel dans ce marché) — jamais bloquante en cas de refus.
+  const shareDeliveryLocation = async () => {
+    setLocatingDelivery(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Position non partagée', "L'autorisation de localisation a été refusée.");
+        return;
+      }
+      const position = await Location.getCurrentPositionAsync({});
+      setDeliveryPosition({ latitude: position.coords.latitude, longitude: position.coords.longitude });
+    } catch (error) {
+      Alert.alert('Position non partagée', "Impossible d'obtenir votre position pour le moment.");
+    } finally {
+      setLocatingDelivery(false);
+    }
+  };
 
   const promptForLogin = () => {
     Alert.alert(
@@ -56,6 +78,7 @@ export default function CartScreen({ navigation }) {
           currency,
           paymentProvider,
           items: cart.map((item) => ({ id: item.id, qty: item.quantity })),
+          ...(deliveryPosition ? { deliveryLatitude: deliveryPosition.latitude, deliveryLongitude: deliveryPosition.longitude } : {}),
         },
       });
 
@@ -72,6 +95,7 @@ export default function CartScreen({ navigation }) {
       setFullName('');
       setPhone('');
       setEmail('');
+      setDeliveryPosition(null);
       const payment = data.payment;
       Alert.alert(
         'Commande créée',
@@ -182,6 +206,16 @@ export default function CartScreen({ navigation }) {
             </TouchableOpacity>
           ))}
         </View>
+        <Text style={styles.selectionLabel}>Position de livraison (optionnel)</Text>
+        <TouchableOpacity
+          style={styles.locationButton}
+          onPress={shareDeliveryLocation}
+          disabled={locatingDelivery}
+        >
+          <Text style={styles.locationButtonText}>
+            {locatingDelivery ? 'Localisation...' : deliveryPosition ? 'Position partagée ✓' : 'Partager ma position'}
+          </Text>
+        </TouchableOpacity>
         <Text style={styles.selectionLabel}>Moyen de paiement</Text>
         <View style={styles.optionRow}>
           <TouchableOpacity style={[styles.option, paymentProvider === 'airtel_money' && styles.optionSelected]} onPress={() => setPaymentProvider('airtel_money')}>
@@ -393,6 +427,19 @@ const styles = StyleSheet.create({
   },
   optionTextSelected: {
     color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  locationButton: {
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingVertical: 10,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  locationButtonText: {
+    color: '#1e293b',
     fontSize: 13,
     fontWeight: '600',
   },

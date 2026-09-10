@@ -2,6 +2,12 @@
 // canal échoue explicitement (.status = 503) s'il n'est pas configuré, plutôt que de
 // simuler un envoi réussi — même principe que PayPal/Airtel Money/Orange Money.
 
+// Un appel externe qui ne répond jamais (proxy filtrant, fournisseur en panne...) ne doit
+// pas laisser une requête pendre indéfiniment ni fuir une promesse jamais résolue — utile
+// en particulier pour les envois "best-effort" qui ne sont jamais attendus par l'appelant
+// (voir sendOrderConfirmationEmail dans server.js).
+const REQUEST_TIMEOUT_MS = 10_000;
+
 function requireEnv(name) {
   const value = process.env[name];
   if (!value) throw Object.assign(new Error(`${name} non configuré`), { status: 503 });
@@ -14,7 +20,8 @@ async function sendEmail(to, subject, text) {
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from, to, subject, text })
+    body: JSON.stringify({ from, to, subject, text }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   if (!response.ok) throw new Error(`Envoi e-mail refusé (${response.status})`);
 }
@@ -26,7 +33,8 @@ async function sendSms(to, message) {
   const response = await fetch(`https://${host}/version1/messaging`, {
     method: 'POST',
     headers: { apiKey, 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
-    body: new URLSearchParams({ username, to, message })
+    body: new URLSearchParams({ username, to, message }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   if (!response.ok) throw new Error(`Envoi SMS refusé (${response.status})`);
   const data = await response.json().catch(() => null);
@@ -53,7 +61,8 @@ async function sendWhatsApp(to, message) {
       username,
       phoneNumber: senderNumber,
       Recipients: [{ number: to, message: { type: 'text', body: { text: message } } }]
-    })
+    }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   if (!response.ok) throw new Error(`Envoi WhatsApp refusé (${response.status})`);
 }
