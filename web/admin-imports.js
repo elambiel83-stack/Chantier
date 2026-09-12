@@ -71,12 +71,12 @@
       const badge = STATUS_BADGE[request.status] || 'bg-slate-100 text-slate-700';
       const acting = canAct(request);
       const canClaim = me.role === 'staff' && request.status === 'submitted' && !request.assigned_to;
-      const canQuote = acting && request.status === 'submitted';
+      const canQuote = request.status === 'submitted' && (me.role === 'admin' || request.assigned_to === me.id);
       const canReview = acting && request.status === 'quoted';
       const canOrder = acting && request.status === 'compliance_cleared';
       const canDeliver = acting && request.status === 'ordered';
-      const canReject = acting && ['submitted', 'quoted', 'compliance_cleared'].includes(request.status);
-      const canCancel = acting && ['submitted', 'quoted', 'compliance_cleared', 'ordered'].includes(request.status);
+      const canReject = ['submitted', 'quoted', 'compliance_cleared'].includes(request.status) && (me.role === 'admin' || request.assigned_to === me.id);
+      const canCancel = ['submitted', 'quoted', 'compliance_cleared', 'ordered'].includes(request.status) && (me.role === 'admin' || request.assigned_to === me.id);
 
       return `
         <div class="bg-white rounded-xl p-4 shadow" data-request-id="${request.id}">
