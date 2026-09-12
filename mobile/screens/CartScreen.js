@@ -46,7 +46,7 @@ export default function CartScreen({ navigation }) {
       Alert.alert('Devise non prise en charge', 'PayPal est disponible en USD ou EUR.');
       return;
     }
-    if (paymentProvider === 'cinetpay' && currency === 'EUR') {
+    if (paymentProvider === 'cinetpay' && !['USD', 'CDF'].includes(currency)) {
       Alert.alert('Devise non prise en charge', 'CinetPay est disponible en USD ou CDF.');
       return;
     }
