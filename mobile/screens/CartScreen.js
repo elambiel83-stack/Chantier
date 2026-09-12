@@ -66,7 +66,9 @@ export default function CartScreen({ navigation }) {
       if (paymentProvider === 'paypal' || paymentProvider === 'cinetpay') {
         const providerLabel = paymentProvider === 'paypal' ? 'PayPal' : 'CinetPay';
         const paymentData = await authFetch(`/orders/${data.order.id}/${paymentProvider}`, { method: 'POST' });
-        const redirectUrl = paymentProvider === 'paypal' ? paymentData.approvalUrl : paymentData.paymentUrl;
+        const redirectUrl = paymentProvider === 'paypal'
+          ? paymentData.approvalUrl
+          : (paymentData.paymentUrl || paymentData.approvalUrl || paymentData.redirectUrl);
         if (!redirectUrl) throw new Error(`Paiement ${providerLabel} indisponible`);
         await Linking.openURL(redirectUrl);
         // Le panier reste intact tant que la confirmation du prestataire n'est pas faite.
