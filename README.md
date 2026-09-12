@@ -1,6 +1,85 @@
 # Chantier
 vente en ligne des matériaux et services de construction
 
+## Démarrage rapide (5 min)
+
+### Prérequis
+
+- Docker + Docker Compose
+- Node.js 20+ et npm (pour tests backend et app mobile)
+
+### 1) Préparer les variables d'environnement
+
+```bash
+cp backend/.env.example backend/.env
+cp mobile/.env.example mobile/.env.local
+```
+
+### 2) Lancer la stack locale
+
+```bash
+docker compose up -d --build
+```
+
+### 3) Vérifier la santé de l'API
+
+```bash
+curl -fsS http://127.0.0.1:3000/healthz
+```
+
+Si la commande retourne un JSON avec `"ok": true`, la stack est prête.
+
+## Vue d’ensemble du monorepo
+
+- `backend/` : API Express, authentification, paiements, accès PostgreSQL et schéma (`schema.sql`).
+- `web/` : front web statique servi par le backend en production.
+- `mobile/` : application React Native Expo consommant la même API.
+
+Flux commun : `web` et `mobile` appellent `backend` via `/api`, et `backend` persiste dans PostgreSQL.
+
+## Variables d’environnement (principales)
+
+| Variable | Rôle | Obligatoire | Environnements |
+| --- | --- | --- | --- |
+| `DATABASE_URL` | Connexion PostgreSQL backend | Oui | Dev, Prod |
+| `JWT_ACCESS_SECRET` | Secret JWT (>= 32 caractères) | Oui | Dev, Prod |
+| `APP_URL` | URL publique pour retours paiement | Oui | Prod (recommandé en dev) |
+| `CORS_ORIGIN` | Origines autorisées CORS | Oui | Dev, Prod |
+| `TRUST_PROXY` | Nombre de proxys de confiance | Oui (si proxy) | Prod |
+| `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | Paiement PayPal | Optionnel (selon usage) | Dev (sandbox), Prod |
+| `CINETPAY_API_KEY` / `CINETPAY_SITE_ID` | Paiement CinetPay | Optionnel (selon usage) | Dev, Prod |
+| `AIRTEL_MONEY_PAYOUT_NUMBER` / `ORANGE_MONEY_PAYOUT_NUMBER` | Numéros marchands paiement manuel | Optionnel (selon usage) | Dev, Prod |
+| `SENTRY_DSN` | Remontée d’erreurs Sentry | Optionnel | Prod |
+| `GOOGLE_CLIENT_IDS` / `APPLE_CLIENT_IDS` | Connexion sociale backend | Optionnel (selon usage) | Dev, Prod |
+| `TURNSTILE_SECRET_KEY` | Vérification CAPTCHA backend | Optionnel | Prod |
+| `EXPO_PUBLIC_API_BASE_URL` (mobile) | URL API consommée par l’app mobile | Oui (mobile) | Dev, Prod |
+
+Voir aussi `backend/.env.example` et `mobile/.env.example` pour la liste complète.
+
+## Tests & validation
+
+### Backend
+
+```bash
+cd backend
+npm test
+```
+
+### Web
+
+Le dossier `web/` ne dispose pas encore de tests automatisés.
+
+### Mobile
+
+Commandes utiles de vérification locale :
+
+```bash
+cd mobile
+npm start
+npm run android
+npm run ios
+```
+
 ## Base de données
 
 Le fichier `backend/schema.sql` est idempotent et fait aussi office de migration : il doit être
@@ -298,3 +377,24 @@ manuellement un paiement Airtel/Orange Money avant de confirmer.
 La gestion des rôles (`PATCH /api/admin/users/:userId/role`) n’a pas d’interface : l’API ne propose
 aucune route pour lister les utilisateurs, donc l’attribution de rôles reste à faire via un accès
 direct à la base (voir ci-dessus) ou un appel API avec l’identifiant utilisateur déjà connu.
+
+## Checklist mise en production
+
+- [ ] Secrets de prod définis (`JWT_ACCESS_SECRET`, clés paiement, `DATABASE_URL`, etc.).
+- [ ] `backend/schema.sql` rejoué au déploiement (ou via le conteneur backend).
+- [ ] `TRUST_PROXY` correctement réglé selon la chaîne de reverse proxy.
+- [ ] TLS et domaine validés (Caddy ou proxy managé).
+- [ ] `GET /healthz` retourne un état sain.
+- [ ] Flux paiement PayPal et/ou CinetPay vérifiés en environnement sandbox.
+
+## Contribution
+
+Consultez [CONTRIBUTING.md](CONTRIBUTING.md) pour le workflow de contribution attendu.
+
+## Sécurité
+
+Consultez [SECURITY.md](SECURITY.md) pour signaler une vulnérabilité de manière responsable.
+
+## Licence
+
+Ce dépôt est distribué sous licence MIT. Voir [LICENSE](LICENSE).

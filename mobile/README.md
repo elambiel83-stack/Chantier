@@ -135,16 +135,32 @@ expo start -c
 
 ## 📦 Build pour production
 
-### Android APK
+Le workflow recommandé Expo est désormais **EAS Build**.
+
+### 1) Installer EAS CLI
 
 ```bash
-expo build:android
+npm install -g eas-cli
 ```
 
-### iOS App
+### 2) Se connecter à Expo
 
 ```bash
-expo build:ios
+eas login
+```
+
+### 3) Lancer les builds
+
+**Android (APK/AAB) :**
+
+```bash
+eas build --platform android
+```
+
+**iOS :**
+
+```bash
+eas build --platform ios
 ```
 
 ## 🎨 Personnalisation
@@ -165,10 +181,10 @@ Remplacez les images dans `assets/` :
 
 ## 🌐 Déploiement
 
-### Publication sur Expo
+### Publication OTA (updates)
 
 ```bash
-expo publish
+eas update
 ```
 
 ### App Stores
