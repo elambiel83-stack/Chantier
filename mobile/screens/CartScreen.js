@@ -70,7 +70,15 @@ export default function CartScreen({ navigation }) {
           ? paymentData.approvalUrl
           : (paymentData.paymentUrl || paymentData.approvalUrl || paymentData.redirectUrl);
         if (!redirectUrl) throw new Error(`Paiement ${providerLabel} indisponible`);
-        await Linking.openURL(redirectUrl);
+        try {
+          await Linking.openURL(redirectUrl);
+        } catch (openError) {
+          Alert.alert(
+            `Paiement ${providerLabel}`,
+            `Commande créée, mais l'ouverture automatique a échoué. Ouvrez ce lien manuellement :\n${redirectUrl}`
+          );
+          return;
+        }
         // Le panier reste intact tant que la confirmation du prestataire n'est pas faite.
         Alert.alert(`Paiement ${providerLabel}`, 'Finalisez le paiement dans votre navigateur pour confirmer la commande.');
         return;
@@ -192,16 +200,36 @@ export default function CartScreen({ navigation }) {
         </View>
         <Text style={styles.selectionLabel}>Moyen de paiement</Text>
         <View style={styles.optionRow}>
-          <TouchableOpacity style={[styles.option, paymentProvider === 'airtel_money' && styles.optionSelected]} onPress={() => setPaymentProvider('airtel_money')}>
+          <TouchableOpacity
+            style={[styles.option, paymentProvider === 'airtel_money' && styles.optionSelected]}
+            onPress={() => setPaymentProvider('airtel_money')}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: paymentProvider === 'airtel_money' }}
+          >
             <Text style={paymentProvider === 'airtel_money' ? styles.optionTextSelected : styles.optionText}>Airtel Money</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.option, paymentProvider === 'orange_money' && styles.optionSelected]} onPress={() => setPaymentProvider('orange_money')}>
+          <TouchableOpacity
+            style={[styles.option, paymentProvider === 'orange_money' && styles.optionSelected]}
+            onPress={() => setPaymentProvider('orange_money')}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: paymentProvider === 'orange_money' }}
+          >
             <Text style={paymentProvider === 'orange_money' ? styles.optionTextSelected : styles.optionText}>Orange Money</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.option, paymentProvider === 'paypal' && styles.optionSelected]} onPress={() => setPaymentProvider('paypal')}>
+          <TouchableOpacity
+            style={[styles.option, paymentProvider === 'paypal' && styles.optionSelected]}
+            onPress={() => setPaymentProvider('paypal')}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: paymentProvider === 'paypal' }}
+          >
             <Text style={paymentProvider === 'paypal' ? styles.optionTextSelected : styles.optionText}>PayPal</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.option, paymentProvider === 'cinetpay' && styles.optionSelected]} onPress={() => setPaymentProvider('cinetpay')}>
+          <TouchableOpacity
+            style={[styles.option, paymentProvider === 'cinetpay' && styles.optionSelected]}
+            onPress={() => setPaymentProvider('cinetpay')}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: paymentProvider === 'cinetpay' }}
+          >
             <Text style={paymentProvider === 'cinetpay' ? styles.optionTextSelected : styles.optionText}>CinetPay</Text>
           </TouchableOpacity>
         </View>
