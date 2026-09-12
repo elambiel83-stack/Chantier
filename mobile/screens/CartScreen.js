@@ -46,6 +46,10 @@ export default function CartScreen({ navigation }) {
       Alert.alert('Devise non prise en charge', 'PayPal est disponible en USD ou EUR.');
       return;
     }
+    if (paymentProvider === 'cinetpay' && currency === 'EUR') {
+      Alert.alert('Devise non prise en charge', 'CinetPay est disponible en USD ou CDF.');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -59,12 +63,14 @@ export default function CartScreen({ navigation }) {
         },
       });
 
-      if (paymentProvider === 'paypal') {
-        const paypalData = await authFetch(`/orders/${data.order.id}/paypal`, { method: 'POST' });
-        if (!paypalData.approvalUrl) throw new Error('Paiement PayPal indisponible');
-        await Linking.openURL(paypalData.approvalUrl);
-        // Le panier reste intact tant que PayPal n'a pas confirmé le paiement.
-        Alert.alert('Paiement PayPal', 'Finalisez le paiement dans votre navigateur pour confirmer la commande.');
+      if (paymentProvider === 'paypal' || paymentProvider === 'cinetpay') {
+        const providerLabel = paymentProvider === 'paypal' ? 'PayPal' : 'CinetPay';
+        const paymentData = await authFetch(`/orders/${data.order.id}/${paymentProvider}`, { method: 'POST' });
+        const redirectUrl = paymentProvider === 'paypal' ? paymentData.approvalUrl : paymentData.paymentUrl;
+        if (!redirectUrl) throw new Error(`Paiement ${providerLabel} indisponible`);
+        await Linking.openURL(redirectUrl);
+        // Le panier reste intact tant que la confirmation du prestataire n'est pas faite.
+        Alert.alert(`Paiement ${providerLabel}`, 'Finalisez le paiement dans votre navigateur pour confirmer la commande.');
         return;
       }
 
@@ -192,6 +198,9 @@ export default function CartScreen({ navigation }) {
           </TouchableOpacity>
           <TouchableOpacity style={[styles.option, paymentProvider === 'paypal' && styles.optionSelected]} onPress={() => setPaymentProvider('paypal')}>
             <Text style={paymentProvider === 'paypal' ? styles.optionTextSelected : styles.optionText}>PayPal</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.option, paymentProvider === 'cinetpay' && styles.optionSelected]} onPress={() => setPaymentProvider('cinetpay')}>
+            <Text style={paymentProvider === 'cinetpay' ? styles.optionTextSelected : styles.optionText}>CinetPay</Text>
           </TouchableOpacity>
         </View>
         <TouchableOpacity
