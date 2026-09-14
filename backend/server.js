@@ -1383,12 +1383,6 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsedCapture = paypalCaptureSchema.safeParse(req.body);
   if (!parsedCapture.success) return res.status(400).json({ success: false, message: 'Jeton de confirmation manquant' });
-  const releasePendingCapture = async () => {
-    await database.query(
-      "UPDATE payment SET status = 'pending', updated_at = now() WHERE order_id = $1 AND provider = 'paypal' AND status = 'authorized'",
-      [req.params.orderId]
-    );
-  };
   try {
     await expirePendingOrders([req.params.orderId]);
     const paymentResult = await database.query(
@@ -1402,6 +1396,12 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
     if (!tokensMatch(parsedCapture.data.confirmationToken, payment.confirmation_token_hash)) {
       return res.status(403).json({ success: false, message: 'Jeton de confirmation invalide' });
     }
+    const releasePendingCapture = async () => {
+      await database.query(
+        "UPDATE payment SET status = 'pending', updated_at = now() WHERE id = $1 AND status = 'authorized'",
+        [payment.id]
+      );
+    };
     if (payment.status === 'paid') return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
     if (payment.status !== 'pending') return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
 
@@ -1484,9 +1484,14 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
       }
       if (lockedPayment.status !== 'authorized' || lockedPayment.order_status !== 'pending') {
         if (lockedPayment.status === 'authorized') {
-          await finalizeClient.query("UPDATE payment SET status = 'pending', updated_at = now() WHERE id = $1 AND status = 'authorized'", [payment.id]);
+          await finalizeClient.query(
+            "UPDATE payment SET status = $2, updated_at = now() WHERE id = $1 AND status = 'authorized'",
+            [payment.id, lockedPayment.order_status === 'cancelled' ? 'cancelled' : 'failed']
+          );
+          await finalizeClient.query('COMMIT');
+        } else {
+          await finalizeClient.query('ROLLBACK');
         }
-        await finalizeClient.query('ROLLBACK');
         return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
       }
       await finalizeClient.query(
