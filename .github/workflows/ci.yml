@@ -24,7 +24,11 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: ******127.0.0.1:5432/chantier_test
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: chantier_test
+      PGUSER: postgres
+      PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

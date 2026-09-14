@@ -5,9 +5,10 @@ const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { Pool } = require('pg');
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const DATABASE_URL = process.env.DATABASE_URL || `postgresql://${process.env.PGUSER || 'postgres'}:${process.env.PGPASSWORD || 'postgres'}@${process.env.PGHOST || '127.0.0.1'}:${process.env.PGPORT || '5432'}/${process.env.PGDATABASE || 'chantier_test'}`;
+const HAS_DATABASE = Boolean(process.env.DATABASE_URL || process.env.PGHOST || process.env.PGDATABASE);
 
-if (!DATABASE_URL) {
+if (!HAS_DATABASE) {
   test('integration tests require DATABASE_URL', { skip: true }, () => {});
 } else {
   const PORT = 4101;
@@ -147,7 +148,7 @@ if (!DATABASE_URL) {
       method,
       headers: {
         ...(body ? { 'Content-Type': 'application/json' } : {}),
-        ...(token ? { Authorization: `****** } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...headers
       },
       body: body ? JSON.stringify(body) : undefined
