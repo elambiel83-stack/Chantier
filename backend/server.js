@@ -434,6 +434,7 @@ function getOrderReservationExpiresAt() {
 async function expirePendingOrdersInTransaction(client, orderIds) {
   const params = [];
   const filters = ["status = 'pending'", 'reservation_expires_at IS NOT NULL', 'reservation_expires_at <= now()'];
+  filters.push("EXISTS (SELECT 1 FROM payment WHERE payment.order_id = orders.id AND payment.status = 'pending')");
   if (orderIds?.length) {
     params.push(orderIds);
     filters.push(`id = ANY($${params.length}::uuid[])`);
@@ -648,10 +649,6 @@ async function finalizeCinetpayPayment(transactionId) {
       return null;
     }
     await expirePendingOrdersInTransaction(client, [payment.order_id]);
-    if (payment.status !== 'pending') {
-      await client.query('COMMIT');
-      return { orderId: payment.order_id, status: payment.status === 'paid' ? 'confirmed' : payment.status };
-    }
     const refreshedPaymentResult = await client.query(
       `SELECT payment.id, payment.order_id, payment.amount, payment.currency, payment.status, orders.status AS order_status
        FROM payment
@@ -1386,6 +1383,12 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsedCapture = paypalCaptureSchema.safeParse(req.body);
   if (!parsedCapture.success) return res.status(400).json({ success: false, message: 'Jeton de confirmation manquant' });
+  const releasePendingCapture = async () => {
+    await database.query(
+      "UPDATE payment SET status = 'pending', updated_at = now() WHERE order_id = $1 AND provider = 'paypal' AND status = 'authorized'",
+      [req.params.orderId]
+    );
+  };
   try {
     await expirePendingOrders([req.params.orderId]);
     const paymentResult = await database.query(
@@ -1401,19 +1404,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
     }
     if (payment.status === 'paid') return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
     if (payment.status !== 'pending') return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
-    const accessToken = await getPaypalAccessToken();
-    const paypalResponse = await fetch(`${process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com'}/v2/checkout/orders/${payment.provider_reference}/capture`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
-    });
-    if (!paypalResponse.ok) return res.status(400).json({ success: false, message: 'Le paiement PayPal n’a pas été approuvé' });
-    const paypalOrder = await paypalResponse.json();
-    if (paypalOrder.status !== 'COMPLETED') return res.status(400).json({ success: false, message: 'Le paiement PayPal n’est pas finalisé' });
-    const captured = paypalOrder.purchase_units?.[0]?.payments?.captures?.[0]?.amount;
-    if (!captured || captured.currency_code !== payment.currency.trim() || Number(captured.value) !== Number(payment.amount)) {
-      console.error('Montant PayPal incohérent', { orderId: req.params.orderId, captured, expected: payment.amount });
-      return res.status(400).json({ success: false, message: 'Le montant encaissé ne correspond pas à la commande. Contactez le support.' });
-    }
+
     const client = await database.connect();
     try {
       await client.query('BEGIN');
@@ -1439,20 +1430,9 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
       }
-      const paymentUpdate = await client.query(
-        "UPDATE payment SET status = 'paid', updated_at = now() WHERE id = $1 AND status = 'pending' RETURNING id",
-        [payment.id]
-      );
-      if (!paymentUpdate.rowCount) {
-        const currentStatusResult = await client.query('SELECT status FROM payment WHERE id = $1', [payment.id]);
-        await client.query('COMMIT');
-        const currentStatus = currentStatusResult.rows[0]?.status;
-        if (currentStatus === 'paid') return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
-        return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
-      }
       await client.query(
-        "UPDATE orders SET status = 'confirmed', reservation_expires_at = NULL, updated_at = now() WHERE id = $1 AND status = 'pending'",
-        [req.params.orderId]
+        "UPDATE payment SET status = 'authorized', updated_at = now() WHERE id = $1 AND status = 'pending'",
+        [payment.id]
       );
       await client.query('COMMIT');
     } catch (error) {
@@ -1460,6 +1440,69 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
       throw error;
     } finally {
       client.release();
+    }
+
+    const accessToken = await getPaypalAccessToken();
+    const paypalResponse = await fetch(`${process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com'}/v2/checkout/orders/${payment.provider_reference}/capture`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
+    });
+    if (!paypalResponse.ok) {
+      await releasePendingCapture();
+      return res.status(400).json({ success: false, message: 'Le paiement PayPal n’a pas été approuvé' });
+    }
+    const paypalOrder = await paypalResponse.json();
+    if (paypalOrder.status !== 'COMPLETED') {
+      await releasePendingCapture();
+      return res.status(400).json({ success: false, message: 'Le paiement PayPal n’est pas finalisé' });
+    }
+    const captured = paypalOrder.purchase_units?.[0]?.payments?.captures?.[0]?.amount;
+    if (!captured || captured.currency_code !== payment.currency.trim() || Number(captured.value) !== Number(payment.amount)) {
+      console.error('Montant PayPal incohérent', { orderId: req.params.orderId, captured, expected: payment.amount });
+      await releasePendingCapture();
+      return res.status(400).json({ success: false, message: 'Le montant encaissé ne correspond pas à la commande. Contactez le support.' });
+    }
+    const finalizeClient = await database.connect();
+    try {
+      await finalizeClient.query('BEGIN');
+      const lockedPaymentResult = await finalizeClient.query(
+        `SELECT payment.id, payment.status, orders.status AS order_status
+         FROM payment
+         JOIN orders ON orders.id = payment.order_id
+         WHERE payment.id = $1
+         FOR UPDATE OF payment, orders`,
+        [payment.id]
+      );
+      const lockedPayment = lockedPaymentResult.rows[0];
+      if (!lockedPayment) {
+        await finalizeClient.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Paiement PayPal introuvable ou déjà traité' });
+      }
+      if (lockedPayment.status === 'paid') {
+        await finalizeClient.query('COMMIT');
+        return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+      }
+      if (lockedPayment.status !== 'authorized' || lockedPayment.order_status !== 'pending') {
+        if (lockedPayment.status === 'authorized') {
+          await finalizeClient.query("UPDATE payment SET status = 'pending', updated_at = now() WHERE id = $1 AND status = 'authorized'", [payment.id]);
+        }
+        await finalizeClient.query('ROLLBACK');
+        return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
+      }
+      await finalizeClient.query(
+        "UPDATE payment SET status = 'paid', updated_at = now() WHERE id = $1 AND status = 'authorized' RETURNING id",
+        [payment.id]
+      );
+      await finalizeClient.query(
+        "UPDATE orders SET status = 'confirmed', reservation_expires_at = NULL, updated_at = now() WHERE id = $1 AND status = 'pending'",
+        [req.params.orderId]
+      );
+      await finalizeClient.query('COMMIT');
+    } catch (error) {
+      await finalizeClient.query('ROLLBACK');
+      throw error;
+    } finally {
+      finalizeClient.release();
     }
     res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
   } catch (error) {
