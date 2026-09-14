@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#081421">
+  <title>Dashboards multi-rôles — MonChantier</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="dashboard-demo.css">
+  <script src="config.js"></script>
+</head>
+<body class="demo-page">
+  <div id="auth-loading" class="demo-gate" role="status">
+    <div class="demo-spinner" aria-hidden="true"></div>
+    <p>Vérification de votre accès administrateur…</p>
+  </div>
+
+  <main id="denied" class="demo-gate hidden" aria-live="polite">
+    <div>
+      <h1>Accès administrateur requis</h1>
+      <p>Connectez-vous avec un compte administrateur pour ouvrir ce prototype.</p>
+      <a href="auth.html" class="demo-primary">Se connecter</a>
+    </div>
+  </main>
+
+  <div id="demo-app" class="demo-shell hidden">
+    <aside class="demo-sidebar" aria-label="Navigation du prototype">
+      <a class="demo-brand" href="index.html" aria-label="Retour à MonChantier">
+        <img src="assets/monchantier_logo.svg" alt="MonChantier">
+      </a>
+      <div class="demo-private"><span></span> Démo administrateur</div>
+      <p class="demo-nav-label">Prévisualiser un rôle</p>
+      <nav id="role-nav" class="demo-role-nav"></nav>
+      <a href="admin.html" class="demo-back-link">← Commandes réelles</a>
+      <div class="demo-user">
+        <span class="demo-avatar">EL</span>
+        <span><strong id="user-name">Administrateur</strong><small id="user-role">MonChantier</small></span>
+      </div>
+    </aside>
+
+    <section class="demo-main">
+      <header class="demo-topbar">
+        <div>
+          <p>Commande partagée · MC-2026-0418</p>
+          <h1 id="page-title">Bonjour, Erick</h1>
+          <small>Prototype multi-rôle intégré à Chantier</small>
+        </div>
+        <div class="demo-top-actions">
+          <label>Devise
+            <select id="currency-select" aria-label="Choisir la devise">
+              <option value="USD">USD</option>
+              <option value="CDF">CDF</option>
+            </select>
+          </label>
+          <button id="reset-demo" type="button" title="Réinitialiser la démonstration">↻</button>
+          <button id="logout-button" type="button">Déconnexion</button>
+        </div>
+      </header>
+
+      <section class="demo-scenario" aria-labelledby="scenario-title">
+        <div class="demo-scenario-head">
+          <div><span>Scénario interactif</span><h2 id="scenario-title">Du panier à la livraison</h2></div>
+          <strong id="state-badge">Panier à confirmer</strong>
+        </div>
+        <ol id="progress-steps" class="demo-progress"></ol>
+        <p id="scenario-hint" class="demo-hint"></p>
+      </section>
+
+      <section id="dashboard-content" class="demo-dashboard" aria-live="polite"></section>
+      <p id="demo-notice" class="demo-notice" role="status" aria-live="polite">
+        <span></span>Données de démonstration — aucune transaction réelle.
+      </p>
+    </section>
+
+    <nav id="mobile-role-nav" class="demo-mobile-nav" aria-label="Navigation mobile par rôle"></nav>
+  </div>
+
+  <script src="dashboard-demo.js"></script>
+</body>
+</html>
