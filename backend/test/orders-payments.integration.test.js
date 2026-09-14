@@ -6,23 +6,18 @@ const path = require('node:path');
 const { Pool } = require('pg');
 
 const DATABASE_URL = process.env.DATABASE_URL || `postgresql://${process.env.PGUSER || 'postgres'}:${process.env.PGPASSWORD || 'postgres'}@${process.env.PGHOST || '127.0.0.1'}:${process.env.PGPORT || '5432'}/${process.env.PGDATABASE || 'chantier_test'}`;
-const HAS_DATABASE = Boolean(process.env.DATABASE_URL || process.env.PGHOST || process.env.PGDATABASE);
+const PORT = 4101;
+const PROVIDER_PORT = 4102;
+const BASE_URL = `http://127.0.0.1:${PORT}`;
+const PROVIDER_URL = `http://127.0.0.1:${PROVIDER_PORT}`;
+const JWT_ACCESS_SECRET = 'test-secret-at-least-32-characters-long';
+const schemaSql = require('node:fs').readFileSync(path.join(__dirname, '..', 'schema.sql'), 'utf8');
 
-if (!HAS_DATABASE) {
-  test('integration tests require DATABASE_URL', { skip: true }, () => {});
-} else {
-  const PORT = 4101;
-  const PROVIDER_PORT = 4102;
-  const BASE_URL = `http://127.0.0.1:${PORT}`;
-  const PROVIDER_URL = `http://127.0.0.1:${PROVIDER_PORT}`;
-  const JWT_ACCESS_SECRET = 'test-secret-at-least-32-characters-long';
-  const schemaSql = require('node:fs').readFileSync(path.join(__dirname, '..', 'schema.sql'), 'utf8');
-
-  let server;
-  let provider;
-  let pool;
-  let sequence = 0;
-  let mockState;
+let server;
+let provider;
+let pool;
+let sequence = 0;
+let mockState;
 
   function resetMockState() {
     mockState = {
@@ -402,18 +397,17 @@ if (!HAS_DATABASE) {
     assert.equal(secondRefresh.response.status, 401);
   });
 
-  test('une transition illégale de statut est refusée', async () => {
-    const customer = await registerUser();
-    const admin = await registerUser('admin');
-    const orderResult = await createOrder(customer.accessToken);
-    assert.equal(orderResult.response.status, 201);
+test('une transition illégale de statut est refusée', async () => {
+  const customer = await registerUser();
+  const admin = await registerUser('admin');
+  const orderResult = await createOrder(customer.accessToken);
+  assert.equal(orderResult.response.status, 201);
 
-    const illegalTransition = await apiFetch(`/api/orders/${orderResult.payload.order.id}/status`, {
-      method: 'PATCH',
-      token: admin.accessToken,
-      body: { status: 'completed' }
-    });
-
-    assert.equal(illegalTransition.response.status, 409);
+  const illegalTransition = await apiFetch(`/api/orders/${orderResult.payload.order.id}/status`, {
+    method: 'PATCH',
+    token: admin.accessToken,
+    body: { status: 'completed' }
   });
-}
+
+  assert.equal(illegalTransition.response.status, 409);
+});

@@ -665,6 +665,10 @@ async function finalizeCinetpayPayment(transactionId) {
       await client.query('COMMIT');
       return { orderId: currentPayment.order_id, status: currentPayment.status === 'paid' ? 'confirmed' : currentPayment.status };
     }
+    if (currentPayment.order_status !== 'pending') {
+      await client.query('COMMIT');
+      return { orderId: currentPayment.order_id, status: currentPayment.order_status };
+    }
     if (accepted) {
       const paidAmount = Number(result.data.amount);
       const paidCurrency = String(result.data.currency || '').trim();
@@ -1415,7 +1419,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
       await client.query('BEGIN');
       await expirePendingOrdersInTransaction(client, [req.params.orderId]);
       const lockedPaymentResult = await client.query(
-        `SELECT payment.id, payment.status
+        `SELECT payment.id, payment.status, orders.status AS order_status
          FROM payment
          JOIN orders ON orders.id = payment.order_id
          WHERE payment.id = $1
@@ -1431,7 +1435,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
         await client.query('COMMIT');
         return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
       }
-      if (lockedPayment.status !== 'pending') {
+      if (lockedPayment.status !== 'pending' || lockedPayment.order_status !== 'pending') {
         await client.query('ROLLBACK');
         return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
       }
