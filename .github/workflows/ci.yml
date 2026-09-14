@@ -39,6 +39,9 @@ jobs:
       - name: Installer les dépendances
         run: npm ci
         working-directory: web
+      - name: Vérifier le JavaScript du dashboard multi-rôle
+        run: node --check dashboard-demo.js
+        working-directory: web
 
   mobile:
     name: Mobile (installation)
