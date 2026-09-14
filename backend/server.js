@@ -103,6 +103,12 @@ const CINETPAY_SUPPORTED_CURRENCIES = ['USD', 'CDF'];
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
+const ORDER_RESERVATION_MINUTES = Number.isFinite(Number(process.env.ORDER_RESERVATION_MINUTES))
+  ? Math.max(Number(process.env.ORDER_RESERVATION_MINUTES), 1 / 60)
+  : 15;
+const ORDER_RESERVATION_SWEEP_MS = Number.isFinite(Number(process.env.ORDER_RESERVATION_SWEEP_MS))
+  ? Math.max(Number(process.env.ORDER_RESERVATION_SWEEP_MS), 50)
+  : 60_000;
 
 // Connexion Google/Apple: le client (web ou mobile) obtient un jeton d'identité
 // directement du fournisseur puis nous l'envoie; on ne fait confiance qu'à ce que sa
@@ -421,6 +427,64 @@ async function createRefreshToken(client, userId) {
   return token;
 }
 
+function getOrderReservationExpiresAt() {
+  return new Date(Date.now() + ORDER_RESERVATION_MINUTES * 60 * 1000);
+}
+
+async function expirePendingOrdersInTransaction(client, orderIds) {
+  const params = [];
+  const filters = ["status = 'pending'", 'reservation_expires_at IS NOT NULL', 'reservation_expires_at <= now()'];
+  if (orderIds?.length) {
+    params.push(orderIds);
+    filters.push(`id = ANY($${params.length}::uuid[])`);
+  }
+  const expiredResult = await client.query(
+    `UPDATE orders
+     SET status = 'cancelled', reservation_expires_at = NULL, updated_at = now()
+     WHERE ${filters.join(' AND ')}
+     RETURNING id`,
+    params
+  );
+  const expiredOrderIds = expiredResult.rows.map((row) => row.id);
+  if (!expiredOrderIds.length) return expiredOrderIds;
+
+  await client.query(
+    `UPDATE product
+     SET stock_qty = product.stock_qty + reserved.qty
+     FROM (
+       SELECT order_item.product_id, SUM(order_item.qty) AS qty
+       FROM order_item
+       WHERE order_item.order_id = ANY($1::uuid[])
+       GROUP BY order_item.product_id
+     ) AS reserved
+     WHERE product.id = reserved.product_id`,
+    [expiredOrderIds]
+  );
+  await client.query(
+    `UPDATE payment
+     SET status = 'cancelled', updated_at = now()
+     WHERE order_id = ANY($1::uuid[]) AND status = 'pending'`,
+    [expiredOrderIds]
+  );
+  return expiredOrderIds;
+}
+
+async function expirePendingOrders(orderIds) {
+  if (!database) return [];
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const expiredOrderIds = await expirePendingOrdersInTransaction(client, orderIds);
+    await client.query('COMMIT');
+    return expiredOrderIds;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 // column: 'google_sub' ou 'apple_sub'. Retrouve le compte par cet identifiant stable;
 // à défaut, le relie à un compte existant avec le même e-mail (fournisseur garantit cet
 // e-mail vérifié); sinon crée le compte. Appelée à l'intérieur d'une transaction déjà
@@ -446,7 +510,7 @@ async function findOrCreateSocialAccount(client, { column, sub, email, fullName 
 
 async function requireAuthentication(req, res, next) {
   if (!requireDatabase(res)) return;
-  const match = /^Bearer (.+)$/.exec(req.get('authorization') || '');
+  const match = /^Bearer\s+(.+)$/i.exec(String(req.get('authorization') || ''));
   if (!match) return res.status(401).json({ success: false, message: 'Authentification requise' });
   try {
     requireJwtSecret();
@@ -515,7 +579,8 @@ function requireCinetpayCredentials() {
 
 async function initCinetpayPayment({ transactionId, amount, currency, description, customerName, customerPhone, returnUrl, notifyUrl }) {
   const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = requireCinetpayCredentials();
-  const response = await fetch('https://api-cinetpay.com/v2/payment', {
+  const apiBase = process.env.CINETPAY_API_BASE || 'https://api-cinetpay.com';
+  const response = await fetch(`${apiBase}/v2/payment`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -545,7 +610,8 @@ async function initCinetpayPayment({ transactionId, amount, currency, descriptio
 // transaction, jamais le statut ni le montant, précisément pour forcer cet appel.
 async function checkCinetpayPayment(transactionId) {
   const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = requireCinetpayCredentials();
-  const response = await fetch('https://api-cinetpay.com/v2/payment/check', {
+  const apiBase = process.env.CINETPAY_API_BASE || 'https://api-cinetpay.com';
+  const response = await fetch(`${apiBase}/v2/payment/check`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ apikey: CINETPAY_API_KEY, site_id: CINETPAY_SITE_ID, transaction_id: transactionId })
@@ -558,44 +624,79 @@ async function checkCinetpayPayment(transactionId) {
 // avant de confirmer quoi que ce soit, et on n'agit que si le paiement est encore 'pending'
 // (idempotent en cas de double appel).
 async function finalizeCinetpayPayment(transactionId) {
-  const paymentResult = await database.query(
-    `SELECT payment.id, payment.order_id, payment.amount, payment.currency, payment.status
-     FROM payment WHERE payment.provider = 'cinetpay' AND payment.provider_reference = $1`,
-    [transactionId]
-  );
-  const payment = paymentResult.rows[0];
-  if (!payment) return null;
-  if (payment.status !== 'pending') return { orderId: payment.order_id, status: payment.status === 'paid' ? 'confirmed' : payment.status };
-
   const result = await checkCinetpayPayment(transactionId);
   let accepted = result.code === '00' && result.data?.status === 'ACCEPTED';
-  if (accepted) {
-    const paidAmount = Number(result.data.amount);
-    const paidCurrency = String(result.data.currency || '').trim();
-    if (paidCurrency !== payment.currency.trim() || paidAmount !== Number(payment.amount)) {
-      console.error('Montant CinetPay incohérent', { transactionId, received: result.data, expected: { amount: payment.amount, currency: payment.currency } });
-      accepted = false;
-    }
-  }
-  if (!accepted && result.code !== '00' && result.data?.status !== 'REFUSED') {
-    // Statut encore indéterminé côté CinetPay (ex: en attente de validation Mobile Money):
-    // on ne marque rien comme échoué, un prochain appel (webhook ou retour client) retentera.
-    return { orderId: payment.order_id, status: 'pending' };
-  }
-
   const client = await database.connect();
   try {
     await client.query('BEGIN');
-    await client.query('UPDATE payment SET status = $1, updated_at = now() WHERE id = $2', [accepted ? 'paid' : 'failed', payment.id]);
-    if (accepted) await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [payment.order_id]);
+    const paymentResult = await client.query(
+      `SELECT payment.id, payment.order_id, payment.amount, payment.currency, payment.status, orders.status AS order_status
+       FROM payment
+       JOIN orders ON orders.id = payment.order_id
+       WHERE payment.provider = 'cinetpay' AND payment.provider_reference = $1
+       FOR UPDATE OF payment, orders`,
+      [transactionId]
+    );
+    const payment = paymentResult.rows[0];
+    if (!payment) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+    await expirePendingOrdersInTransaction(client, [payment.order_id]);
+    if (payment.status !== 'pending') {
+      await client.query('COMMIT');
+      return { orderId: payment.order_id, status: payment.status === 'paid' ? 'confirmed' : payment.status };
+    }
+    const refreshedPaymentResult = await client.query(
+      `SELECT payment.id, payment.order_id, payment.amount, payment.currency, payment.status, orders.status AS order_status
+       FROM payment
+       JOIN orders ON orders.id = payment.order_id
+       WHERE payment.id = $1
+       FOR UPDATE OF payment, orders`,
+      [payment.id]
+    );
+    const currentPayment = refreshedPaymentResult.rows[0];
+    if (currentPayment.status !== 'pending') {
+      await client.query('COMMIT');
+      return { orderId: currentPayment.order_id, status: currentPayment.status === 'paid' ? 'confirmed' : currentPayment.status };
+    }
+    if (accepted) {
+      const paidAmount = Number(result.data.amount);
+      const paidCurrency = String(result.data.currency || '').trim();
+      if (paidCurrency !== currentPayment.currency.trim() || paidAmount !== Number(currentPayment.amount)) {
+        console.error('Montant CinetPay incohérent', { transactionId, received: result.data, expected: { amount: currentPayment.amount, currency: currentPayment.currency } });
+        accepted = false;
+      }
+    }
+    if (!accepted && result.code !== '00' && result.data?.status !== 'REFUSED') {
+      await client.query('COMMIT');
+      return { orderId: currentPayment.order_id, status: 'pending' };
+    }
+    const nextPaymentStatus = accepted ? 'paid' : 'failed';
+    const paymentUpdate = await client.query(
+      'UPDATE payment SET status = $1, updated_at = now() WHERE id = $2 AND status = $3 RETURNING id',
+      [nextPaymentStatus, currentPayment.id, 'pending']
+    );
+    if (!paymentUpdate.rowCount) {
+      const currentStatusResult = await client.query('SELECT order_id, status FROM payment WHERE id = $1', [currentPayment.id]);
+      await client.query('COMMIT');
+      const currentStatus = currentStatusResult.rows[0];
+      return currentStatus ? { orderId: currentStatus.order_id, status: currentStatus.status === 'paid' ? 'confirmed' : currentStatus.status } : null;
+    }
+    if (accepted) {
+      await client.query(
+        "UPDATE orders SET status = 'confirmed', reservation_expires_at = NULL, updated_at = now() WHERE id = $1 AND status = 'pending'",
+        [currentPayment.order_id]
+      );
+    }
     await client.query('COMMIT');
+    return { orderId: currentPayment.order_id, status: accepted ? 'confirmed' : 'failed' };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
   }
-  return { orderId: payment.order_id, status: accepted ? 'confirmed' : 'failed' };
 }
 
 async function ensureCatalog(client) {
@@ -1149,6 +1250,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
   const client = await database.connect();
   try {
     await client.query('BEGIN');
+    await expirePendingOrdersInTransaction(client);
     // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
     // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
     const productResult = await client.query(
@@ -1185,8 +1287,10 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     }
     const subtotal = Number((subtotalUsd * rate).toFixed(2));
     const orderResult = await client.query(
-      'INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount) VALUES ($1, $2, $3, $3) RETURNING id, status, total_amount, currency',
-      [req.auth.customerId, currency, subtotal]
+      `INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount, reservation_expires_at)
+       VALUES ($1, $2, $3, $3, $4)
+       RETURNING id, status, total_amount, currency, reservation_expires_at`,
+      [req.auth.customerId, currency, subtotal, getOrderReservationExpiresAt()]
     );
     const order = orderResult.rows[0];
     for (const [productId, qty] of quantities) {
@@ -1207,7 +1311,14 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       : undefined;
     res.status(201).json({
       success: true,
-      order: { id: order.id, status: order.status, totalAmount: order.total_amount, currency: order.currency, paymentProvider },
+      order: {
+        id: order.id,
+        status: order.status,
+        totalAmount: order.total_amount,
+        currency: order.currency,
+        paymentProvider,
+        reservationExpiresAt: order.reservation_expires_at
+      },
       ...(payment ? { payment } : {})
     });
   } catch (error) {
@@ -1221,6 +1332,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
 app.post('/api/orders/:orderId/paypal', requireAuthentication, requireRole('customer'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   try {
+    await expirePendingOrders([req.params.orderId]);
     const paymentResult = await database.query(
       `SELECT payment.id, payment.amount, payment.currency FROM payment
        JOIN orders ON orders.id = payment.order_id
@@ -1266,35 +1378,70 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
   const parsedCapture = paypalCaptureSchema.safeParse(req.body);
   if (!parsedCapture.success) return res.status(400).json({ success: false, message: 'Jeton de confirmation manquant' });
   try {
+    await expirePendingOrders([req.params.orderId]);
     const paymentResult = await database.query(
-      `SELECT payment.id, payment.provider_reference, payment.amount, payment.currency, payment.confirmation_token_hash FROM payment
-       WHERE payment.order_id = $1 AND payment.provider = 'paypal' AND payment.status = 'pending'`,
+      `SELECT payment.id, payment.provider_reference, payment.amount, payment.currency, payment.confirmation_token_hash, payment.status
+       FROM payment
+       WHERE payment.order_id = $1 AND payment.provider = 'paypal'`,
       [req.params.orderId]
     );
-    const pendingPayment = paymentResult.rows[0];
-    if (paymentResult.rowCount !== 1 || !pendingPayment.provider_reference) return res.status(404).json({ success: false, message: 'Paiement PayPal introuvable ou déjà traité' });
-    if (!tokensMatch(parsedCapture.data.confirmationToken, pendingPayment.confirmation_token_hash)) {
+    const payment = paymentResult.rows[0];
+    if (paymentResult.rowCount !== 1 || !payment.provider_reference) return res.status(404).json({ success: false, message: 'Paiement PayPal introuvable ou déjà traité' });
+    if (!tokensMatch(parsedCapture.data.confirmationToken, payment.confirmation_token_hash)) {
       return res.status(403).json({ success: false, message: 'Jeton de confirmation invalide' });
     }
+    if (payment.status === 'paid') return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+    if (payment.status !== 'pending') return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
     const accessToken = await getPaypalAccessToken();
-    const paypalResponse = await fetch(`${process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com'}/v2/checkout/orders/${pendingPayment.provider_reference}/capture`, {
+    const paypalResponse = await fetch(`${process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com'}/v2/checkout/orders/${payment.provider_reference}/capture`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
     });
     if (!paypalResponse.ok) return res.status(400).json({ success: false, message: 'Le paiement PayPal n’a pas été approuvé' });
     const paypalOrder = await paypalResponse.json();
     if (paypalOrder.status !== 'COMPLETED') return res.status(400).json({ success: false, message: 'Le paiement PayPal n’est pas finalisé' });
-    // Le montant réellement encaissé doit correspondre à la commande.
     const captured = paypalOrder.purchase_units?.[0]?.payments?.captures?.[0]?.amount;
-    if (!captured || captured.currency_code !== pendingPayment.currency.trim() || Number(captured.value) !== Number(pendingPayment.amount)) {
-      console.error('Montant PayPal incohérent', { orderId: req.params.orderId, captured, expected: pendingPayment.amount });
+    if (!captured || captured.currency_code !== payment.currency.trim() || Number(captured.value) !== Number(payment.amount)) {
+      console.error('Montant PayPal incohérent', { orderId: req.params.orderId, captured, expected: payment.amount });
       return res.status(400).json({ success: false, message: 'Le montant encaissé ne correspond pas à la commande. Contactez le support.' });
     }
     const client = await database.connect();
     try {
       await client.query('BEGIN');
-      await client.query("UPDATE payment SET status = 'paid', confirmation_token_hash = NULL, updated_at = now() WHERE id = $1", [pendingPayment.id]);
-      await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [req.params.orderId]);
+      await expirePendingOrdersInTransaction(client, [req.params.orderId]);
+      const lockedPaymentResult = await client.query(
+        `SELECT payment.id, payment.status
+         FROM payment
+         JOIN orders ON orders.id = payment.order_id
+         WHERE payment.id = $1
+         FOR UPDATE OF payment, orders`,
+        [payment.id]
+      );
+      const lockedPayment = lockedPaymentResult.rows[0];
+      if (!lockedPayment) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ success: false, message: 'Paiement PayPal introuvable ou déjà traité' });
+      }
+      if (lockedPayment.status === 'paid') {
+        await client.query('COMMIT');
+        return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+      }
+      if (lockedPayment.status !== 'pending') {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
+      }
+      const paymentUpdate = await client.query(
+        "UPDATE payment SET status = 'paid', updated_at = now() WHERE id = $1 AND status = 'pending' RETURNING id",
+        [payment.id]
+      );
+      if (!paymentUpdate.rowCount) {
+        await client.query('COMMIT');
+        return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+      }
+      await client.query(
+        "UPDATE orders SET status = 'confirmed', reservation_expires_at = NULL, updated_at = now() WHERE id = $1 AND status = 'pending'",
+        [req.params.orderId]
+      );
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -1311,6 +1458,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
 app.post('/api/orders/:orderId/cinetpay', requireAuthentication, requireRole('customer'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   try {
+    await expirePendingOrders([req.params.orderId]);
     const paymentResult = await database.query(
       `SELECT payment.id, payment.amount, payment.currency FROM payment
        JOIN orders ON orders.id = payment.order_id
@@ -1358,6 +1506,7 @@ app.post('/api/orders/:orderId/cinetpay/check', async (req, res, next) => {
   const parsedCheck = paypalCaptureSchema.safeParse(req.body);
   if (!parsedCheck.success) return res.status(400).json({ success: false, message: 'Jeton de confirmation manquant' });
   try {
+    await expirePendingOrders([req.params.orderId]);
     const paymentResult = await database.query(
       `SELECT provider_reference, confirmation_token_hash, status FROM payment
        WHERE order_id = $1 AND provider = 'cinetpay'`,
@@ -1413,6 +1562,7 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
     filters.push(`orders.status = $${values.length}`);
   }
   try {
+    await expirePendingOrders();
     // Un payment par commande (voir POST /api/orders): la jointure ne duplique pas les lignes.
     const result = await database.query(
       `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
@@ -1454,6 +1604,7 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
   const client = await database.connect();
   try {
     await client.query('BEGIN');
+    await expirePendingOrdersInTransaction(client, [req.params.orderId]);
     const result = await client.query(`UPDATE orders SET status = $2, updated_at = now() WHERE id = $1 AND status = ANY($3::text[])${ownership} RETURNING id, status, assigned_to`, values);
     if (!result.rowCount) {
       await client.query('ROLLBACK');
@@ -1466,6 +1617,10 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
          FROM order_item WHERE order_item.order_id = $1 AND product.id = order_item.product_id`,
         [req.params.orderId]
       );
+      await client.query(
+        "UPDATE payment SET status = 'cancelled', updated_at = now() WHERE order_id = $1 AND status = 'pending'",
+        [req.params.orderId]
+      );
     }
     if (parsed.data.status === 'confirmed') {
       // Airtel/Orange Money n'ont pas de capture automatique: confirmer la commande vaut
@@ -1475,6 +1630,10 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
         [req.params.orderId]
       );
     }
+    await client.query(
+      'UPDATE orders SET reservation_expires_at = NULL, updated_at = now() WHERE id = $1 AND status <> $2',
+      [req.params.orderId, 'pending']
+    );
     await client.query('COMMIT');
     res.json({ success: true, order: result.rows[0] });
   } catch (error) {
@@ -1681,12 +1840,23 @@ app.use((err, req, res, next) => {
   });
 });
 
+let orderReservationSweepTimer = null;
+if (database) {
+  orderReservationSweepTimer = setInterval(() => {
+    expirePendingOrders().catch(captureError);
+  }, ORDER_RESERVATION_SWEEP_MS);
+  orderReservationSweepTimer.unref();
+}
+
 // Démarrer le serveur
 const server = app.listen(PORT, () => {
   console.log(`✅ Serveur démarré sur http://localhost:${PORT}`);
   console.log(`📦 ${PRODUCTS.length} produits chargés`);
   console.log(`🌍 CORS activé pour: ${allowedOrigins.join(', ')}${codespaceOriginPattern ? ' (+ ports de ce Codespace)' : ''}`);
   console.log(`🖥️  Site web servi sur http://localhost:${PORT}/`);
+  expirePendingOrders()
+    .then((expiredOrderIds) => expiredOrderIds.length && console.log(`⌛ ${expiredOrderIds.length} réservation(s) expirée(s)`))
+    .catch((error) => console.error('⚠️  Expiration des réservations impossible:', error.message));
   syncCatalog()
     .then(() => database && console.log('🗄️  Catalogue synchronisé en base'))
     .catch((error) => console.error('⚠️  Synchronisation du catalogue impossible:', error.message));
@@ -1707,6 +1877,7 @@ async function shutdown(signal) {
   }, 10000);
   forceExit.unref();
   try {
+    if (orderReservationSweepTimer) clearInterval(orderReservationSweepTimer);
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     if (database) await database.end();
     clearTimeout(forceExit);

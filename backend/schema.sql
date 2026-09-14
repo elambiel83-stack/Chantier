@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS assigned_to UUID REFERENCES user_account(id) ON DELETE SET NULL;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS reservation_expires_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS order_item (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -175,6 +176,9 @@ CREATE INDEX IF NOT EXISTS import_request_assigned_to_idx ON import_request(assi
 CREATE INDEX IF NOT EXISTS import_request_status_idx ON import_request(status);
 CREATE INDEX IF NOT EXISTS orders_customer_id_idx ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS orders_assigned_to_idx ON orders(assigned_to);
+CREATE INDEX IF NOT EXISTS orders_pending_reservation_expires_at_idx
+  ON orders(reservation_expires_at)
+  WHERE status = 'pending' AND reservation_expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS payment_order_id_idx ON payment(order_id);
 CREATE INDEX IF NOT EXISTS refresh_token_user_id_idx ON refresh_token(user_id);
 CREATE INDEX IF NOT EXISTS verification_code_user_id_idx ON verification_code(user_id);
