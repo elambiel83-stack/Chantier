@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, TextInput, ScrollView, Linking, StyleSheet, Alert, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, TextInput, ScrollView, StyleSheet, Alert, ActivityIndicator, Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as WebBrowser from 'expo-web-browser';
@@ -8,6 +8,7 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import CommerceHomeScreen from './screens/HomeScreen';
 import ProductsScreen from './screens/ProductsScreen';
 import CartScreen from './screens/CartScreen';
+import OrdersScreen from './screens/OrdersScreen';
 import { CartProvider } from './context/CartContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { GOOGLE_AUTH_CONFIG } from './config';
@@ -25,9 +26,6 @@ const styles = StyleSheet.create({
   buttonText: { color: 'white', fontWeight: '700', fontSize: 16 },
   socialButton: { padding: 12, borderRadius: 8, marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: 'white', borderWidth: 1, borderColor: '#ddd' },
   socialButtonText: { fontWeight: '600', marginLeft: 8, color: '#333' },
-  productCard: { backgroundColor: 'white', borderRadius: 8, padding: 12, marginBottom: 12 },
-  productName: { fontWeight: '700', fontSize: 16 },
-  productPrice: { fontWeight: '700', color: '#22C55E', marginTop: 4 },
   link: { color: '#3B82F6', textDecorationLine: 'underline', marginTop: 12, textAlign: 'center' },
   buttonDisabled: { opacity: 0.6 },
   hint: { color: '#666', fontSize: 12, marginTop: 16, textAlign: 'center' },
@@ -47,14 +45,6 @@ function notifyGoogleNotConfigured() {
 function isUserCancellation(error) {
   return error?.code === 'ERR_REQUEST_CANCELED' || error?.code === 'ERR_CANCELED';
 }
-
-const PRODUCTS = [
-  { id: '1', name_fr: 'Brique', name_en: 'Brick', unit: 'pcs', price: 0.45 },
-  { id: '2', name_fr: 'Sable', name_en: 'Sand', unit: 'm3', price: 18.00 },
-  { id: '3', name_fr: 'Moellon', name_en: 'Stone', unit: 'ton', price: 22.00 },
-  { id: '4', name_fr: 'Ciment', name_en: 'Cement', unit: 'bag', price: 11.50 },
-  { id: '5', name_fr: 'Pavé', name_en: 'Paver', unit: 'sqm', price: 14.00 },
-];
 
 // Écran de connexion
 function LoginScreen({ navigation }) {
@@ -364,109 +354,6 @@ function RegisterScreen({ navigation }) {
   );
 }
 
-// Écran d'accueil
-function HomeScreen({ navigation, user }) {
-  const [searchText, setSearchText] = useState('');
-  const [language, setLanguage] = useState('fr');
-
-  const filteredProducts = PRODUCTS.filter(p =>
-    (p.name_fr + ' ' + p.name_en).toLowerCase().includes(searchText.toLowerCase())
-  );
-
-  return (
-    <View style={styles.container}>
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <View>
-          <Text style={styles.header}>MonChantier</Text>
-          <Text style={{ color: '#666' }}>Bienvenue, {user.name}!</Text>
-          <Text style={{ color: '#999', fontSize: 12 }}>({user.loginMethod})</Text>
-        </View>
-        <TouchableOpacity style={{ backgroundColor: '#EF4444', padding: 8, borderRadius: 6 }}>
-          <Text style={{ color: 'white', fontWeight: '600' }}>Déconnexion</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 12 }}>
-        <TouchableOpacity onPress={() => setLanguage('fr')}>
-          <Text style={{ fontWeight: language === 'fr' ? 'bold' : 'normal' }}>FR</Text>
-        </TouchableOpacity>
-        <TouchableOpacity onPress={() => setLanguage('en')}>
-          <Text style={{ fontWeight: language === 'en' ? 'bold' : 'normal' }}>EN</Text>
-        </TouchableOpacity>
-      </View>
-
-      <TextInput
-        placeholder={language === 'fr' ? 'Rechercher...' : 'Search...'}
-        value={searchText}
-        onChangeText={setSearchText}
-        style={styles.input}
-      />
-
-      <FlatList
-        data={filteredProducts}
-        keyExtractor={item => item.id}
-        scrollEnabled={false}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            style={styles.productCard}
-            onPress={() => navigation.navigate('Product', { product: item, lang: language })}
-          >
-            <Text style={styles.productName}>{language === 'fr' ? item.name_fr : item.name_en}</Text>
-            <Text style={{ color: '#999' }}>{item.unit}</Text>
-            <Text style={styles.productPrice}>${item.price.toFixed(2)}</Text>
-          </TouchableOpacity>
-        )}
-      />
-    </View>
-  );
-}
-
-// Écran détail du produit
-function ProductScreen({ route, navigation }) {
-  try {
-    const { product, lang } = route.params;
-
-    const handleWhatsApp = () => {
-      const message = encodeURIComponent(
-        (lang === 'fr' ? 'Bonjour, je veux commander: ' : 'Hello, I want to order: ') +
-        (lang === 'fr' ? product.name_fr : product.name_en)
-      );
-      const wa = `https://wa.me/243999972466?text=${message}`;
-      Linking.openURL(wa).catch(() => Alert.alert('Erreur', 'WhatsApp non disponible'));
-    };
-
-    return (
-      <ScrollView style={styles.container}>
-        <Text style={styles.header}>{lang === 'fr' ? product.name_fr : product.name_en}</Text>
-        <Text style={{ color: '#999', marginBottom: 12 }}>{product.unit}</Text>
-        <Text style={{ fontSize: 20, fontWeight: 'bold', color: '#22C55E' }}>${product.price.toFixed(2)}</Text>
-
-        <TouchableOpacity
-          style={[styles.button, { backgroundColor: '#25D366' }]}
-          onPress={handleWhatsApp}
-        >
-          <Text style={styles.buttonText}>
-            {lang === 'fr' ? 'Commander via WhatsApp' : 'Order via WhatsApp'}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.button, { backgroundColor: '#666' }]}
-          onPress={() => navigation.goBack()}
-        >
-          <Text style={styles.buttonText}>{lang === 'fr' ? 'Retour' : 'Back'}</Text>
-        </TouchableOpacity>
-      </ScrollView>
-    );
-  } catch (error) {
-    return (
-      <View style={styles.container}>
-        <Text style={{ color: 'red' }}>Erreur: {error.message}</Text>
-      </View>
-    );
-  }
-}
-
 // Navigation
 function AuthStack() {
   return (
@@ -498,6 +385,11 @@ function AppStack({ user }) {
         name="Cart"
         component={CartScreen}
         options={{ title: 'Panier' }}
+      />
+      <Stack.Screen
+        name="Orders"
+        component={OrdersScreen}
+        options={{ title: 'Mes commandes' }}
       />
     </Stack.Navigator>
   );

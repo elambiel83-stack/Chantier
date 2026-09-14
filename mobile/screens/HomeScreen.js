@@ -10,10 +10,12 @@ import {
   Alert,
 } from 'react-native';
 import { useCart } from '../context/CartContext';
+import { useAuth } from '../context/AuthContext';
 import { API_CONFIG } from '../config';
 
 export default function HomeScreen({ navigation }) {
   const { getItemCount } = useCart();
+  const { isAuthenticated } = useAuth();
 
   const openWhatsApp = () => {
     const url = `whatsapp://send?phone=${API_CONFIG.whatsappNumber.replace(/\D/g, '')}`;
@@ -87,6 +89,17 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.categoryTitle}>Partenaires</Text>
           <Text style={styles.categoryDesc}>Transport et équipements partenaires...</Text>
         </TouchableOpacity>
+
+        {isAuthenticated && (
+          <TouchableOpacity
+            style={styles.categoryCard}
+            onPress={() => navigation.navigate('Orders')}
+          >
+            <Text style={styles.categoryEmoji}>📦</Text>
+            <Text style={styles.categoryTitle}>Mes commandes</Text>
+            <Text style={styles.categoryDesc}>Suivi et historique de vos commandes...</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Cart Badge */}
