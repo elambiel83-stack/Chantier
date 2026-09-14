@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const RATE_CDF = 2800;
+  let rateCDF = 2800;
   const VAT_RATE = 0.16;
   const STORAGE_KEY = 'monchantierMultiRoleDemo';
 
@@ -29,11 +29,14 @@
     driver: 'Mission du jour',
     admin: 'Vue d’ensemble'
   };
-  const products = [
+  const fallbackProducts = [
     { id: 'blocks', name: 'Blocs ciment 15', unit: 'pièce', price: 1.25, stock: '2 400 pièces', art: '' },
     { id: 'sand', name: 'Sable concassé', unit: 'm³', price: 42, stock: '64 m³', art: 'sand' },
     { id: 'pavers', name: 'Pavés autobloquants', unit: 'm²', price: 18, stock: '180 m²', art: 'pavers' }
   ];
+  let catalogProducts = fallbackProducts.slice();
+  let liveOrders = [];
+  let liveDataSource = 'demo';
 
   const initialState = {
     role: 'client',
@@ -88,6 +91,68 @@
     return subtotal() * (1 + VAT_RATE);
   }
 
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, function (character) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character];
+    });
+  }
+
+  function orderMoney(value, currency) {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return '—';
+    if (currency === 'CDF') return amount.toLocaleString('fr-FR') + ' FC';
+    return amount.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' ' + (currency || 'USD');
+  }
+
+  function orderStatusLabel(status) {
+    return { pending: 'En attente', confirmed: 'Confirmée', delivering: 'En livraison', completed: 'Terminée', cancelled: 'Annulée' }[status] || status || '—';
+  }
+
+  function seedCatalogQuantities() {
+    const hasSelectedProduct = catalogProducts.some(function (product) { return Number(state.quantities[product.id]) > 0; });
+    if (hasSelectedProduct || !catalogProducts.length) return;
+    const seeded = {};
+    catalogProducts.forEach(function (product, index) { seeded[product.id] = index === 0 ? 150 : index === 1 ? 3 : 0; });
+    state.quantities = seeded;
+    saveState();
+  }
+
+  async function loadLiveData() {
+    const outcomes = await Promise.allSettled([
+      window.apiCall('/products'),
+      window.apiCall('/orders'),
+      window.loadCurrencyRates ? window.loadCurrencyRates() : Promise.resolve(false)
+    ]);
+    if (outcomes[0].status === 'fulfilled' && Array.isArray(outcomes[0].value.products)) {
+      const normalized = outcomes[0].value.products.filter(function (product) {
+        return product && product.category === 'produits';
+      }).slice(0, 6).map(function (product, index) {
+        return {
+          id: String(product.id),
+          name: String(product.name_fr || product.name_en || product.id),
+          unit: String(product.unit || 'unité'),
+          price: Number(product.price) || 0,
+          stock: Number(product.stock) || 0,
+          stockLabel: (Number(product.stock) || 0).toLocaleString('fr-FR') + ' ' + String(product.unit || 'unités'),
+          img: typeof product.img === 'string' ? product.img : '',
+          art: index % 3 === 1 ? 'sand' : index % 3 === 2 ? 'pavers' : ''
+        };
+      });
+      if (normalized.length) {
+        catalogProducts = normalized;
+        liveDataSource = 'live';
+        seedCatalogQuantities();
+      }
+    }
+    if (outcomes[1].status === 'fulfilled' && Array.isArray(outcomes[1].value.orders)) {
+      liveOrders = outcomes[1].value.orders;
+      liveDataSource = 'live';
+    }
+    const configuredRate = window.COMMERCE_CONFIG && window.COMMERCE_CONFIG.currencies &&
+      Number(window.COMMERCE_CONFIG.currencies.CDF && window.COMMERCE_CONFIG.currencies.CDF.rate);
+    if (Number.isFinite(configuredRate) && configuredRate > 0) rateCDF = configuredRate;
+  }
+
   function kpi(label, value, note, chip) {
     return '<article class="demo-kpi">' +
       '<div class="demo-kpi-head"><span>' + label + '</span><span class="demo-chip">' + (chip || 'Temps réel') + '</span></div>' +
@@ -116,18 +181,20 @@
     return products.filter(function (product) {
       return state.quantities[product.id] > 0;
     }).map(function (product) {
-      return '<div class="demo-line"><span><strong>' + product.name + '</strong><small>' +
-        state.quantities[product.id] + ' ' + product.unit + '</small></span><strong>' +
+      return '<div class="demo-line"><span><strong>' + escapeHtml(product.name) + '</strong><small>' +
+        state.quantities[product.id] + ' ' + escapeHtml(product.unit) + '</small></span><strong>' +
         money(product.price * state.quantities[product.id]) + '</strong></div>';
     }).join('');
   }
 
   function productCards() {
-    return products.map(function (product) {
-      return '<article class="demo-product"><div class="demo-product-art ' + product.art + '"></div>' +
-        '<div class="demo-product-copy"><h3>' + product.name + '</h3><p>Disponible · ' + product.stock + '</p>' +
-        '<div class="demo-product-foot"><strong>' + money(product.price) + ' / ' + product.unit + '</strong>' +
-        '<button type="button" class="demo-button dark add-product" data-product="' + product.id + '"' +
+    return catalogProducts.slice(0, 3).map(function (product) {
+      const visual = product.img ? '<img src="' + escapeHtml(product.img) + '" alt="" loading="lazy">' : '';
+      const stockLabel = product.stockLabel || product.stock;
+      return '<article class="demo-product"><div class="demo-product-art ' + (product.art || '') + '">' + visual + '</div>' +
+        '<div class="demo-product-copy"><h3>' + escapeHtml(product.name) + '</h3><p>Disponible · ' + escapeHtml(stockLabel) + '</p>' +
+        '<div class="demo-product-foot"><strong>' + money(product.price) + ' / ' + escapeHtml(product.unit) + '</strong>' +
+        '<button type="button" class="demo-button dark add-product" data-product="' + escapeHtml(product.id) + '"' +
         (state.stage > 0 ? ' disabled' : '') + '>+ Ajouter</button></div></div></article>';
     }).join('');
   }
@@ -171,10 +238,7 @@
         '<div class="demo-actions"><button id="prepare-order" type="button" class="demo-button primary"' +
         (state.stage !== 1 ? ' disabled' : '') + '>' + actionLabel + '</button>' +
         '<button id="view-location" type="button" class="demo-button">Voir le point de livraison</button></div>') +
-      panel('Niveaux de stock', 'Synchronisés avec le catalogue',
-        stockRow('Blocs ciment', 88, '2 400', false) +
-        stockRow('Sable', 46, '64 m³', true) +
-        stockRow('Pavés', 72, '180 m²', false)) +
+      panel('Niveaux de stock', 'Synchronisés avec le catalogue réel', renderStockRows()) +
       '</div><div class="demo-stack">' +
       panel('Consignes', 'Préparation et qualité', '<div class="demo-note-box">Vérifier la qualité des blocs et protéger le sable pendant le transport. Le client demande une livraison sans déchargement mécanique.</div>') +
       panel('Progression', 'État partagé', renderMiniProgress()) +
@@ -182,8 +246,18 @@
   }
 
   function stockRow(label, width, value, warning) {
-    return '<div class="demo-stock"><span>' + label + '</span><span class="demo-stock-track">' +
-      '<span class="demo-stock-fill ' + (warning ? 'warn' : '') + '" style="width:' + width + '%"></span></span><strong>' + value + '</strong></div>';
+    return '<div class="demo-stock"><span>' + escapeHtml(label) + '</span><span class="demo-stock-track">' +
+      '<span class="demo-stock-fill ' + (warning ? 'warn' : '') + '" style="width:' + width + '%"></span></span><strong>' + escapeHtml(value) + '</strong></div>';
+  }
+
+  function renderStockRows() {
+    const selected = catalogProducts.slice(0, 3);
+    const maxStock = Math.max.apply(null, selected.map(function (product) { return Number(product.stock) || 0; }).concat([1]));
+    return selected.map(function (product) {
+      const stock = Number(product.stock) || 0;
+      const width = Math.max(5, Math.round(stock / maxStock * 100));
+      return stockRow(product.name, width, stock.toLocaleString('fr-FR'), stock / maxStock < 0.35);
+    }).join('');
   }
 
   function renderCarrier() {
@@ -247,31 +321,35 @@
       return '<button type="button" class="demo-state-button ' + (index === state.stage ? 'active' : '') +
         '" data-stage="' + index + '"><span>' + label + '</span><strong>' + (index + 1) + '</strong></button>';
     }).join('');
+    const activeDeliveries = liveOrders.filter(function (order) { return order.status === 'delivering'; }).length;
+    const paidOrders = liveOrders.filter(function (order) { return order.payment_status === 'paid' || order.status === 'completed'; }).length;
+    const paymentRate = liveOrders.length ? Math.round(paidOrders / liveOrders.length * 100) : 0;
+    const rows = liveOrders.length ? liveOrders.slice(0, 8).map(function (order) {
+      return orderRow(String(order.id || '').slice(0, 8), order.full_name || 'Client', orderStatusLabel(order.status),
+        orderMoney(order.total_amount, order.currency), order.payment_provider || '—');
+    }).join('') : orderRow('—', 'Aucune commande', 'Base vide', '—', '—');
+
     return '<div class="demo-kpis">' +
-      kpi('Ventes aujourd’hui', money(4278), '+18 % vs hier') +
-      kpi('Commandes', '18', '3 nécessitent une action') +
-      kpi('Livraisons actives', '07', '92 % à l’heure') +
-      kpi('Paiements validés', '96 %', '1 en vérification') +
+      kpi('Produits actifs', String(catalogProducts.length), 'Catalogue API', liveDataSource === 'live' ? 'Données réelles' : 'Mode démo') +
+      kpi('Commandes visibles', String(liveOrders.length), 'Selon les droits admin') +
+      kpi('Livraisons actives', String(activeDeliveries), 'Statut delivering') +
+      kpi('Paiements validés', paymentRate + ' %', paidOrders + ' commande(s)') +
       '</div><div class="demo-grid"><div class="demo-stack">' +
-      panel('Commandes récentes', 'Supervision de tous les acteurs',
-        '<div class="demo-table-wrap"><table class="demo-table"><thead><tr><th>Commande</th><th>Client</th><th>État</th><th>Montant</th><th>Zone</th></tr></thead><tbody>' +
-        orderRow('MC-0418', 'Erick Lambi', stateLabels[state.stage], money(total()), 'Kolwezi') +
-        orderRow('MC-0417', 'Grâce K.', 'Commande livrée', money(284), 'Musompo') +
-        orderRow('MC-0416', 'BTP Horizon', 'Livraison en cours', money(1240), 'Manika') +
-        '</tbody></table></div>') +
-      panel('Santé opérationnelle', 'Services simulés',
-        '<div class="demo-line"><span>Catalogue et stock</span><strong>Opérationnel</strong></div>' +
-        '<div class="demo-line"><span>Paiements</span><strong>Opérationnel</strong></div>' +
-        '<div class="demo-line"><span>Localisation</span><strong>Opérationnel</strong></div>') +
+      panel('Commandes réelles récentes', 'Lecture seule depuis /api/orders',
+        '<div class="demo-table-wrap"><table class="demo-table"><thead><tr><th>Commande</th><th>Client</th><th>État</th><th>Montant</th><th>Paiement</th></tr></thead><tbody>' + rows + '</tbody></table></div>') +
+      panel('Sources connectées', 'Données chargées sans écriture',
+        '<div class="demo-line"><span>Catalogue</span><strong>' + catalogProducts.length + ' produit(s)</strong></div>' +
+        '<div class="demo-line"><span>Commandes</span><strong>' + liveOrders.length + ' commande(s)</strong></div>' +
+        '<div class="demo-line"><span>Taux CDF</span><strong>' + rateCDF.toLocaleString('fr-FR') + ' / USD</strong></div>') +
       '</div><div class="demo-stack">' +
-      panel('Contrôle de démonstration', 'Tester directement chaque état', '<div class="demo-state-controls">' + controls + '</div>') +
-      panel('Accès', 'Séparation des données', '<div class="demo-note-box">Cette page utilise des données fictives. Les commandes réelles restent accessibles depuis l’espace Commandes.</div>') +
+      panel('Contrôle de démonstration', 'Ces boutons ne modifient pas les commandes réelles', '<div class="demo-state-controls">' + controls + '</div>') +
+      panel('Sécurité', 'Séparation lecture / simulation', '<div class="demo-note-box">Le catalogue et les commandes viennent de l’API. Le parcours MC-2026-0418 reste local au navigateur et ne déclenche aucun paiement ni changement de statut réel.</div>') +
       '</div></div>';
   }
 
-  function orderRow(reference, client, status, amount, zone) {
-    return '<tr><td><strong>' + reference + '</strong></td><td>' + client + '</td><td>' + status +
-      '</td><td><strong>' + amount + '</strong></td><td>' + zone + '</td></tr>';
+  function orderRow(reference, client, status, amount, payment) {
+    return '<tr><td><strong>' + escapeHtml(reference) + '</strong></td><td>' + escapeHtml(client) + '</td><td>' + escapeHtml(status) +
+      '</td><td><strong>' + escapeHtml(amount) + '</strong></td><td>' + escapeHtml(payment) + '</td></tr>';
   }
 
   function renderMiniProgress() {
@@ -440,8 +518,10 @@
     const authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
     document.getElementById('user-name').textContent = authUser && authUser.email ? authUser.email : 'Administrateur';
     document.getElementById('user-role').textContent = 'Compte administrateur';
+    await loadLiveData();
     app.classList.remove('hidden');
     render();
+    notify(liveDataSource === 'live' ? 'Données réelles chargées : ' + catalogProducts.length + ' produit(s) et ' + liveOrders.length + ' commande(s). Les actions du scénario restent simulées.' : 'API indisponible : affichage des données de démonstration.');
   }
 
   init();

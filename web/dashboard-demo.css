@@ -258,6 +258,7 @@
 .demo-product-art { height: 88px; background-color: #a84b2e; background-image: repeating-linear-gradient(0deg, transparent 0 19px, rgba(8,20,33,.34) 20px 22px), repeating-linear-gradient(90deg, transparent 0 36px, rgba(8,20,33,.34) 37px 39px); }
 .demo-product-art.sand { background-color: #d8b16e; }
 .demo-product-art.pavers { background-color: #929da1; }
+.demo-product-art img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .demo-product-copy { padding: 10px; }
 .demo-product-copy h3 { margin: 0; font-size: 12px; }
 .demo-product-copy p { margin: 3px 0 10px; color: var(--demo-muted); font-size: 9px; }
