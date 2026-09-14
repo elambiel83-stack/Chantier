@@ -45,11 +45,16 @@
           <label><input type="radio" name="paymentProvider" value="orange_money"> Orange Money</label>
         </div>
       </fieldset>
-      <label class="md:col-span-2 flex gap-2 text-sm text-slate-600"><input type="checkbox" required> J'accepte les <a class="text-red-600 underline" href="terms.html">conditions de vente</a> et la <a class="text-red-600 underline" href="privacy.html">politique de confidentialité</a>.</label>
+      <label class="md:col-span-2 flex gap-2 text-sm text-slate-600"><input type="checkbox" id="consent-checkbox" required> J'accepte les <a class="text-red-600 underline" href="terms.html">conditions de vente</a> et la <a class="text-red-600 underline" href="privacy.html">politique de confidentialité</a>.</label>
+      <div class="md:col-span-2">
+        <label class="block text-sm font-medium mb-1">Position de livraison (optionnel)</label>
+        <button type="button" id="share-location" data-i18n="shareLocationBtn" class="px-3 py-2 rounded-lg border text-sm hover:bg-slate-50" disabled>Partager ma position</button>
+        <span id="location-status" class="ml-2 text-sm text-slate-500"></span>
+      </div>
       <button id="checkout" type="submit" class="signal-button w-full md:w-auto px-4 md:px-5 py-3 rounded-xl bg-red-600 text-white hover:bg-red-700 text-center text-sm md:text-base" data-i18n="pay">Payer et commander</button>
       <p id="checkout-status" class="md:col-span-2 text-sm" role="status" aria-live="polite"></p>
     </form>
-    <p class="text-slate-500 mt-4 md:mt-6 text-sm md:text-base" data-i18n="cartNote">Astuce: Ajoutez votre localisation Google Maps dans le message WhatsApp pour une livraison plus rapide.</p>
+    <p class="text-slate-500 mt-4 md:mt-6 text-sm md:text-base" data-i18n="cartNote">Partager votre position aide notre équipe à livrer plus vite — votre commande reste possible sans elle.</p>
   </div>
   <script src="products.js"></script>
   <script src="site.js"></script>

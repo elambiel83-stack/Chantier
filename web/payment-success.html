@@ -15,6 +15,7 @@ if (!orderId || !confirmationToken) { status.textContent = 'Lien de confirmation
       return;
     }
     localStorage.removeItem('cart');
+    if (localStorage.getItem('accessToken')) window.apiCall('/cart', { method: 'DELETE' }).catch(() => {});
     status.textContent = `Paiement confirmé. Votre commande ${response.orderId} est confirmée.`;
   }).catch((error) => { status.textContent = error.message || 'Le paiement n’a pas pu être confirmé.'; });
 }

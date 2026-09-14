@@ -18,6 +18,25 @@
     });
   });
 
+  // Fusionne le panier local (ajouté avant la connexion, ou par un visiteur) avec celui déjà
+  // enregistré côté serveur pour ce compte (ajouté depuis un autre appareil) plutôt que de
+  // perdre l'un des deux — les quantités des produits communs aux deux s'additionnent.
+  async function mergeCartOnLogin() {
+    try {
+      const localCart = JSON.parse(localStorage.getItem('cart') || '[]').filter((item) => item && item.id && Number(item.qty) > 0);
+      const serverItems = (window.fetchCartFromServer ? await window.fetchCartFromServer() : null) || [];
+      const merged = new Map(serverItems.map((item) => [item.id, item.qty]));
+      for (const item of localCart) {
+        merged.set(item.id, (merged.get(item.id) || 0) + item.qty);
+      }
+      const mergedItems = [...merged].map(([id, qty]) => ({ id, qty }));
+      localStorage.setItem('cart', JSON.stringify(mergedItems));
+      if (mergedItems.length && window.syncCartToServer) await window.syncCartToServer(mergedItems);
+    } catch (error) {
+      // Pas bloquant: la connexion réussit même si la fusion du panier échoue.
+    }
+  }
+
   async function authenticate(endpoint, form) {
     const button = form.querySelector('button[type="submit"]');
     button.disabled = true;
@@ -27,6 +46,7 @@
       localStorage.setItem('accessToken', data.accessToken);
       localStorage.setItem('refreshToken', data.refreshToken);
       localStorage.setItem('authUser', JSON.stringify(data.user));
+      await mergeCartOnLogin();
       // Retour sur la page d'où venait l'utilisateur (le panier, l'espace staff...).
       const redirect = localStorage.getItem('postLoginRedirect');
       localStorage.removeItem('postLoginRedirect');

@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mes commandes | MonChantier</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+</head>
+<body class="min-h-screen bg-slate-100 text-slate-900">
+  <main class="mx-auto max-w-3xl px-4 py-10">
+    <a href="index.html" class="brand-name inline-flex items-center gap-2 font-bold text-xl"><img src="assets/monchantier_logo.svg" alt="" class="h-10 w-auto">MonChantier</a>
+    <h1 class="mt-8 text-3xl font-bold">Mes commandes</h1>
+
+    <p id="orders-status" class="mt-4 text-sm text-slate-500" role="status" aria-live="polite">Chargement...</p>
+    <div id="orders-list" class="mt-4 space-y-3"></div>
+  </main>
+  <script src="orders.js"></script>
+</body>
+</html>

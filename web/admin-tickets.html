@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tickets — MonChantier</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-800">
+  <header class="bg-white shadow-sm sticky top-0 z-30">
+    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+      <a href="index.html" class="brand-name flex items-center gap-2 font-bold text-xl">
+        <img src="assets/monchantier_logo.svg" alt="MonChantier" class="h-10 w-auto">MonChantier
+      </a>
+      <div class="flex items-center gap-2 text-sm md:text-base">
+        <a href="admin.html" class="px-2 md:px-3 py-2 rounded-lg border">Commandes</a>
+        <a href="admin-imports.html" class="px-2 md:px-3 py-2 rounded-lg border">Importations</a>
+        <span id="whoami" class="text-slate-500 hidden sm:inline"></span>
+        <button id="logout-button" type="button" class="px-2 py-2 font-medium text-slate-600 hover:text-red-700">Déconnexion</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="page-surface max-w-5xl mx-auto px-4 py-4 md:py-8">
+    <h1 class="text-2xl md:text-3xl font-bold mb-1">Tickets de support</h1>
+    <p id="scope-note" class="text-slate-500 text-sm mb-4"></p>
+
+    <div id="denied" class="hidden bg-white rounded-xl p-6 shadow text-slate-700">
+      Cet espace est réservé au personnel MonChantier (staff/admin). <a href="index.html" class="text-red-600 underline">Retour au site</a>.
+    </div>
+
+    <div id="dashboard" class="hidden">
+      <button id="toggle-create" type="button" class="mb-4 px-3 py-2 rounded-lg border text-sm hover:bg-slate-100">Consigner un ticket (WhatsApp/e-mail/téléphone reçu hors plateforme)</button>
+      <form id="create-form" class="hidden page-surface grid grid-cols-1 gap-4 rounded-xl border border-slate-200 bg-white p-4 mb-6" novalidate>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-sm font-medium mb-1" for="create-channel">Canal</label>
+            <select id="create-channel" name="channel" class="w-full border rounded-lg px-3 py-2">
+              <option value="whatsapp">WhatsApp</option>
+              <option value="email">E-mail</option>
+              <option value="phone">Téléphone</option>
+              <option value="web">Web (au nom d'un client)</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1" for="create-customer-id">ID client existant (optionnel)</label>
+            <input id="create-customer-id" name="customerId" type="text" placeholder="UUID du client" class="w-full border rounded-lg px-3 py-2">
+          </div>
+        </div>
+        <p class="text-xs text-slate-500 -mt-2">Sans ID client, indiquez des coordonnées de contact directes ci-dessous.</p>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-sm font-medium mb-1" for="create-name">Nom du contact</label>
+            <input id="create-name" name="contactName" type="text" maxlength="200" class="w-full border rounded-lg px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1" for="create-phone">Téléphone</label>
+            <input id="create-phone" name="contactPhone" type="tel" maxlength="50" class="w-full border rounded-lg px-3 py-2">
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1" for="create-email">E-mail</label>
+            <input id="create-email" name="contactEmail" type="email" maxlength="320" class="w-full border rounded-lg px-3 py-2">
+          </div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="create-subject">Sujet</label>
+          <input id="create-subject" name="subject" type="text" required minlength="3" maxlength="200" class="w-full border rounded-lg px-3 py-2">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1" for="create-message">Résumé de la demande</label>
+          <textarea id="create-message" name="message" required minlength="1" maxlength="5000" rows="3" class="w-full border rounded-lg px-3 py-2"></textarea>
+        </div>
+        <button type="submit" class="signal-button self-start px-4 py-2 rounded-lg text-white text-sm">Créer le ticket</button>
+        <p id="create-status" class="text-sm" role="status" aria-live="polite"></p>
+      </form>
+
+      <div class="flex flex-wrap items-center gap-2 mb-4">
+        <label class="text-sm font-medium" for="status-filter">Statut</label>
+        <select id="status-filter" class="border rounded-lg px-3 py-2 text-sm">
+          <option value="">Tous</option>
+          <option value="open">Ouvert</option>
+          <option value="pending">En attente</option>
+          <option value="resolved">Résolu</option>
+          <option value="closed">Fermé</option>
+        </select>
+        <label class="text-sm font-medium ml-2" for="assigned-filter">Affectation</label>
+        <select id="assigned-filter" class="border rounded-lg px-3 py-2 text-sm">
+          <option value="">Tous</option>
+          <option value="me">Affectés à moi</option>
+          <option value="unassigned">Non affectés</option>
+        </select>
+        <button id="refresh" type="button" class="ml-auto px-3 py-2 rounded-lg border text-sm hover:bg-slate-100">Actualiser</button>
+      </div>
+      <p id="tickets-status" class="text-sm mb-3" role="status" aria-live="polite"></p>
+      <div id="tickets" class="space-y-3"></div>
+    </div>
+  </main>
+
+  <script src="admin-tickets.js"></script>
+</body>
+</html>

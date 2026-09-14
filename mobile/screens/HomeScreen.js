@@ -12,7 +12,7 @@ import {
 import { useCart } from '../context/CartContext';
 import { API_CONFIG } from '../config';
 
-export default function HomeScreen({ navigation }) {
+export default function HomeScreen({ navigation, user }) {
   const { getItemCount } = useCart();
 
   const openWhatsApp = () => {
@@ -45,6 +45,15 @@ export default function HomeScreen({ navigation }) {
           >
             <Text style={styles.secondaryButtonText}>📱 WhatsApp</Text>
           </TouchableOpacity>
+
+          {user?.role === 'customer' && (
+            <TouchableOpacity
+              style={styles.tertiaryButton}
+              onPress={() => navigation.navigate('Orders')}
+            >
+              <Text style={styles.tertiaryButtonText}>Mes commandes</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -149,6 +158,19 @@ const styles = StyleSheet.create({
   },
   secondaryButtonText: {
     color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  tertiaryButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  tertiaryButtonText: {
+    color: '#1e293b',
     fontSize: 16,
     fontWeight: 'bold',
   },

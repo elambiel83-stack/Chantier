@@ -72,7 +72,50 @@ client utilise pour envoyer son paiement. Si le numéro marchand correspondant n
 
 Une fois le paiement reçu et vérifié manuellement (SMS, relevé marchand...), un membre `staff` ou
 `admin` confirme la commande via `PATCH /api/orders/:orderId/status` (`{"status": "confirmed"}`),
-ce qui marque aussi le paiement correspondant comme `paid`.
+ce qui marque aussi le paiement correspondant comme `paid`. Seul un `admin` peut faire cette
+première transition (`pending → confirmed`) ; un `staff` ne peut réclamer
+(`POST /api/orders/:orderId/claim`) et faire progresser qu'une commande déjà `confirmed`.
+
+### Mes commandes et confirmation par e-mail
+
+- `GET /api/orders` : historique du client connecté (`staff`/`admin` voient plus large, voir
+  « Interface staff/admin » plus bas).
+- `GET /api/orders/:orderId` : détail d'une commande avec ses articles (`items`), même périmètre
+  d'accès que ci-dessus — un client qui n'est pas propriétaire de la commande reçoit un `404`,
+  jamais un `403` qui confirmerait que la commande existe.
+- `web/orders.html` (lien « Mes commandes » dans l'en-tête, visible une fois connecté avec un
+  compte `customer`) et `mobile/screens/OrdersScreen.js` (bouton « Mes commandes » sur l'accueil,
+  même condition) listent ces commandes et chargent le détail à la demande (au clic, pas au
+  chargement de la page/l'écran).
+
+Un e-mail de confirmation est envoyé au client juste après la création de la commande (via
+Resend, voir `RESEND_API_KEY`) : articles, total, instructions de paiement. Envoi purement
+informatif et non bloquant — `channelAvailability().email` évite une tentative si Resend n'est
+pas configuré, et un échec d'envoi (déjà configuré mais indisponible) n'empêche jamais la
+création de la commande, seulement journalisé en avertissement.
+
+## Panier
+
+Un visiteur non connecté garde un panier purement local (`localStorage` côté web,
+`AsyncStorage` côté mobile) : rien n'est envoyé au backend tant qu'il n'a pas de compte.
+
+Une fois connecté, le panier est synchronisé entre appareils via trois routes authentifiées,
+adossées à la table `cart_item` (par compte, pas par session anonyme) :
+
+- `GET /api/cart` : `{ items: [{ id, qty }] }`.
+- `PUT /api/cart` : remplace entièrement le panier serveur (`items: []` le vide). Même
+  vérification indicative qu'à l'ajout côté panier local : produit existant et quantité ne
+  dépassant pas le stock affiché — seul le passage de commande réserve réellement le stock.
+- `DELETE /api/cart` : vide le panier serveur (appelé après une commande confirmée).
+
+Le client (`web/site.js`+`web/config.js`, `mobile/context/CartContext.js`) applique la même
+logique des deux côtés : à la connexion, panier local et panier serveur sont **fusionnés**
+(quantités additionnées pour un même produit) puisque le local peut contenir des articles
+ajoutés avant l'identification ; aux ouvertures suivantes (session déjà active), le panier
+serveur est **adopté** tel quel — il peut refléter un ajout fait entre-temps depuis un autre
+appareil. Chaque modification locale (ajout/retrait/quantité) pousse aussitôt le panier complet
+vers le serveur (best-effort : une synchronisation qui échoue — hors ligne, session expirée —
+laisse le panier local pleinement utilisable, sans bloquer l'UI).
 
 ## Sourcing produits et demandes d’importation
 
