@@ -510,11 +510,16 @@ async function findOrCreateSocialAccount(client, { column, sub, email, fullName 
 
 async function requireAuthentication(req, res, next) {
   if (!requireDatabase(res)) return;
-  const match = /^Bearer\s+(.+)$/i.exec(String(req.get('authorization') || ''));
-  if (!match) return res.status(401).json({ success: false, message: 'Authentification requise' });
+  const authorization = String(req.get('authorization') || '').trim();
+  const separator = authorization.indexOf(' ');
+  const scheme = separator === -1 ? authorization : authorization.slice(0, separator);
+  const token = separator === -1 ? '' : authorization.slice(separator + 1).trim();
+  if (scheme.toLowerCase() !== 'bearer' || !token) {
+    return res.status(401).json({ success: false, message: 'Authentification requise' });
+  }
   try {
     requireJwtSecret();
-    const payload = jwt.verify(match[1], JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
+    const payload = jwt.verify(token, JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
     const accountResult = await database.query('SELECT id, customer_id, role, is_active FROM user_account WHERE id = $1', [payload.sub]);
     const account = accountResult.rows[0];
     if (!account || !account.is_active) return res.status(401).json({ success: false, message: 'Session invalide ou compte desactive' });
@@ -1435,8 +1440,11 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
         [payment.id]
       );
       if (!paymentUpdate.rowCount) {
+        const currentStatusResult = await client.query('SELECT status FROM payment WHERE id = $1', [payment.id]);
         await client.query('COMMIT');
-        return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+        const currentStatus = currentStatusResult.rows[0]?.status;
+        if (currentStatus === 'paid') return res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
+        return res.status(409).json({ success: false, message: 'Le paiement PayPal ne peut plus être confirmé' });
       }
       await client.query(
         "UPDATE orders SET status = 'confirmed', reservation_expires_at = NULL, updated_at = now() WHERE id = $1 AND status = 'pending'",
