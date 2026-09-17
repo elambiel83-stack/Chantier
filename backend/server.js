@@ -316,15 +316,14 @@ const PRODUCTS = [
   }
 ];
 
-// Stockage temporaire des paniers (en production, utiliser une base de données)
-let carts = {};
-
-const cartSchema = z.object({
-  sessionId: z.string().uuid(),
+// Panier synchronisé entre appareils: stocké dans cart_item (table), rattaché au compte
+// (voir GET/PUT/DELETE /api/cart plus bas). Un visiteur non connecté reste en local
+// uniquement (localStorage/AsyncStorage côté client), rien à valider ici pour lui.
+const cartItemsSchema = z.object({
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
-  })).min(1).max(100)
+  })).max(100)
 });
 
 const orderSchema = z.object({
@@ -338,8 +337,15 @@ const orderSchema = z.object({
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
-  })).min(1).max(100)
-});
+  })).min(1).max(100),
+  // Position de livraison optionnelle (bouton "Partager ma position" au moment de la commande).
+  // Les deux doivent être fournies ensemble ou omises: une seule coordonnée est inexploitable.
+  deliveryLatitude: z.number().min(-90).max(90).optional(),
+  deliveryLongitude: z.number().min(-180).max(180).optional()
+}).refine(
+  (data) => (data.deliveryLatitude === undefined) === (data.deliveryLongitude === undefined),
+  { message: 'La latitude et la longitude de livraison doivent être fournies ensemble', path: ['deliveryLatitude'] }
+);
 
 const credentialsSchema = z.object({
   email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
@@ -365,7 +371,64 @@ const appleAuthSchema = z.object({
 });
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
-const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
+const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor']) });
+const driverLocationSchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180)
+});
+
+// Marketplace multi-vendeurs (transporteur, fournisseur, artisan, vendeur de matériaux...).
+// Réutilise les catégories déjà utilisées par le catalogue plutôt qu'une nomenclature séparée.
+const vendorCategorySchema = z.enum(['produits', 'services', 'facilitation', 'partenaires']);
+const createVendorSchema = z.object({
+  email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
+  businessName: z.string().trim().min(2).max(120),
+  category: vendorCategorySchema,
+  phone: z.string().trim().min(6).max(30).optional()
+});
+const vendorActiveSchema = z.object({ isActive: z.boolean() });
+// z.string().url() accepte n'importe quel schéma bien formé (y compris javascript:) — cette
+// image est ensuite posée telle quelle dans un attribut src par tout le monde (voir
+// web/site.js), donc seuls http(s) sont acceptés ici.
+const imageUrlSchema = z.string().trim().max(500).regex(/^https?:\/\//i, 'URL d’image invalide (http/https requis)');
+const vendorProductSchema = z.object({
+  nameFr: z.string().trim().min(2).max(120),
+  nameEn: z.string().trim().min(2).max(120),
+  unit: z.string().trim().min(1).max(20),
+  price: z.number().min(0).max(1000000),
+  category: vendorCategorySchema,
+  stockQty: z.number().min(0).max(1000000).optional(),
+  imageUrl: imageUrlSchema.optional()
+});
+const vendorProductUpdateSchema = z.object({
+  nameFr: z.string().trim().min(2).max(120).optional(),
+  nameEn: z.string().trim().min(2).max(120).optional(),
+  unit: z.string().trim().min(1).max(20).optional(),
+  price: z.number().min(0).max(1000000).optional(),
+  category: vendorCategorySchema.optional(),
+  stockQty: z.number().min(0).max(1000000).optional(),
+  imageUrl: imageUrlSchema.optional(),
+  isActive: z.boolean().optional()
+});
+// 'pending' est l'état initial fixé à la création de la commande, jamais choisi ensuite.
+const vendorItemStatusSchema = z.object({ status: z.enum(['confirmed', 'ready', 'delivered', 'cancelled']) });
+// Au-delà de ce délai sans mise à jour de position pendant une livraison en cours, on
+// considère un blocage possible (embouteillage...) et on avertit le client une fois.
+const DELIVERY_DELAY_THRESHOLD_MINUTES = 15;
+// Durée de conservation des coordonnées de géolocalisation (destination du client, position
+// du livreur) après qu'une commande soit terminée ou annulée — voir purgeStaleDeliveryLocations
+// et web/privacy.html.
+const LOCATION_RETENTION_DAYS = 30;
+
+// true si la commande est en livraison et que la position du livreur n'a plus été
+// rafraîchie depuis DELIVERY_DELAY_THRESHOLD_MINUTES: signale un blocage possible
+// (embouteillage...) côté client, sans prétendre en connaître la cause réelle.
+function withPossibleDelay(order) {
+  const possibleDelay = order.status === 'delivering'
+    && Boolean(order.driver_location_updated_at)
+    && (Date.now() - new Date(order.driver_location_updated_at).getTime()) > DELIVERY_DELAY_THRESHOLD_MINUTES * 60 * 1000;
+  return { ...order, possible_delay: possibleDelay };
+}
 
 const importRequestSchema = z.object({
   sourceUrl: z.string().trim().url().max(2048).optional(),
@@ -388,6 +451,31 @@ const importStatusSchema = z.object({
 }).refine((data) => data.status !== 'rejected' || Boolean(data.staffNotes?.trim()), {
   message: 'Un motif est requis pour refuser une demande d’importation',
   path: ['staffNotes']
+});
+
+const ticketChannelSchema = z.enum(['web', 'whatsapp', 'email', 'phone']);
+const ticketStatusSchema = z.enum(['open', 'pending', 'resolved', 'closed']);
+// Un client connecté ou un visiteur anonyme n'écrit jamais que depuis le web: seul le
+// staff/admin peut déclarer qu'un ticket vient d'un autre canal (voir POST /tickets), en
+// y rattachant soit un customerId existant, soit des coordonnées de contact directes.
+const ticketCreateSchema = z.object({
+  subject: z.string().trim().min(3).max(200),
+  message: z.string().trim().min(1).max(5000),
+  channel: ticketChannelSchema.optional(),
+  customerId: z.string().uuid().optional(),
+  contactName: z.string().trim().min(1).max(200).optional(),
+  contactPhone: z.string().trim().min(1).max(50).optional(),
+  contactEmail: z.string().trim().email().max(320).optional(),
+  'cf-turnstile-response': z.string().max(2048).optional()
+});
+const ticketMessageSchema = z.object({
+  message: z.string().trim().min(1).max(5000)
+});
+const ticketStatusUpdateSchema = z.object({
+  status: ticketStatusSchema
+});
+const ticketAssignSchema = z.object({
+  assigneeUserId: z.string().uuid().nullable()
 });
 
 function requireJwtSecret() {
@@ -451,10 +539,15 @@ async function requireAuthentication(req, res, next) {
   try {
     requireJwtSecret();
     const payload = jwt.verify(match[1], JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
-    const accountResult = await database.query('SELECT id, customer_id, role, is_active FROM user_account WHERE id = $1', [payload.sub]);
+    const accountResult = await database.query(
+      `SELECT user_account.id, user_account.customer_id, user_account.role, user_account.is_active, vendor.id AS vendor_id
+       FROM user_account LEFT JOIN vendor ON vendor.user_id = user_account.id
+       WHERE user_account.id = $1`,
+      [payload.sub]
+    );
     const account = accountResult.rows[0];
     if (!account || !account.is_active) return res.status(401).json({ success: false, message: 'Session invalide ou compte desactive' });
-    req.auth = { userId: account.id, customerId: account.customer_id, role: account.role };
+    req.auth = { userId: account.id, customerId: account.customer_id, role: account.role, vendorId: account.vendor_id };
     next();
   } catch (error) {
     res.status(401).json({ success: false, message: 'Jeton d’authentification invalide ou expire' });
@@ -466,6 +559,40 @@ function requireRole(...roles) {
     if (!roles.includes(req.auth.role)) return res.status(403).json({ success: false, message: 'Droits insuffisants' });
     next();
   };
+}
+
+// Un rôle 'vendor' sans ligne vendor associée (ex: promu via PATCH .../role sans passer par
+// POST /api/admin/vendors) ne doit jamais pouvoir agir avec un vendor_id manquant/erroné —
+// notamment publier un produit sans propriétaire (indiscernable du catalogue MonChantier).
+function requireVendorProfile(req, res, next) {
+  if (!req.auth.vendorId) return res.status(403).json({ success: false, message: 'Profil partenaire introuvable — contactez un administrateur' });
+  next();
+}
+
+// Comme requireAuthentication, mais ne bloque jamais: un jeton absent, invalide ou expiré
+// laisse simplement req.auth à null plutôt que de répondre 401. Seul POST /api/tickets en a
+// besoin — c'est le seul point d'écriture où un visiteur anonyme doit pouvoir passer, tout en
+// bénéficiant d'un customerId reconnu quand il se trouve être connecté.
+async function attachOptionalAuth(req, res, next) {
+  const match = /^Bearer (.+)$/.exec(req.get('authorization') || '');
+  if (!match || !database) { req.auth = null; return next(); }
+  try {
+    requireJwtSecret();
+    const payload = jwt.verify(match[1], JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
+    const accountResult = await database.query(
+      `SELECT user_account.id, user_account.customer_id, user_account.role, user_account.is_active, vendor.id AS vendor_id
+       FROM user_account LEFT JOIN vendor ON vendor.user_id = user_account.id
+       WHERE user_account.id = $1`,
+      [payload.sub]
+    );
+    const account = accountResult.rows[0];
+    req.auth = (account && account.is_active)
+      ? { userId: account.id, customerId: account.customer_id, role: account.role, vendorId: account.vendor_id }
+      : null;
+  } catch (error) {
+    req.auth = null;
+  }
+  next();
 }
 
 function requireDatabase(res) {
@@ -491,7 +618,7 @@ async function checkTurnstile(req, res, token) {
 async function getPaypalAccessToken() {
   const { PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_API_BASE } = process.env;
   if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
-    throw new Error('PayPal n’est pas configuré');
+    throw Object.assign(new Error('PayPal n’est pas configuré'), { status: 503 });
   }
 
   const authorization = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString('base64');
@@ -646,7 +773,10 @@ function mapProductRow(row) {
     price: Number(row.price_usd),
     img: row.image_url,
     category: row.category,
-    stock: row.stock_qty === null ? 0 : Number(row.stock_qty)
+    stock: row.stock_qty === null ? 0 : Number(row.stock_qty),
+    // Absent (undefined) pour le catalogue MonChantier (mode sans base et produits sans
+    // partenaire) — présent seulement quand product.vendor_id pointe vers un vendor actif.
+    vendorName: row.vendor_business_name || null
   };
 }
 
@@ -666,16 +796,22 @@ async function listCatalog({ category, search } = {}) {
   const filters = [];
   if (category) {
     values.push(category);
-    filters.push(`category = $${values.length}`);
+    filters.push(`product.category = $${values.length}`);
   }
   if (search) {
     values.push(`%${search.toLowerCase().replace(/([\\%_])/g, '\\$1')}%`);
     const placeholder = `$${values.length}`;
-    filters.push(`(lower(name_fr) LIKE ${placeholder} ESCAPE '\\' OR lower(name_en) LIKE ${placeholder} ESCAPE '\\' OR lower(id) LIKE ${placeholder} ESCAPE '\\')`);
+    filters.push(`(lower(product.name_fr) LIKE ${placeholder} ESCAPE '\\' OR lower(product.name_en) LIKE ${placeholder} ESCAPE '\\' OR lower(product.id) LIKE ${placeholder} ESCAPE '\\')`);
   }
+  // Un produit n'est visible publiquement que s'il est actif et, s'il appartient à un
+  // partenaire, que ce partenaire l'est aussi (permet de suspendre un partenaire entier
+  // sans avoir à désactiver chacun de ses produits un par un).
+  filters.push(`product.is_active = true AND (product.vendor_id IS NULL OR vendor.is_active = true)`);
   const result = await database.query(
-    `SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty FROM product
-     ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY id`,
+    `SELECT product.id, product.name_fr, product.name_en, product.unit, product.price_usd, product.image_url, product.category, product.stock_qty,
+            vendor.business_name AS vendor_business_name
+     FROM product LEFT JOIN vendor ON vendor.id = product.vendor_id
+     WHERE ${filters.join(' AND ')} ORDER BY product.id`,
     values
   );
   return result.rows.map(mapProductRow);
@@ -685,7 +821,10 @@ async function findProduct(id) {
   if (!database) return PRODUCTS.find((product) => product.id === id) || null;
   await syncCatalog();
   const result = await database.query(
-    'SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty FROM product WHERE id = $1',
+    `SELECT product.id, product.name_fr, product.name_en, product.unit, product.price_usd, product.image_url, product.category, product.stock_qty,
+            vendor.business_name AS vendor_business_name
+     FROM product LEFT JOIN vendor ON vendor.id = product.vendor_id
+     WHERE product.id = $1 AND product.is_active = true AND (product.vendor_id IS NULL OR vendor.is_active = true)`,
     [id]
   );
   return result.rowCount ? mapProductRow(result.rows[0]) : null;
@@ -698,6 +837,91 @@ function aggregateQuantities(items) {
     quantities.set(item.id, (quantities.get(item.id) || 0) + item.qty);
   }
   return quantities;
+}
+
+// products: Map id -> ligne product (voir POST /api/orders, déjà chargée pour le décompte
+// de stock — pas de requête supplémentaire ici). payment: instructions mobile money, ou
+// undefined pour PayPal (le client règle ensuite via /orders/:id/paypal).
+function sendOrderConfirmationEmail(to, order, quantities, products, payment) {
+  const lines = [...quantities].map(([productId, qty]) => {
+    const product = products.get(productId);
+    return `- ${product.name_fr} (${product.id}) x${qty} ${product.unit}`;
+  });
+  const paymentInstructions = payment
+    ? `Paiement : envoyez ${order.total_amount} ${order.currency} via ${payment.label} au ${payment.payoutNumber} en indiquant la référence ${payment.reference}. Votre commande sera confirmée après vérification du paiement.`
+    : 'Paiement : finalisez le paiement PayPal pour confirmer la commande.';
+  const text = `Merci pour votre commande MonChantier !
+
+Référence : ${order.id}
+
+Articles commandés :
+${lines.join('\n')}
+
+Total : ${order.total_amount} ${order.currency}
+
+${paymentInstructions}
+
+Vous pouvez suivre l'état de votre commande à tout moment depuis « Mes commandes » sur le site.`;
+  return sendEmail(to, `Confirmation de votre commande MonChantier (${order.id.slice(0, 8)})`, text);
+}
+
+// Balayage périodique: avertit une fois le client d'une commande en livraison dont la
+// position du livreur n'a plus été rafraîchie depuis DELIVERY_DELAY_THRESHOLD_MINUTES
+// (blocage/embouteillage possible — on ne prétend pas en connaître la cause exacte, faute
+// d'intégration avec un service de trafic en temps réel). Ne se redéclenche que si le
+// livreur partage de nouveau sa position entre-temps (voir PATCH .../location, qui efface
+// delay_notified_at).
+async function checkDeliveryDelays() {
+  if (!database) return;
+  try {
+    const result = await database.query(
+      `SELECT orders.id, customer.email
+       FROM orders JOIN customer ON customer.id = orders.customer_id
+       WHERE orders.status = 'delivering'
+         AND orders.driver_location_updated_at IS NOT NULL
+         AND orders.driver_location_updated_at < now() - ($1 * interval '1 minute')
+         AND orders.delay_notified_at IS NULL`,
+      [DELIVERY_DELAY_THRESHOLD_MINUTES]
+    );
+    for (const order of result.rows) {
+      await database.query('UPDATE orders SET delay_notified_at = now() WHERE id = $1', [order.id]);
+      if (order.email && channelAvailability().email) {
+        sendEmail(
+          order.email,
+          `Retard possible de votre livraison MonChantier (${order.id.slice(0, 8)})`,
+          `Bonjour,\n\nVotre commande ${order.id} semble retardée en chemin (embouteillage ou imprévu possible). Notre équipe reste en contact avec le livreur et votre commande reste en cours de livraison.\n\nVous pouvez suivre la position du livreur depuis « Mes commandes » sur le site.`
+        ).catch((error) => console.error('⚠️  Notification de retard non envoyée:', error.message));
+      }
+    }
+  } catch (error) {
+    console.error('⚠️  Vérification des retards de livraison impossible:', error.message);
+  }
+}
+
+// Balayage périodique: tient la promesse de web/privacy.html ("les données de commande
+// sont supprimées ou anonymisées lorsqu'elles ne sont plus nécessaires") pour les
+// coordonnées de géolocalisation — la destination fournie par le client comme la position
+// du livreur. Une fois la commande dans un état terminal (completed/cancelled) depuis plus
+// de LOCATION_RETENTION_DAYS, ces colonnes sont mises à NULL; le reste de la commande
+// (montants, articles, statut) est conservé pour la comptabilité, seule la géolocalisation
+// est effacée. `updated_at` se fige à la transition vers l'état terminal: aucune mise à
+// jour de position n'est plus acceptée par PATCH .../location une fois la commande
+// terminée/annulée (voir cette route), donc `updated_at` reflète bien cette date-là.
+async function purgeStaleDeliveryLocations() {
+  if (!database) return;
+  try {
+    const result = await database.query(
+      `UPDATE orders SET delivery_latitude = NULL, delivery_longitude = NULL,
+              driver_latitude = NULL, driver_longitude = NULL, driver_location_updated_at = NULL
+       WHERE status IN ('completed', 'cancelled')
+         AND updated_at < now() - ($1 * interval '1 day')
+         AND (delivery_latitude IS NOT NULL OR driver_latitude IS NOT NULL)`,
+      [LOCATION_RETENTION_DAYS]
+    );
+    if (result.rowCount) console.log(`🧹 Géolocalisation anonymisée sur ${result.rowCount} commande(s) terminée(s) depuis plus de ${LOCATION_RETENTION_DAYS} jours`);
+  } catch (error) {
+    console.error('⚠️  Anonymisation des positions de livraison impossible:', error.message);
+  }
 }
 
 // Routes API
@@ -767,9 +991,24 @@ app.get('/api/products/category/:category', async (req, res, next) => {
   }
 });
 
-// Ajouter/mettre à jour le panier
-app.post('/api/cart', async (req, res, next) => {
-  const parsedCart = cartSchema.safeParse(req.body);
+// Panier synchronisé entre appareils pour un compte connecté. Un visiteur non connecté
+// n'appelle jamais ces routes: son panier reste local (localStorage/AsyncStorage) tant
+// qu'il ne s'est pas identifié — voir web/site.js et mobile/context/CartContext.js.
+app.get('/api/cart', requireAuthentication, async (req, res, next) => {
+  try {
+    const result = await database.query(
+      'SELECT product_id AS id, qty FROM cart_item WHERE user_id = $1 ORDER BY product_id',
+      [req.auth.userId]
+    );
+    res.json({ success: true, cart: { items: result.rows } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Remplace entièrement le panier serveur par celui envoyé (items vide = panier vidé).
+app.put('/api/cart', requireAuthentication, async (req, res, next) => {
+  const parsedCart = cartItemsSchema.safeParse(req.body);
   if (!parsedCart.success) {
     return res.status(400).json({
       success: false,
@@ -778,42 +1017,50 @@ app.post('/api/cart', async (req, res, next) => {
     });
   }
 
-  const { sessionId, items } = parsedCart.data;
+  const quantities = aggregateQuantities(parsedCart.data.items);
 
   try {
     // Le stock affiché reste indicatif: seul le passage de commande le réserve.
-    const catalog = new Map((await listCatalog()).map((product) => [product.id, product]));
-    for (const [id, qty] of aggregateQuantities(items)) {
-      const product = catalog.get(id);
-      if (!product || qty > product.stock) {
-        return res.status(400).json({
-          success: false,
-          message: 'Un produit est introuvable ou la quantité dépasse le stock disponible'
-        });
+    if (quantities.size) {
+      const catalog = new Map((await listCatalog()).map((product) => [product.id, product]));
+      for (const [id, qty] of quantities) {
+        const product = catalog.get(id);
+        if (!product || qty > product.stock) {
+          return res.status(400).json({
+            success: false,
+            message: 'Un produit est introuvable ou la quantité dépasse le stock disponible'
+          });
+        }
       }
     }
   } catch (error) {
     return next(error);
   }
 
-  carts[sessionId] = {
-    items: items.map((item) => ({ id: item.id, qty: item.qty })),
-    updatedAt: new Date()
-  };
-
-  res.json({
-    success: true,
-    message: 'Panier mis à jour',
-    cart: carts[sessionId]
-  });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM cart_item WHERE user_id = $1', [req.auth.userId]);
+    for (const [id, qty] of quantities) {
+      await client.query('INSERT INTO cart_item (user_id, product_id, qty) VALUES ($1, $2, $3)', [req.auth.userId, id, qty]);
+    }
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Panier mis à jour', cart: { items: [...quantities].map(([id, qty]) => ({ id, qty })) } });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
 });
 
-// Créer un identifiant de panier non devinable.
-app.post('/api/cart/session', (req, res) => {
-  res.status(201).json({
-    success: true,
-    sessionId: crypto.randomUUID()
-  });
+app.delete('/api/cart', requireAuthentication, async (req, res, next) => {
+  try {
+    await database.query('DELETE FROM cart_item WHERE user_id = $1', [req.auth.userId]);
+    res.json({ success: true, message: 'Panier vidé' });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/auth/register', async (req, res, next) => {
@@ -1110,6 +1357,169 @@ app.patch('/api/admin/users/:userId/role', requireAuthentication, requireRole('a
   }
 });
 
+// Marketplace multi-vendeurs: crée le profil partenaire pour un compte déjà inscrit (la
+// personne doit d'abord créer un compte via /api/auth/register, comme tout customer) et le
+// bascule en rôle 'vendor'. Reprend le profil s'il existait déjà mais avait été suspendu
+// (ON CONFLICT réactive plutôt que de dupliquer).
+app.post('/api/admin/vendors', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  const parsed = createVendorSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Informations partenaire invalides', errors: parsed.error.flatten().fieldErrors });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const userResult = await client.query('SELECT id FROM user_account WHERE email = $1', [parsed.data.email]);
+    if (!userResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Aucun compte avec cet e-mail — la personne doit d’abord créer un compte' });
+    }
+    const userId = userResult.rows[0].id;
+    const vendorResult = await client.query(
+      `INSERT INTO vendor (user_id, business_name, category, phone) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id) DO UPDATE SET business_name = EXCLUDED.business_name, category = EXCLUDED.category, phone = EXCLUDED.phone, is_active = true
+       RETURNING id, business_name, category, phone, is_active`,
+      [userId, parsed.data.businessName, parsed.data.category, parsed.data.phone || null]
+    );
+    await client.query("UPDATE user_account SET role = 'vendor', updated_at = now() WHERE id = $1", [userId]);
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, vendor: vendorResult.rows[0] });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/admin/vendors', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  try {
+    const result = await database.query(
+      `SELECT vendor.id, vendor.business_name, vendor.category, vendor.phone, vendor.is_active, vendor.created_at, user_account.email
+       FROM vendor JOIN user_account ON user_account.id = vendor.user_id
+       ORDER BY vendor.created_at DESC`
+    );
+    res.json({ success: true, vendors: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Suspendre un partenaire masque immédiatement tout son catalogue (voir listCatalog/
+// findProduct: WHERE vendor.is_active) sans avoir à toucher chaque produit individuellement.
+app.patch('/api/admin/vendors/:vendorId', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.vendorId).success) return res.status(400).json({ success: false, message: 'Identifiant partenaire invalide' });
+  const parsed = vendorActiveSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
+  try {
+    const result = await database.query('UPDATE vendor SET is_active = $1 WHERE id = $2 RETURNING id, business_name, is_active', [parsed.data.isActive, req.params.vendorId]);
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Partenaire introuvable' });
+    res.json({ success: true, vendor: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Catalogue du partenaire (y compris ses annonces suspendues, contrairement à GET
+// /api/products): CRUD scopé à req.auth.vendorId, jamais aux produits d'un autre partenaire
+// ni au catalogue MonChantier.
+app.get('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  try {
+    const result = await database.query(
+      'SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active FROM product WHERE vendor_id = $1 ORDER BY id',
+      [req.auth.vendorId]
+    );
+    res.json({ success: true, products: result.rows.map((row) => ({ ...mapProductRow(row), isActive: row.is_active })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  const parsed = vendorProductSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Produit invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    // Les produits MonChantier utilisent des identifiants lisibles (BRQ-001...): un préfixe
+    // dédié évite toute collision avec ce catalogue existant ou entre partenaires.
+    const id = `V-${crypto.randomUUID().slice(0, 8)}`;
+    const result = await database.query(
+      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, vendor_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active`,
+      [id, parsed.data.nameFr, parsed.data.nameEn, parsed.data.unit, parsed.data.price, parsed.data.imageUrl || null, parsed.data.category, parsed.data.stockQty ?? 0, req.auth.vendorId]
+    );
+    res.status(201).json({ success: true, product: { ...mapProductRow(result.rows[0]), isActive: result.rows[0].is_active } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  const parsed = vendorProductUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Modification invalide', errors: parsed.error.flatten().fieldErrors });
+  const fieldMap = { nameFr: 'name_fr', nameEn: 'name_en', unit: 'unit', price: 'price_usd', category: 'category', stockQty: 'stock_qty', imageUrl: 'image_url', isActive: 'is_active' };
+  const sets = [];
+  const values = [];
+  for (const [key, column] of Object.entries(fieldMap)) {
+    if (parsed.data[key] !== undefined) {
+      values.push(parsed.data[key]);
+      sets.push(`${column} = $${values.length}`);
+    }
+  }
+  if (!sets.length) return res.status(400).json({ success: false, message: 'Aucune modification fournie' });
+  values.push(req.params.productId, req.auth.vendorId);
+  try {
+    const result = await database.query(
+      `UPDATE product SET ${sets.join(', ')} WHERE id = $${values.length - 1} AND vendor_id = $${values.length}
+       RETURNING id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active`,
+      values
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Produit introuvable' });
+    res.json({ success: true, product: { ...mapProductRow(result.rows[0]), isActive: result.rows[0].is_active } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Lignes de commande à préparer par ce partenaire — jamais la commande entière (qui peut
+// contenir des articles d'autres partenaires ou de MonChantier): seuls le nécessaire pour
+// livrer (client, position) et le statut de préparation de SA ligne sont exposés.
+app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  try {
+    const result = await database.query(
+      `SELECT order_item.id, order_item.qty, order_item.unit_price_usd, order_item.vendor_status,
+              product.name_fr, product.name_en, product.unit,
+              orders.id AS order_id, orders.status AS order_status, orders.currency, orders.created_at,
+              orders.delivery_latitude, orders.delivery_longitude,
+              customer.full_name, customer.phone
+       FROM order_item
+       JOIN orders ON orders.id = order_item.order_id
+       JOIN customer ON customer.id = orders.customer_id
+       JOIN product ON product.id = order_item.product_id
+       WHERE order_item.vendor_id = $1
+       ORDER BY orders.created_at DESC`,
+      [req.auth.vendorId]
+    );
+    res.json({ success: true, items: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/vendor/order-items/:itemId/status', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.itemId).success) return res.status(400).json({ success: false, message: 'Identifiant invalide' });
+  const parsed = vendorItemStatusSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
+  try {
+    const result = await database.query(
+      'UPDATE order_item SET vendor_status = $1 WHERE id = $2 AND vendor_id = $3 RETURNING id, vendor_status',
+      [parsed.data.status, req.params.itemId, req.auth.vendorId]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Article introuvable' });
+    res.json({ success: true, item: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/orders', requireAuthentication, requireRole('customer'), async (req, res, next) => {
   if (!requireDatabase(res)) return;
   const parsedOrder = orderSchema.safeParse(req.body);
@@ -1117,7 +1527,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     return res.status(400).json({ success: false, message: 'Commande invalide', errors: parsedOrder.error.flatten().fieldErrors });
   }
 
-  const { customer, currency, paymentProvider, items } = parsedOrder.data;
+  const { customer, currency, paymentProvider, items, deliveryLatitude, deliveryLongitude } = parsedOrder.data;
   if (paymentProvider === 'paypal' && currency === 'CDF') {
     return res.status(400).json({
       success: false,
@@ -1152,7 +1562,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
     // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
     const productResult = await client.query(
-      'SELECT id, price_usd, stock_qty FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
+      'SELECT id, name_fr, unit, price_usd, stock_qty, vendor_id FROM product WHERE id = ANY($1::text[]) AND is_active = true ORDER BY id FOR UPDATE',
       [productIds]
     );
     if (productResult.rowCount !== productIds.length) {
@@ -1175,7 +1585,11 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       }
     }
 
-    await client.query('UPDATE customer SET full_name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4', [customer.fullName, customer.phone, customer.email || null, req.auth.customerId]);
+    const customerResult = await client.query(
+      'UPDATE customer SET full_name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4 RETURNING email',
+      [customer.fullName, customer.phone, customer.email || null, req.auth.customerId]
+    );
+    const customerEmail = customerResult.rows[0].email;
     const rateResult = await client.query('SELECT units_per_usd FROM currency_rate WHERE currency = $1', [currency]);
     if (rateResult.rowCount !== 1) throw new Error('Devise indisponible');
     const rate = Number(rateResult.rows[0].units_per_usd);
@@ -1185,14 +1599,18 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     }
     const subtotal = Number((subtotalUsd * rate).toFixed(2));
     const orderResult = await client.query(
-      'INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount) VALUES ($1, $2, $3, $3) RETURNING id, status, total_amount, currency',
-      [req.auth.customerId, currency, subtotal]
+      `INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount, delivery_latitude, delivery_longitude)
+       VALUES ($1, $2, $3, $3, $4, $5) RETURNING id, status, total_amount, currency`,
+      [req.auth.customerId, currency, subtotal, deliveryLatitude ?? null, deliveryLongitude ?? null]
     );
     const order = orderResult.rows[0];
     for (const [productId, qty] of quantities) {
+      // vendor_id copié depuis product à cet instant (voir order_item.vendor_id dans
+      // schema.sql): un partenaire qui modifie ce produit plus tard ne doit pas faire
+      // perdre la trace de qui devait fournir cette ligne déjà commandée.
       await client.query(
-        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd) VALUES ($1, $2, $3, $4)',
-        [order.id, productId, qty, Number(products.get(productId).price_usd)]
+        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd, vendor_id) VALUES ($1, $2, $3, $4, $5)',
+        [order.id, productId, qty, Number(products.get(productId).price_usd), products.get(productId).vendor_id]
       );
     }
     await client.query(
@@ -1205,6 +1623,14 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     const payment = mobileMoneyProvider
       ? { provider: paymentProvider, label: mobileMoneyProvider.label, payoutNumber: mobileMoneyProvider.payoutNumber, reference: order.id }
       : undefined;
+    // Purement informatif: la commande est déjà créée à ce stade, un échec d'envoi ne doit
+    // jamais faire échouer la réponse au client. channelAvailability évite une tentative
+    // inutile (et un avertissement dans les logs) quand Resend n'est pas configuré.
+    if (customerEmail && channelAvailability().email) {
+      sendOrderConfirmationEmail(customerEmail, order, quantities, products, payment).catch((error) => {
+        console.warn('E-mail de confirmation de commande non envoyé:', error.message);
+      });
+    }
     res.status(201).json({
       success: true,
       order: { id: order.id, status: order.status, totalAmount: order.total_amount, currency: order.currency, paymentProvider },
@@ -1256,6 +1682,7 @@ app.post('/api/orders/:orderId/paypal', requireAuthentication, requireRole('cust
     const approval = paypalOrder.links.find((link) => link.rel === 'approve');
     res.json({ success: true, approvalUrl: approval && approval.href, confirmationToken });
   } catch (error) {
+    if (error.status === 503) return res.status(503).json({ success: false, message: 'PayPal n’est pas configuré. Contactez-nous.' });
     next(error);
   }
 });
@@ -1304,6 +1731,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
     }
     res.json({ success: true, orderId: req.params.orderId, status: 'confirmed' });
   } catch (error) {
+    if (error.status === 503) return res.status(503).json({ success: false, message: 'PayPal n’est pas configuré. Contactez-nous.' });
     next(error);
   }
 });
@@ -1397,6 +1825,10 @@ app.post('/api/cinetpay/notify', express.urlencoded({ extended: false, limit: '1
 });
 
 app.get('/api/orders', requireAuthentication, async (req, res, next) => {
+  // Un partenaire ne voit que ses propres lignes de commande, jamais la commande entière
+  // (qui peut contenir des articles d'autres partenaires concurrents): voir GET
+  // /api/vendor/orders, qui applique ce périmètre réduit.
+  if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
   const status = z.enum(['pending', 'confirmed', 'delivering', 'completed', 'cancelled']).safeParse(req.query.status);
   if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
   const filters = [];
@@ -1416,6 +1848,8 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
     // Un payment par commande (voir POST /api/orders): la jointure ne duplique pas les lignes.
     const result = await database.query(
       `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
+              orders.delivery_latitude, orders.delivery_longitude,
+              orders.driver_latitude, orders.driver_longitude, orders.driver_location_updated_at,
               customer.full_name, customer.phone, payment.provider AS payment_provider, payment.status AS payment_status
        FROM orders
        JOIN customer ON customer.id = orders.customer_id
@@ -1423,7 +1857,51 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY orders.created_at DESC`,
       values
     );
-    res.json({ success: true, orders: result.rows });
+    res.json({ success: true, orders: result.rows.map(withPossibleDelay) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Détail d'une commande (articles inclus) — même périmètre d'accès que la liste ci-dessus:
+// un customer ne voit que la sienne, un staff que celles qui lui sont affectées ou
+// disponibles, un admin toutes.
+app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) => {
+  if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  const filters = ['orders.id = $1'];
+  const values = [req.params.orderId];
+  if (req.auth.role === 'customer') {
+    values.push(req.auth.customerId);
+    filters.push(`orders.customer_id = $${values.length}`);
+  } else if (req.auth.role === 'staff') {
+    values.push(req.auth.userId);
+    filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
+  }
+  try {
+    const orderResult = await database.query(
+      `SELECT orders.id, orders.status, orders.currency, orders.total_amount, orders.created_at, orders.assigned_to,
+              orders.delivery_latitude, orders.delivery_longitude,
+              orders.driver_latitude, orders.driver_longitude, orders.driver_location_updated_at,
+              customer.full_name, customer.phone, payment.provider AS payment_provider, payment.status AS payment_status
+       FROM orders
+       JOIN customer ON customer.id = orders.customer_id
+       LEFT JOIN payment ON payment.order_id = orders.id
+       WHERE ${filters.join(' AND ')}`,
+      values
+    );
+    if (!orderResult.rowCount) return res.status(404).json({ success: false, message: 'Commande introuvable' });
+    const itemsResult = await database.query(
+      `SELECT order_item.product_id AS id, order_item.qty, order_item.unit_price_usd, order_item.vendor_status,
+              product.name_fr, product.name_en, product.unit,
+              vendor.business_name AS vendor_name
+       FROM order_item
+       JOIN product ON product.id = order_item.product_id
+       LEFT JOIN vendor ON vendor.id = order_item.vendor_id
+       WHERE order_item.order_id = $1 ORDER BY product.name_fr`,
+      [req.params.orderId]
+    );
+    res.json({ success: true, order: { ...withPossibleDelay(orderResult.rows[0]), items: itemsResult.rows } });
   } catch (error) {
     next(error);
   }
@@ -1434,6 +1912,34 @@ app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff
   try {
     const result = await database.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId]);
     if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette commande n’est plus disponible pour affectation' });
+    res.json({ success: true, order: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Position en direct du livreur, partagée volontairement et à répétition par le staff
+// assigné (ou un admin) pendant que la commande est confirmée ou en livraison — jamais un
+// suivi permanent en arrière-plan. Chaque mise à jour efface delay_notified_at: le livreur
+// est de nouveau "vu", une éventuelle alerte de retard pourra se redéclencher plus tard.
+app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  const parsed = driverLocationSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Coordonnées invalides' });
+  const values = [req.params.orderId, parsed.data.latitude, parsed.data.longitude];
+  let ownership = '';
+  if (req.auth.role === 'staff') {
+    values.push(req.auth.userId);
+    ownership = ` AND assigned_to = $${values.length}`;
+  }
+  try {
+    const result = await database.query(
+      `UPDATE orders SET driver_latitude = $2, driver_longitude = $3, driver_location_updated_at = now(), delay_notified_at = NULL, updated_at = now()
+       WHERE id = $1 AND status IN ('confirmed', 'delivering')${ownership}
+       RETURNING id, driver_latitude, driver_longitude, driver_location_updated_at`,
+      values
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Position non mise à jour: commande non assignée ou statut inadapté' });
     res.json({ success: true, order: result.rows[0] });
   } catch (error) {
     next(error);
@@ -1639,31 +2145,248 @@ app.post('/api/import-requests/:id/cancel', requireAuthentication, requireRole('
   }
 });
 
-// Récupérer le panier
-app.get('/api/cart/:sessionId', (req, res) => {
-  const cart = carts[req.params.sessionId];
-  
-  if (!cart) {
-    return res.json({
-      success: true,
-      cart: { items: [] }
-    });
+// Support multicanal: un client connecté ouvre lui-même un ticket depuis le web: le visiteur
+// anonyme peut aussi écrire (protégé par Turnstile, voir attachOptionalAuth ci-dessus), et le
+// staff/admin peut consigner un ticket reçu par WhatsApp, e-mail ou téléphone — canaux sans
+// intégration entrante réelle dans cet environnement (voir backend/notifications.js et
+// README > Sourcing produits pour le même choix sur les demandes d'importation).
+app.post('/api/tickets', attachOptionalAuth, async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const parsed = ticketCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Ticket invalide', errors: parsed.error.flatten().fieldErrors });
+  // Seul le visiteur anonyme n'a encore rien prouvé (pas de mot de passe, pas de jeton):
+  // sans CAPTCHA ce point d'entrée public deviendrait un formulaire de spam ouvert.
+  if (!req.auth && !(await checkTurnstile(req, res, parsed.data['cf-turnstile-response']))) return;
+
+  const isStaff = req.auth && ['staff', 'admin'].includes(req.auth.role);
+  let channel = 'web';
+  let customerId = null;
+  let contactName = null;
+  let contactPhone = null;
+  let contactEmail = null;
+
+  if (req.auth && req.auth.role === 'customer') {
+    if (!req.auth.customerId) return res.status(403).json({ success: false, message: 'Profil client introuvable' });
+    customerId = req.auth.customerId;
+  } else if (isStaff) {
+    channel = parsed.data.channel || 'web';
+    if (parsed.data.customerId) {
+      try {
+        const customerCheck = await database.query('SELECT id FROM customer WHERE id = $1', [parsed.data.customerId]);
+        if (!customerCheck.rowCount) return res.status(400).json({ success: false, message: 'Client introuvable' });
+      } catch (error) {
+        return next(error);
+      }
+      customerId = parsed.data.customerId;
+    } else {
+      contactName = parsed.data.contactName || null;
+      contactPhone = parsed.data.contactPhone || null;
+      contactEmail = parsed.data.contactEmail || null;
+      if (!contactName || (!contactPhone && !contactEmail)) {
+        return res.status(400).json({ success: false, message: 'Indiquez un client existant ou des coordonnées de contact (nom + téléphone ou e-mail)' });
+      }
+    }
+  } else {
+    // Visiteur anonyme, ou compte authentifié sans rôle dédié ici (ex: 'vendor'): jamais
+    // rattaché à un canal externe ni à un compte qu'il n'a pas prouvé être le sien.
+    contactName = parsed.data.contactName || null;
+    contactPhone = parsed.data.contactPhone || null;
+    contactEmail = parsed.data.contactEmail || null;
+    if (!contactName || (!contactPhone && !contactEmail)) {
+      return res.status(400).json({ success: false, message: 'Indiquez votre nom et un téléphone ou e-mail pour qu’on puisse vous répondre' });
+    }
   }
-  
-  res.json({
-    success: true,
-    cart
-  });
+
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const ticketResult = await client.query(
+      `INSERT INTO ticket (channel, customer_id, contact_name, contact_phone, contact_email, subject)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, channel, status, created_at`,
+      [channel, customerId, contactName, contactPhone, contactEmail, parsed.data.subject]
+    );
+    const ticket = ticketResult.rows[0];
+    await client.query(
+      'INSERT INTO ticket_message (ticket_id, author_type, author_user_id, body) VALUES ($1, $2, $3, $4)',
+      [ticket.id, isStaff ? 'staff' : 'customer', req.auth ? req.auth.userId : null, parsed.data.message]
+    );
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, ticket });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
 });
 
-// Supprimer le panier
-app.delete('/api/cart/:sessionId', (req, res) => {
-  delete carts[req.params.sessionId];
-  
-  res.json({
-    success: true,
-    message: 'Panier supprimé'
-  });
+app.get('/api/tickets', requireAuthentication, async (req, res, next) => {
+  const statusParsed = req.query.status ? ticketStatusSchema.safeParse(req.query.status) : null;
+  if (req.query.status && !statusParsed.success) return res.status(400).json({ success: false, message: 'Statut de ticket invalide' });
+  const filters = [];
+  const values = [];
+  if (req.auth.role === 'customer') {
+    if (!req.auth.customerId) return res.json({ success: true, tickets: [] });
+    values.push(req.auth.customerId);
+    filters.push(`ticket.customer_id = $${values.length}`);
+  } else if (!['staff', 'admin'].includes(req.auth.role)) {
+    return res.status(403).json({ success: false, message: 'Droits insuffisants' });
+  } else if (req.query.assigned === 'me') {
+    values.push(req.auth.userId);
+    filters.push(`ticket.assigned_to = $${values.length}`);
+  } else if (req.query.assigned === 'unassigned') {
+    filters.push('ticket.assigned_to IS NULL');
+  }
+  if (statusParsed?.success) {
+    values.push(statusParsed.data);
+    filters.push(`ticket.status = $${values.length}`);
+  }
+  try {
+    const result = await database.query(
+      `SELECT ticket.*, customer.full_name AS customer_name, customer.phone AS customer_phone, customer.email AS customer_email
+       FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id
+       ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+       ORDER BY ticket.updated_at DESC`,
+      values
+    );
+    res.json({ success: true, tickets: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// 404 plutôt que 403 si le ticket existe mais n'appartient pas à l'appelant: même choix que
+// GET /orders/:orderId, pour ne pas confirmer l'existence d'un ticket à un tiers.
+app.get('/api/tickets/:id', requireAuthentication, async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+  try {
+    const ticketResult = await database.query(
+      `SELECT ticket.*, customer.full_name AS customer_name, customer.phone AS customer_phone, customer.email AS customer_email
+       FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id
+       WHERE ticket.id = $1`,
+      [req.params.id]
+    );
+    const ticket = ticketResult.rows[0];
+    const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
+    const isStaff = ['staff', 'admin'].includes(req.auth.role);
+    if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+    const messagesResult = await database.query(
+      'SELECT id, author_type, author_user_id, body, sent_via_channel, created_at FROM ticket_message WHERE ticket_id = $1 ORDER BY created_at ASC',
+      [req.params.id]
+    );
+    res.json({ success: true, ticket, messages: messagesResult.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+  const parsed = ticketMessageSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Message invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    const ticketResult = await database.query(
+      `SELECT ticket.*, customer.phone AS customer_phone, customer.email AS customer_email
+       FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id WHERE ticket.id = $1`,
+      [req.params.id]
+    );
+    const ticket = ticketResult.rows[0];
+    const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
+    const isStaff = ['staff', 'admin'].includes(req.auth.role);
+    if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+
+    // Une réponse staff sur un ticket 'email'/'whatsapp'/'phone' part réellement vers le
+    // client (Resend / Africa's Talking, comme les autres notifications sortantes du dépôt);
+    // 'web' reste consultable uniquement ici, le client y étant déjà connecté. Toujours
+    // best-effort: un envoi externe qui échoue ne doit jamais faire perdre le message déjà
+    // consigné (voir sendOrderConfirmationEmail pour le même principe).
+    let sentViaChannel = false;
+    if (isStaff && ticket.channel !== 'web') {
+      const destinationEmail = ticket.contact_email || ticket.customer_email;
+      const destinationPhone = ticket.contact_phone || ticket.customer_phone;
+      const availability = channelAvailability();
+      try {
+        if (ticket.channel === 'email' && destinationEmail && availability.email) {
+          await sendEmail(destinationEmail, `Réponse à votre ticket MonChantier (${ticket.id.slice(0, 8)}) — ${ticket.subject}`, parsed.data.message);
+          sentViaChannel = true;
+        } else if (ticket.channel === 'whatsapp' && destinationPhone && availability.whatsapp) {
+          await sendWhatsApp(destinationPhone, parsed.data.message);
+          sentViaChannel = true;
+        } else if (ticket.channel === 'phone' && destinationPhone && availability.sms) {
+          await sendSms(destinationPhone, parsed.data.message);
+          sentViaChannel = true;
+        }
+      } catch (error) {
+        console.warn(`Envoi de la réponse ticket via ${ticket.channel} échoué:`, error.message);
+      }
+    }
+
+    const messageResult = await database.query(
+      `INSERT INTO ticket_message (ticket_id, author_type, author_user_id, body, sent_via_channel)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, author_type, author_user_id, body, sent_via_channel, created_at`,
+      [ticket.id, isOwner ? 'customer' : 'staff', req.auth.userId, parsed.data.message, sentViaChannel]
+    );
+    await database.query('UPDATE ticket SET updated_at = now() WHERE id = $1', [ticket.id]);
+    res.status(201).json({ success: true, message: messageResult.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
+  try {
+    const result = await database.query(
+      'UPDATE ticket SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL RETURNING id, status, assigned_to',
+      [req.auth.userId, req.params.id]
+    );
+    if (!result.rowCount) return res.status(409).json({ success: false, message: 'Ce ticket n’est plus disponible pour affectation' });
+    res.json({ success: true, ticket: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Contrairement aux demandes d'importation, tout statut peut transiter vers tout autre
+// (rouvrir un ticket fermé, le repasser 'pending'...): pas de pipeline strict à faire
+// respecter ici, et n'importe quel membre staff/admin peut agir, pas seulement l'agent
+// affecté — un ticket non réclamé doit rester traitable par toute l'équipe en attendant.
+app.patch('/api/tickets/:id/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
+  const parsed = ticketStatusUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
+  try {
+    const result = await database.query(
+      'UPDATE ticket SET status = $2, updated_at = now() WHERE id = $1 RETURNING id, status',
+      [req.params.id, parsed.data.status]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+    res.json({ success: true, ticket: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Réservé à l'admin: réaffecter ou libérer un ticket va au-delà de l'auto-affectation par
+// claim ci-dessus (déjà ouverte à tout le staff).
+app.patch('/api/tickets/:id/assign', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
+  const parsed = ticketAssignSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Affectation invalide' });
+  try {
+    if (parsed.data.assigneeUserId) {
+      const staffCheck = await database.query("SELECT id FROM user_account WHERE id = $1 AND role IN ('staff', 'admin')", [parsed.data.assigneeUserId]);
+      if (!staffCheck.rowCount) return res.status(400).json({ success: false, message: 'Agent introuvable' });
+    }
+    const result = await database.query(
+      'UPDATE ticket SET assigned_to = $2, updated_at = now() WHERE id = $1 RETURNING id, assigned_to',
+      [req.params.id, parsed.data.assigneeUserId]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
+    res.json({ success: true, ticket: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
 });
 
 if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
@@ -1692,6 +2415,11 @@ const server = app.listen(PORT, () => {
     .catch((error) => console.error('⚠️  Synchronisation du catalogue impossible:', error.message));
 });
 
+// unref(): un balayage périodique ne doit jamais, à lui seul, empêcher le process de
+// s'arrêter (utile notamment pour les tests, qui tuent le process sans passer par shutdown()).
+const deliveryDelayInterval = database ? setInterval(checkDeliveryDelays, 5 * 60 * 1000).unref() : null;
+const locationRetentionInterval = database ? setInterval(purgeStaleDeliveryLocations, 24 * 60 * 60 * 1000).unref() : null;
+
 // Arrêt propre: cesse d'accepter de nouvelles requêtes, laisse les requêtes en cours se
 // terminer, ferme le pool PostgreSQL, puis quitte. Un déploiement (Render, Docker, k8s...)
 // envoie SIGTERM et attend l'arrêt du process avant de le tuer: sans ce gestionnaire, les
@@ -1706,6 +2434,8 @@ async function shutdown(signal) {
     process.exit(1);
   }, 10000);
   forceExit.unref();
+  if (deliveryDelayInterval) clearInterval(deliveryDelayInterval);
+  if (locationRetentionInterval) clearInterval(locationRetentionInterval);
   try {
     await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     if (database) await database.end();

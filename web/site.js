@@ -1,4 +1,12 @@
 (function(){
+  // Un produit peut désormais provenir d'un partenaire de la marketplace (nom, unité,
+  // image publiés par ce partenaire lui-même — voir POST /api/vendor/products): ces champs
+  // ne sont plus des chaînes développeur fixes et doivent être échappés avant insertion
+  // dans innerHTML, sans quoi un partenaire malveillant pourrait injecter du HTML/JS visible
+  // par tout client parcourant le catalogue.
+  function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  }
   const FR = {
     hero1: "Achetez",
     hero2: "et matériaux de construction, livrés à votre chantier.",
@@ -19,7 +27,11 @@
     contact: "Contacts",
     legal: "Mentions",
     footerAbout: "E‑commerce de matériaux et services de construction basé à Kolwezi (RDC). Livraison chantier, paiement flexible.",
-    cartNote: "Astuce: Ajoutez votre localisation Google Maps dans le message WhatsApp pour une livraison plus rapide."
+    cartNote: "Partager votre position aide notre équipe à livrer plus vite — votre commande reste possible sans elle.",
+    shareLocationBtn: "Partager ma position",
+    locationShared: "Position partagée ✓",
+    locationDenied: "Position non partagée (autorisation refusée).",
+    locationNeedsConsent: "Acceptez les conditions de vente et la politique de confidentialité ci-dessus pour activer."
   };
   const EN = {
     hero1: "Buy",
@@ -41,7 +53,11 @@
     contact: "Contacts",
     legal: "Legal",
     footerAbout: "E‑commerce for construction materials based in Kolwezi (DRC). Site delivery, flexible payment.",
-    cartNote: "Tip: Include your Google Maps location in the WhatsApp message for faster delivery."
+    cartNote: "Sharing your position helps our team deliver faster — your order still works without it.",
+    shareLocationBtn: "Share my position",
+    locationShared: "Position shared ✓",
+    locationDenied: "Position not shared (permission denied).",
+    locationNeedsConsent: "Accept the terms of sale and privacy policy above to enable."
   };
   let lang = localStorage.getItem("lang") || "fr";
   let currency = localStorage.getItem("currency") || window.COMMERCE_CONFIG?.defaultCurrency || "USD";
@@ -87,7 +103,10 @@
   const authLink = document.getElementById('auth-link');
   const logoutButton = document.getElementById('logout-button');
   const staffLink = document.getElementById('staff-link');
+  const vendorLink = document.getElementById('vendor-link');
+  const ordersLink = document.getElementById('orders-link');
   const staffImportsLink = document.getElementById('staff-imports-link');
+  const staffTicketsLink = document.getElementById('staff-tickets-link');
   const authUser = JSON.parse(localStorage.getItem('authUser') || 'null');
   if (authLink && authUser) {
     authLink.textContent = authUser.email || 'Mon compte';
@@ -98,6 +117,13 @@
   if (authUser && ['staff', 'admin'].includes(authUser.role)) {
     staffLink?.classList.remove('hidden');
     staffImportsLink?.classList.remove('hidden');
+    staffTicketsLink?.classList.remove('hidden');
+  }
+  if (vendorLink && authUser && authUser.role === 'vendor') {
+    vendorLink.classList.remove('hidden');
+  }
+  if (ordersLink && authUser && authUser.role === 'customer') {
+    ordersLink.classList.remove('hidden');
   }
   if (logoutButton) {
     logoutButton.addEventListener('click', async () => {
@@ -125,11 +151,80 @@
     }
   }
 
+  // Écrit le panier localement puis, si connecté, le synchronise vers le serveur pour que
+  // les autres appareils du même compte le voient (best-effort, ne bloque jamais l'UI).
+  function persistCart(cart) {
+    localStorage.setItem('cart', JSON.stringify(cart));
+    if (window.syncCartToServer) window.syncCartToServer(cart);
+  }
+
+  // Au chargement d'une page, si connecté: adopte le panier du serveur (à jour si un autre
+  // appareil l'a modifié depuis). Un panier local non vide alors que le serveur est encore
+  // vide (ex: articles ajoutés avant connexion) est poussé vers le serveur plutôt que perdu.
+  async function syncCartOnLoad() {
+    if (!window.fetchCartFromServer) return;
+    const serverItems = await window.fetchCartFromServer();
+    if (serverItems === null) return;
+    const localCart = readCart();
+    if (serverItems.length === 0 && localCart.length > 0) {
+      await window.syncCartToServer(localCart);
+      return;
+    }
+    localStorage.setItem('cart', JSON.stringify(serverItems));
+  }
+
   function updateCartCount() {
     const count = readCart().reduce((total, item) => total + Number(item.qty), 0);
     document.querySelectorAll('#cart-count').forEach((badge) => {
       badge.textContent = count;
       badge.classList.toggle('hidden', count === 0);
+    });
+  }
+
+  // Position de livraison de la commande en cours (bouton "Partager ma position" dans le
+  // formulaire de commande) — distincte du bouton "Partager ma localisation" de l'accueil, qui
+  // ouvre WhatsApp sans rattacher la position à une commande précise.
+  let deliveryPosition = null;
+  const shareDeliveryLocationBtn = document.getElementById('share-location');
+  if (shareDeliveryLocationBtn) {
+    const locationStatus = document.getElementById('location-status');
+    const consentCheckbox = document.getElementById('consent-checkbox');
+
+    // La demande de géolocalisation ne doit jamais précéder le consentement aux conditions
+    // de vente/politique de confidentialité: le bouton reste désactivé tant que la case
+    // n'est pas cochée (voir web/cart.html, qui place désormais la case au-dessus).
+    const syncShareButtonToConsent = () => {
+      const consented = Boolean(consentCheckbox?.checked);
+      shareDeliveryLocationBtn.disabled = !consented;
+      if (!consented) locationStatus.textContent = dict().locationNeedsConsent;
+      else if (locationStatus.textContent === dict().locationNeedsConsent) locationStatus.textContent = '';
+    };
+    if (consentCheckbox) {
+      syncShareButtonToConsent();
+      consentCheckbox.addEventListener('change', syncShareButtonToConsent);
+    } else {
+      shareDeliveryLocationBtn.disabled = false;
+    }
+
+    shareDeliveryLocationBtn.addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        locationStatus.textContent = lang === 'fr' ? 'Géolocalisation non supportée par votre navigateur.' : 'Geolocation not supported by your browser.';
+        return;
+      }
+      shareDeliveryLocationBtn.disabled = true;
+      locationStatus.textContent = lang === 'fr' ? 'Localisation...' : 'Getting location...';
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          deliveryPosition = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+          locationStatus.textContent = dict().locationShared;
+          shareDeliveryLocationBtn.disabled = false;
+        },
+        () => {
+          deliveryPosition = null;
+          locationStatus.textContent = dict().locationDenied;
+          shareDeliveryLocationBtn.disabled = false;
+        }
+      );
     });
   }
 
@@ -180,12 +275,13 @@
     const items = (window.PRODUCTS || []).filter(p => (p.category === currentCategory) && ((p.name_fr + " " + p.name_en).toLowerCase().includes(q)));
     grid.innerHTML = items.map(p => `
       <div class="catalog-card bg-white rounded-2xl shadow p-4 flex flex-col">
-        <img src="${p.img}" alt="${p.name_fr}" class="h-32 sm:h-40 w-full object-cover rounded-xl">
-        <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${lang === "fr" ? p.name_fr : p.name_en}</div>
-        <div class="text-slate-500 text-xs sm:text-sm">${p.id} · ${p.unit}${p.stock ? ' · Stock: ' + p.stock : ''}</div>
+        <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name_fr)}" class="h-32 sm:h-40 w-full object-cover rounded-xl">
+        <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${escapeHtml(lang === "fr" ? p.name_fr : p.name_en)}</div>
+        <div class="text-slate-500 text-xs sm:text-sm">${escapeHtml(p.id)} · ${escapeHtml(p.unit)}${p.stock ? ' · Stock: ' + escapeHtml(p.stock) : ''}</div>
+        ${p.vendorName ? `<div class="text-xs text-red-600 mt-0.5">${lang === 'fr' ? 'Vendu par' : 'Sold by'} ${escapeHtml(p.vendorName)}</div>` : ''}
         <div class="mt-2 text-lg sm:text-xl font-bold">${money(p.price)}</div>
         <div class="mt-3 sm:mt-4 flex gap-2">
-          <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${p.id}">
+          <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${escapeHtml(p.id)}">
           <button class="dark-button flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
         </div>
       </div>
@@ -220,7 +316,7 @@
     const cart = readCart();
     const idx = cart.findIndex(x=>x.id===id);
     if(idx>=0){ cart[idx].qty += qty; } else { cart.push({id, qty}); }
-    localStorage.setItem("cart", JSON.stringify(cart));
+    persistCart(cart);
     updateCartCount();
     renderCart();
     alert((lang==='fr'?'Ajouté au panier: ':'Added to cart: ') + (lang==='fr'?product.name_fr:product.name_en));
@@ -231,13 +327,13 @@
     const item = cart.find((entry) => entry.id === id);
     if (!item) return;
     item.qty = Math.max(0, Math.min(10000, Number(quantity) || 0));
-    localStorage.setItem('cart', JSON.stringify(cart.filter((entry) => entry.qty > 0)));
+    persistCart(cart.filter((entry) => entry.qty > 0));
     updateCartCount();
     renderCart();
   };
 
   window.removeFromCart = function(id) {
-    localStorage.setItem('cart', JSON.stringify(readCart().filter((item) => item.id !== id)));
+    persistCart(readCart().filter((item) => item.id !== id));
     updateCartCount();
     renderCart();
   };
@@ -253,7 +349,7 @@
       .filter(entry => entry.product);
     // Un produit retiré du catalogue ne doit pas casser le rendu du panier.
     if (catalog.length && enriched.length !== cart.length) {
-      localStorage.setItem('cart', JSON.stringify(enriched.map(({id, qty}) => ({id, qty}))));
+      persistCart(enriched.map(({id, qty}) => ({id, qty})));
       const notice = document.getElementById('checkout-status');
       if (notice) notice.textContent = dict().removedItems;
     }
@@ -262,10 +358,10 @@
       const line = product.price * qty;
       total += line;
       return `<div class="bg-white rounded-xl p-3 md:p-4 shadow flex items-center gap-3 md:gap-4">
-        <img src="${product.img}" alt="${lang === "fr" ? product.name_fr : product.name_en}" class="h-12 w-12 sm:h-16 sm:w-16 rounded-lg object-cover flex-shrink-0" />
+        <img src="${escapeHtml(product.img)}" alt="${escapeHtml(lang === "fr" ? product.name_fr : product.name_en)}" class="h-12 w-12 sm:h-16 sm:w-16 rounded-lg object-cover flex-shrink-0" />
         <div class="flex-1 min-w-0">
-          <div class="font-semibold text-sm md:text-base truncate">${lang === "fr" ? product.name_fr : product.name_en}</div>
-          <div class="text-slate-500 text-xs md:text-sm">${product.id} · ${qty} ${product.unit} × ${money(product.price)}</div>
+          <div class="font-semibold text-sm md:text-base truncate">${escapeHtml(lang === "fr" ? product.name_fr : product.name_en)}</div>
+          <div class="text-slate-500 text-xs md:text-sm">${escapeHtml(product.id)} · ${qty} ${escapeHtml(product.unit)} × ${money(product.price)}</div>
         </div>
         <div class="font-bold text-sm md:text-base flex-shrink-0">${money(line)}</div>
         <div class="flex items-center gap-1">
@@ -311,7 +407,8 @@
             customer: { fullName: formData.get("fullName"), phone: formData.get("phone"), email: formData.get("email") || undefined },
             currency: formData.get("currency"),
             paymentProvider,
-            items: cart.map((item) => ({ id: item.id, qty: item.qty }))
+            items: cart.map((item) => ({ id: item.id, qty: item.qty })),
+            ...(deliveryPosition ? { deliveryLatitude: deliveryPosition.latitude, deliveryLongitude: deliveryPosition.longitude } : {})
           }
         });
         localStorage.setItem("lastOrderId", orderResponse.order.id);
@@ -324,11 +421,13 @@
           window.location.assign(redirectUrl);
           return;
         }
-        localStorage.removeItem("cart");
+        persistCart([]);
         renderCart();
         checkoutForm.reset();
         // reset() rétablit les valeurs du HTML: on remet la devise choisie.
         document.querySelectorAll("#currency, #checkout-currency").forEach((item) => { item.value = currency; });
+        deliveryPosition = null;
+        if (document.getElementById('location-status')) document.getElementById('location-status').textContent = '';
         const payment = orderResponse.payment;
         status.textContent = payment
           ? (lang === "fr"
@@ -352,10 +451,13 @@
   applyI18n();
   updateCartCount();
   
-  // Attendre le catalogue et les taux de change officiels avant le premier rendu
+  // Attendre le catalogue, les taux de change officiels et (si connecté) le panier
+  // serveur avant le premier rendu — sinon on affiche un panier local qu'on remplace
+  // aussitôt après par celui du serveur, ce qui clignote à l'écran.
   Promise.all([
     window.loadProducts ? window.loadProducts() : Promise.resolve(),
-    window.loadCurrencyRates ? window.loadCurrencyRates() : Promise.resolve()
+    window.loadCurrencyRates ? window.loadCurrencyRates() : Promise.resolve(),
+    syncCartOnLoad()
   ]).then(() => {
     render();
     renderCart();

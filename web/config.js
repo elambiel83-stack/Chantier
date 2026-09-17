@@ -33,7 +33,6 @@ const API_CONFIG = {
     productById: (id) => `/products/${id}`,
     productsByCategory: (category) => `/products/category/${category}`,
     cart: '/cart',
-    cartById: (sessionId) => `/cart/${sessionId}`,
     orders: '/orders',
     paypalOrder: (orderId) => `/orders/${orderId}/paypal`,
     paypalCapture: (orderId) => `/orders/${orderId}/paypal/capture`
@@ -133,13 +132,26 @@ window.apiCall = async function(endpoint, options = {}, allowRefresh = true) {
   }
 };
 
-// Générer ou récupérer un ID de session
-window.getSessionId = async function() {
-  let sessionId = localStorage.getItem('sessionId');
-  if (!sessionId) {
-    const session = await window.apiCall('/cart/session', { method: 'POST' });
-    sessionId = session.sessionId;
-    localStorage.setItem('sessionId', sessionId);
+// Panier synchronisé entre appareils pour un compte connecté (voir README > Panier).
+// Sans session (visiteur), le panier reste local — ces fonctions ne font rien.
+window.syncCartToServer = async function(cart) {
+  if (!localStorage.getItem('accessToken')) return;
+  try {
+    await window.apiCall('/cart', { method: 'PUT', body: { items: cart.map(({ id, qty }) => ({ id, qty })) } });
+  } catch (error) {
+    // Pas bloquant: le panier reste utilisable localement même si la synchronisation échoue
+    // (hors ligne, session expirée...).
+    console.warn('Synchronisation du panier impossible:', error.message);
   }
-  return sessionId;
+};
+
+window.fetchCartFromServer = async function() {
+  if (!localStorage.getItem('accessToken')) return null;
+  try {
+    const { cart } = await window.apiCall('/cart');
+    return cart.items;
+  } catch (error) {
+    console.warn('Impossible de récupérer le panier distant:', error.message);
+    return null;
+  }
 };

@@ -18,6 +18,15 @@
   <link rel="manifest" href="/site.webmanifest">
   <meta name="theme-color" content="#dc2626">
   <script src="config.js"></script>
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18453977660"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+
+    gtag('config', 'AW-18453977660');
+  </script>
 </head>
 <body class="bg-slate-50 text-slate-800">
   <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-white focus:px-3 focus:py-2 focus:text-slate-900">Aller au contenu principal</a>
@@ -37,10 +46,14 @@
           <option value="EUR">EUR</option>
         </select>
           <a href="import.html" class="px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Importer</a>
+          <a href="tickets.html" class="px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Support</a>
           <a href="cart.html" class="px-2 md:px-4 py-2 rounded-lg border text-sm md:text-base">Panier <span id="cart-count" class="hidden rounded-full bg-red-600 px-2 py-0.5 text-xs text-white">0</span></a>
         <div id="auth-controls" class="flex items-center gap-1">
           <a id="staff-link" href="admin.html" class="hidden px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Commandes</a>
           <a id="staff-imports-link" href="admin-imports.html" class="hidden px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Importations</a>
+          <a id="staff-tickets-link" href="admin-tickets.html" class="hidden px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Tickets</a>
+          <a id="vendor-link" href="vendor.html" class="hidden px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Espace partenaire</a>
+          <a id="orders-link" href="orders.html" class="hidden px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Mes commandes</a>
           <a id="auth-link" href="auth.html" class="px-2 md:px-3 py-2 rounded-lg border border-slate-900 text-sm md:text-base">Connexion</a>
           <button id="logout-button" type="button" class="hidden px-2 py-2 text-sm font-medium text-slate-600 hover:text-red-700" title="Se déconnecter">Déconnexion</button>
         </div>

@@ -56,6 +56,7 @@ export default function ProductsScreen({ route, navigation }) {
         <Text style={styles.productName}>{item.name_fr}</Text>
         <Text style={styles.productId}>{item.id} · {item.unit}</Text>
         {item.stock && <Text style={styles.productStock}>Stock: {item.stock}</Text>}
+        {item.vendorName && <Text style={styles.productVendor}>Vendu par {item.vendorName}</Text>}
         <Text style={styles.productPrice}>{formatAmount(item.price)}</Text>
       </View>
       <TouchableOpacity
@@ -233,6 +234,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#22c55e',
     marginBottom: 8,
+  },
+  productVendor: {
+    fontSize: 11,
+    color: '#dc2626',
+    marginBottom: 4,
   },
   productPrice: {
     fontSize: 20,
