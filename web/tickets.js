@@ -166,6 +166,9 @@
       anonFormStatus.textContent = '';
       anonConfirmation.textContent = `Ticket envoyé (référence ${ticket.id.slice(0, 8)}). Nous vous recontactons dès que possible.`;
       anonConfirmation.classList.remove('hidden');
+      if (typeof gtag === 'function') {
+        gtag('event', 'conversion', { send_to: 'AW-18453977660/8VJACPzy4vocELyOxd9E' });
+      }
     } catch (error) {
       anonFormStatus.textContent = error.message || 'Envoi impossible.';
     } finally {
