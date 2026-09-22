@@ -1,11 +1,10 @@
 {
   "name": "monchantier-frontend",
   "version": "1.0.0",
-  "description": "MonChantier Starter Kit - Frontend Application",
+  "description": "MonChantier - Frontend PWA, servi par le backend Express (même origine que l'API)",
   "main": "index.html",
   "scripts": {
-    "start": "python3 -m http.server 8080",
-    "start-win": "python -m http.server 8080",
+    "start": "node ../backend/server.js",
     "test": "echo \"No tests specified\" && exit 0"
   },
   "keywords": [

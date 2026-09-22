@@ -144,12 +144,12 @@ try {
 - ✅ Headers Content-Type
 - ✅ Validation basique des données
 
-**À ajouter pour la production :**
-- ⚠️ Base de données persistante
-- ⚠️ Authentification JWT
+**État des fonctionnalités :**
+- ⚠️ Base de données persistante : PostgreSQL est prévu par `backend/schema.sql` et doit être déployé
+- ✅ Authentification JWT avec Argon2id et refresh tokens rotatifs
 - ⚠️ HTTPS
-- ⚠️ Rate limiting
-- ⚠️ Validation avancée (joi/zod)
+- ✅ Rate limiting
+- ✅ Validation avancée avec Zod
 
 ## 🐛 Dépannage
 
@@ -182,10 +182,9 @@ kill -9 $(lsof -ti:3000)
 4. Ajouter la gestion des images uploadées
 
 ### Moyen terme (1 mois)
-1. Intégrer une base de données (MongoDB/PostgreSQL)
-2. Créer un système d'authentification
-3. Ajouter une interface d'administration
-4. Déployer en production (Heroku + Netlify)
+1. Déployer PostgreSQL avec `backend/schema.sql`
+2. Ajouter l’interface d’administration web pour consommer l’API RBAC
+3. Déployer en production (Heroku + Netlify)
 
 ### Long terme (3 mois)
 1. Intégration de paiement

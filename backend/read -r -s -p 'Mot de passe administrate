@@ -1,0 +1,29 @@
+read -r -s -p 'Mot de passe administrateur : ' Europc@01081983
+printf '\n'
+
+HASH="$(
+  printf '%s' "$PASSWORD" |
+    (cd backend && node -e '
+      const fs = require("fs");
+      const argon2 = require("argon2");
+      argon2.hash(fs.readFileSync(0, "utf8"), { type: argon2.argon2id })
+        .then(hash => process.stdout.write(hash))
+        .catch(() => process.exit(1));
+    ')
+)"
+unset PASSWORD
+
+docker compose exec -T postgres \
+  psql -U monchantier -d monchantier \
+  --set=ON_ERROR_STOP=1 \
+  --set=hash="$HASH" <<'SQL'
+INSERT INTO user_account (email, password_hash, role, is_active)
+VALUES ('contact@monchantier.net', :'hash', 'admin', true)
+ON CONFLICT (email) DO UPDATE
+SET password_hash = EXCLUDED.password_hash,
+    role = 'admin',
+    is_active = true,
+    updated_at = now();
+SQL
+
+unset HASH

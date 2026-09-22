@@ -2,11 +2,22 @@ openapi: 3.0.3
 info:
   title: MonChantier API
   version: 1.0.0
-  description: API de catalogue, paniers et commandes MonChantier.
+  description: >-
+    API de catalogue, paniers et commandes MonChantier. L'autorisation suit un modèle RBAC
+    à moindre privilège avec les rôles customer, staff et admin. Les actions sensibles de
+    gestion des rôles sont enregistrées dans audit_log.
 servers:
   - url: http://localhost:3000/api
     description: Environnement local
 paths:
+  /health:
+    get:
+      summary: Indique si l'API répond et si la base de données est joignable
+      responses:
+        '200':
+          description: API et base opérationnelles
+        '503':
+          description: Base de données injoignable
   /products:
     get:
       summary: Liste les produits
@@ -85,7 +96,162 @@ paths:
       responses:
         '200':
           description: Panier supprimé
+  /auth/register:
+    post:
+      summary: Crée un compte customer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Compte créé
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '409':
+          description: Adresse e-mail déjà utilisée
+  /auth/login:
+    post:
+      summary: Ouvre une session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Jetons d’accès et de renouvellement générés
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /auth/social-config:
+    get:
+      summary: Indique quels fournisseurs de connexion sociale sont configurés
+      description: Renvoie l'identifiant public (client ID / app ID) de chaque fournisseur activé, ou null s'il n'est pas configuré côté serveur.
+      responses:
+        '200':
+          description: Configuration publique des fournisseurs sociaux
+  /auth/google:
+    post:
+      summary: Ouvre ou crée une session à partir d'un jeton d'identité Google
+      description: Le jeton (credential) est vérifié côté serveur avec l'audience GOOGLE_CLIENT_ID; l'e-mail doit être vérifié par Google. Un compte existant avec le même e-mail est relié automatiquement.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleAuthRequest'
+      responses:
+        '200':
+          description: Jetons d’accès et de renouvellement générés
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Jeton Google invalide, expiré, ou e-mail non vérifié
+        '503':
+          description: Connexion Google non configurée côté serveur
+  /auth/facebook:
+    post:
+      summary: Ouvre ou crée une session à partir d'un jeton d'accès Facebook
+      description: Le jeton est vérifié auprès de l'API Graph de Facebook (debug_token) pour confirmer qu'il a été émis pour cette application avant toute création de session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FacebookAuthRequest'
+      responses:
+        '200':
+          description: Jetons d’accès et de renouvellement générés
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          description: Jeton Facebook invalide, expiré, ou e-mail non partagé
+        '503':
+          description: Connexion Facebook non configurée côté serveur
+  /auth/refresh:
+    post:
+      summary: Renouvelle une session et fait tourner le refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '200':
+          description: Nouveaux jetons générés
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /auth/logout:
+    post:
+      summary: Révoque un refresh token
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        '204':
+          description: Session révoquée
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+  /auth/forgot-password:
+    post:
+      summary: Demande un lien de réinitialisation par e-mail, SMS ou WhatsApp
+      description: La réponse reste générique pour empêcher l’énumération des comptes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForgotPasswordRequest'
+      responses:
+        '200':
+          description: Demande traitée sans révéler l’existence du compte
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '503':
+          description: Canal de récupération non configuré ou indisponible
+  /auth/reset-password:
+    post:
+      summary: Définit un nouveau mot de passe avec un jeton à usage unique
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResetPasswordRequest'
+      responses:
+        '200':
+          description: Mot de passe changé et sessions existantes révoquées
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
   /orders:
+    get:
+      summary: Liste les commandes accessibles au rôle authentifié
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, confirmed, delivering, completed, cancelled]
+      responses:
+        '200':
+          description: Commandes autorisées par le rôle et les règles de propriété
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
     post:
       summary: Crée une commande, réserve le stock et ouvre une tentative de paiement
       security:
@@ -102,7 +268,9 @@ paths:
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '401':
-          description: Authentification requise
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           description: Stock insuffisant pour au moins un produit
         '503':
@@ -122,9 +290,129 @@ paths:
         '400':
           $ref: '#/components/responses/InvalidRequest'
         '401':
-          description: Authentification requise
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+  /orders/{orderId}/stripe:
+    post:
+      summary: Crée une session Stripe Checkout pour carte bancaire ou Google Pay
+      description: Google Pay est présenté par Stripe Checkout lorsque le navigateur et le compte marchand sont éligibles. La confirmation finale provient du webhook Stripe signé.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: URL Checkout Stripe créée
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          description: Stripe n’est pas configuré
+  /webhooks/stripe:
+    post:
+      summary: Reçoit les événements Stripe signés
+      description: Endpoint serveur à configurer dans le tableau de bord Stripe. Ne pas appeler depuis le navigateur.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Événement reçu
+        '400':
+          description: Signature invalide
+  /orders/{orderId}/claim:
+    post:
+      summary: Réclame une commande confirmée non affectée
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Commande affectée au membre staff authentifié
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Commande déjà affectée ou non disponible
+  /orders/{orderId}/status:
+    patch:
+      summary: Modifie le statut d’une commande selon l’affectation et le rôle
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderStatusRequest'
+      responses:
+        '200':
+          description: Statut mis à jour
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: Transition ou affectation non autorisée
+  /admin/users/{userId}/role:
+    patch:
+      summary: Attribue un rôle à un utilisateur
+      description: Requiert la permission users:assign_role. L’acteur ne peut pas modifier son propre rôle.
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleUpdateRequest'
+      responses:
+        '200':
+          description: Rôle attribué et changement enregistré dans audit_log
+        '400':
+          $ref: '#/components/responses/InvalidRequest'
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: L’acteur tente de modifier son propre rôle
+  /auth/me:
+    get:
+      summary: Retourne l’utilisateur et ses permissions effectives
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Utilisateur authentifié
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
   /orders/{orderId}/paypal/capture:
     post:
       summary: Capture un paiement PayPal approuvé
@@ -149,6 +437,63 @@ paths:
           description: Paiement capturé et commande confirmée
         '400':
           $ref: '#/components/responses/InvalidRequest'
+  /admin/users:
+    get:
+      summary: Liste les utilisateurs pour l’administration des rôles
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: search
+          schema:
+            type: string
+            maxLength: 254
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Utilisateurs et total correspondant à la recherche
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/audit-log:
+    get:
+      summary: Liste les derniers événements d’audit
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Événements d’administration les plus récents
+        '401':
+          $ref: '#/components/responses/Unauthenticated'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '403':
           description: Jeton de confirmation invalide
         '404':
@@ -183,9 +528,114 @@ components:
   responses:
     InvalidRequest:
       description: Requête invalide ou règle métier non satisfaite
+    Unauthenticated:
+      description: Authentification absente, invalide ou expirée
+    Forbidden:
+      description: Permission insuffisante pour cette opération
     NotFound:
       description: Ressource introuvable
   schemas:
+    Role:
+      type: string
+      enum: [customer, staff, admin]
+    RegisterRequest:
+      type: object
+      required: [email, password, fullName, phone]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          description: Normalisé en minuscules
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 128
+        fullName:
+          type: string
+          minLength: 2
+          maxLength: 120
+        phone:
+          type: string
+          minLength: 6
+          maxLength: 30
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 128
+    GoogleAuthRequest:
+      type: object
+      required: [credential]
+      properties:
+        credential:
+          type: string
+          description: Jeton d'identité (ID token) renvoyé par Google Identity Services
+          minLength: 20
+          maxLength: 4096
+    FacebookAuthRequest:
+      type: object
+      required: [accessToken]
+      properties:
+        accessToken:
+          type: string
+          description: Jeton d'accès utilisateur renvoyé par le SDK Facebook
+          minLength: 20
+          maxLength: 4096
+    RefreshRequest:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          minLength: 32
+          maxLength: 512
+    ForgotPasswordRequest:
+      type: object
+      required: [channel, identifier]
+      properties:
+        channel:
+          type: string
+          enum: [email, sms, whatsapp]
+        identifier:
+          type: string
+          minLength: 3
+          maxLength: 254
+    ResetPasswordRequest:
+      type: object
+      required: [token, password]
+      properties:
+        token:
+          type: string
+          minLength: 32
+          maxLength: 256
+        password:
+          type: string
+          format: password
+          minLength: 12
+          maxLength: 128
+    RoleUpdateRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: '#/components/schemas/Role'
+    OrderStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [confirmed, delivering, completed, cancelled]
     CartItem:
       type: object
       required: [id, qty]
@@ -234,7 +684,7 @@ components:
           enum: [USD, CDF, EUR]
         paymentProvider:
           type: string
-          enum: [paypal, mobile_money]
+          enum: [paypal, mobile_money, stripe_card, google_pay]
         items:
           type: array
           minItems: 1

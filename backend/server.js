@@ -6,8 +6,10 @@ const crypto = require('crypto');
 const helmet = require('helmet');
 const jwt = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
+const Stripe = require('stripe');
 const { z } = require('zod');
 const { Pool } = require('pg');
+const { OAuth2Client } = require('google-auth-library');
 require('dotenv').config();
 
 const app = express();
@@ -23,22 +25,54 @@ const codespaceOriginPattern = process.env.CODESPACE_NAME
   : null;
 const WEB_DIR = path.join(__dirname, '..', 'web');
 const database = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false })
+  ? new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false,
+      connectionTimeoutMillis: 5000
+    })
   : null;
+// Sans cet écouteur, la perte d'une connexion inactive (redémarrage de PostgreSQL, coupure
+// réseau) remonte en exception non capturée et tue le serveur.
+if (database) {
+  database.on('error', (error) => console.error('Connexion PostgreSQL perdue:', error.message));
+}
 const JWT_ISSUER = process.env.JWT_ISSUER || 'monchantier-api';
 const FALLBACK_CURRENCY_RATES = { USD: 1, CDF: 2800, EUR: 0.92 };
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
+const PASSWORD_RESET_MINUTES = 15;
+const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID || '';
+const FACEBOOK_APP_SECRET = process.env.FACEBOOK_APP_SECRET || '';
+const googleOAuthClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
 
 // Middleware
-app.use(cors({
-  origin(origin, callback) {
-    if (!origin || allowedOrigins.includes(origin) || (codespaceOriginPattern && codespaceOriginPattern.test(origin))) {
-      return callback(null, true);
-    }
-    return callback(new Error('Origine non autorisée par CORS'));
+// Le navigateur envoie un en-tête Origin même pour une requête de même origine (POST, PUT...).
+// Le site étant servi par ce serveur, refuser sa propre origine reviendrait à bloquer
+// l'application elle-même, quel que soit le port ou le nom d'hôte utilisé pour y accéder.
+function isSameOrigin(origin, host) {
+  if (!origin || !host) return false;
+  try {
+    return new URL(origin).host === host;
+  } catch (error) {
+    return false;
   }
+}
+
+function isAllowedOrigin(origin, host) {
+  return !origin
+    || isSameOrigin(origin, host)
+    || allowedOrigins.includes(origin)
+    || (codespaceOriginPattern && codespaceOriginPattern.test(origin));
+}
+
+app.use(cors((req, callback) => {
+  if (isAllowedOrigin(req.headers.origin, req.headers.host)) {
+    return callback(null, { origin: true });
+  }
+  return callback(new Error('Origine non autorisée par CORS'));
 }));
 app.use(helmet({
   contentSecurityPolicy: {
@@ -58,14 +92,93 @@ app.use(helmet({
     }
   }
 }));
+
+app.post('/api/webhooks/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) return res.status(503).json({ success: false, message: 'Webhook Stripe non configuré' });
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, req.headers['stripe-signature'], process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (error) {
+    return res.status(400).json({ success: false, message: 'Signature Stripe invalide' });
+  }
+  try {
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+      const session = event.data.object;
+      const orderId = session.metadata?.orderId;
+      if (orderId && session.payment_status === 'paid') {
+        await database.query(
+          `UPDATE payment SET status = 'paid', provider_reference = $1, updated_at = now()
+           WHERE order_id = $2 AND provider IN ('stripe_card', 'google_pay') AND status = 'pending'`,
+          [session.id, orderId]
+        );
+        await database.query(
+          `UPDATE orders SET status = 'confirmed', updated_at = now()
+           WHERE id = $1 AND status = 'pending'`,
+          [orderId]
+        );
+      }
+    }
+    if (event.type === 'checkout.session.async_payment_failed') {
+      const orderId = event.data.object.metadata?.orderId;
+      if (orderId) await database.query("UPDATE payment SET status = 'failed', updated_at = now() WHERE order_id = $1 AND provider IN ('stripe_card', 'google_pay') AND status = 'pending'", [orderId]);
+    }
+    return res.json({ received: true });
+  } catch (error) {
+    console.error('Webhook Stripe échoué:', error.message);
+    return res.status(500).json({ success: false, message: 'Traitement du webhook impossible' });
+  }
+});
 app.use(express.json({ limit: '100kb' }));
+// Derrière un proxy (Codespaces, hébergeur), l'adresse du client est dans X-Forwarded-For.
+// Ne faire confiance à cet en-tête que si on est réellement derrière un proxy, sinon
+// n'importe qui pourrait le forger pour contourner les quotas.
+app.set('trust proxy', Number(process.env.TRUST_PROXY || (process.env.CODESPACES === 'true' ? 1 : 0)));
+
+function quotaResponse(message) {
+  return (req, res) => res.status(429).json({ success: false, message });
+}
+
 // Le quota ne vise que l'API: une page web charge plusieurs fichiers et l'épuiserait.
-app.use('/api', rateLimit({
+const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  limit: 100,
+  limit: 600,
   standardHeaders: 'draft-8',
-  legacyHeaders: false
-}));
+  legacyHeaders: false,
+  handler: quotaResponse('Trop de requêtes. Patientez quelques minutes avant de réessayer.')
+});
+
+// Connexion: quota strict, c'est la cible des attaques par force brute. Seuls les échecs
+// comptent, et le compteur lui est propre: un attaquant qui l'épuise ne doit pas empêcher
+// les autres visiteurs de créer un compte.
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  handler: quotaResponse('Trop de tentatives de connexion. Réessayez dans quelques minutes.')
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 15,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  handler: quotaResponse('Trop de créations de compte depuis cette adresse. Réessayez plus tard.')
+});
+
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  handler: quotaResponse('Trop de demandes. Réessayez plus tard.')
+});
+
+app.use('/api', apiLimiter);
+app.use('/api/auth/login', loginLimiter);
+app.use('/api/auth/google', loginLimiter);
+app.use('/api/auth/facebook', loginLimiter);
+app.use('/api/auth/register', registerLimiter);
+app.use('/api/auth/forgot-password', forgotPasswordLimiter);
 
 // La PWA est servie par le backend: même origine que l'API, donc ni CORS ni contenu mixte.
 app.use(express.static(WEB_DIR, { extensions: ['html'] }));
@@ -215,7 +328,7 @@ const orderSchema = z.object({
     email: z.string().trim().email().max(254).optional()
   }),
   currency: z.enum(['USD', 'CDF', 'EUR']),
-  paymentProvider: z.enum(['paypal', 'mobile_money']),
+  paymentProvider: z.enum(['paypal', 'mobile_money', 'stripe_card', 'google_pay']),
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
@@ -226,14 +339,32 @@ const credentialsSchema = z.object({
   email: z.string().trim().email().max(254).transform((email) => email.toLowerCase()),
   password: z.string().min(12).max(128)
 });
+const forgotPasswordSchema = z.object({
+  channel: z.enum(['email', 'sms', 'whatsapp']),
+  identifier: z.string().trim().min(3).max(254)
+});
+const resetPasswordSchema = z.object({ token: z.string().min(32).max(256), password: z.string().min(12).max(128) });
 const registrationSchema = credentialsSchema.extend({
   fullName: z.string().trim().min(2).max(120),
   phone: z.string().trim().min(6).max(30)
 });
 const refreshTokenSchema = z.object({ token: z.string().min(32).max(512) });
+const googleAuthSchema = z.object({ credential: z.string().min(20).max(4096) });
+const facebookAuthSchema = z.object({ accessToken: z.string().min(20).max(4096) });
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
 const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
+const adminListQuerySchema = z.object({
+  search: z.string().trim().max(254).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+  offset: z.coerce.number().int().min(0).default(0)
+});
+
+const ROLE_PERMISSIONS = Object.freeze({
+  customer: Object.freeze(['orders:create', 'orders:read_own', 'payments:create_own']),
+  staff: Object.freeze(['orders:read_operational', 'orders:claim', 'orders:update_assigned']),
+  admin: Object.freeze(['orders:read_all', 'orders:update_any', 'users:assign_role'])
+});
 
 function requireJwtSecret() {
   if (!JWT_ACCESS_SECRET || JWT_ACCESS_SECRET.length < 32) throw new Error('JWT_ACCESS_SECRET doit contenir au moins 32 caracteres');
@@ -250,6 +381,42 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+function resetPasswordUrl(token) {
+  const baseUrl = process.env.APP_URL || 'http://localhost:3000';
+  return `${baseUrl.replace(/\/$/, '')}/reset-password.html#token=${encodeURIComponent(token)}`;
+}
+
+function isPasswordResetChannelConfigured(channel) {
+  if (channel === 'email') return Boolean(process.env.RESEND_API_KEY && process.env.MAIL_FROM);
+  return Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM);
+}
+
+async function sendPasswordResetMessage({ channel, destination, token }) {
+  const url = resetPasswordUrl(token);
+  if (channel === 'email') {
+    if (!process.env.RESEND_API_KEY || !process.env.MAIL_FROM) throw new Error('Envoi e-mail non configuré');
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: process.env.MAIL_FROM, to: [destination], subject: 'Réinitialisation de votre mot de passe MonChantier', text: `Réinitialisez votre mot de passe dans les 15 minutes : ${url}` })
+    });
+    if (!response.ok) throw new Error('Envoi e-mail refusé');
+    return;
+  }
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_FROM) throw new Error('Envoi SMS/WhatsApp non configuré');
+  const body = new URLSearchParams({
+    To: channel === 'whatsapp' ? `whatsapp:${destination}` : destination,
+    From: channel === 'whatsapp' ? `whatsapp:${process.env.TWILIO_FROM}` : process.env.TWILIO_FROM,
+    Body: `MonChantier : réinitialisez votre mot de passe dans les 15 minutes : ${url}`
+  });
+  const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Messages.json`, {
+    method: 'POST',
+    headers: { Authorization: `Basic ${Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64')}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body
+  });
+  if (!response.ok) throw new Error('Envoi SMS/WhatsApp refusé');
+}
+
 const hashRefreshToken = hashToken;
 
 function tokensMatch(candidate, storedHash) {
@@ -264,6 +431,63 @@ async function createRefreshToken(client, userId) {
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
   await client.query('INSERT INTO refresh_token (user_id, token_hash, expires_at) VALUES ($1, $2, $3)', [userId, hashRefreshToken(token), expiresAt]);
   return token;
+}
+
+async function verifyGoogleCredential(credential) {
+  if (!googleOAuthClient) throw Object.assign(new Error('Connexion Google non configurée'), { statusCode: 503 });
+  let ticket;
+  try {
+    ticket = await googleOAuthClient.verifyIdToken({ idToken: credential, audience: GOOGLE_CLIENT_ID });
+  } catch (error) {
+    throw Object.assign(new Error('Jeton Google invalide'), { statusCode: 401 });
+  }
+  const payload = ticket.getPayload();
+  // email_verified vient de Google, pas de l'appelant: c'est ce qui permet de relier ou
+  // créer un compte par e-mail sans révérifier nous-mêmes la boîte mail.
+  if (!payload?.email || !payload.email_verified) {
+    throw Object.assign(new Error('Compte Google sans e-mail vérifié'), { statusCode: 401 });
+  }
+  return { providerId: payload.sub, email: payload.email.toLowerCase(), fullName: payload.name || payload.email };
+}
+
+async function verifyFacebookAccessToken(accessToken) {
+  if (!FACEBOOK_APP_ID || !FACEBOOK_APP_SECRET) throw Object.assign(new Error('Connexion Facebook non configurée'), { statusCode: 503 });
+  // debug_token confirme que le jeton a bien été émis pour CETTE application Facebook:
+  // sans ce contrôle, le jeton valide d'une autre appli suffirait à usurper un compte.
+  const appAccessToken = `${FACEBOOK_APP_ID}|${FACEBOOK_APP_SECRET}`;
+  const debugResponse = await fetch(`https://graph.facebook.com/debug_token?input_token=${encodeURIComponent(accessToken)}&access_token=${encodeURIComponent(appAccessToken)}`);
+  const debugData = await debugResponse.json().catch(() => ({}));
+  const tokenInfo = debugData.data;
+  if (!debugResponse.ok || !tokenInfo?.is_valid || tokenInfo.app_id !== FACEBOOK_APP_ID) {
+    throw Object.assign(new Error('Jeton Facebook invalide'), { statusCode: 401 });
+  }
+  const profileResponse = await fetch(`https://graph.facebook.com/v19.0/me?fields=id,name,email&access_token=${encodeURIComponent(accessToken)}`);
+  const profile = await profileResponse.json().catch(() => ({}));
+  if (!profileResponse.ok || profile.id !== tokenInfo.user_id) {
+    throw Object.assign(new Error('Profil Facebook invalide'), { statusCode: 401 });
+  }
+  if (!profile.email) throw Object.assign(new Error('Autorisez le partage de votre e-mail Facebook pour continuer'), { statusCode: 401 });
+  return { providerId: profile.id, email: profile.email.toLowerCase(), fullName: profile.name || profile.email };
+}
+
+// Relie un compte existant (même e-mail) ou en crée un nouveau sans mot de passe local.
+async function findOrCreateSocialAccount(client, provider, { providerId, email, fullName }) {
+  const providerColumn = provider === 'google' ? 'google_sub' : 'facebook_id';
+  const existingByProvider = await client.query(`SELECT id, role FROM user_account WHERE ${providerColumn} = $1`, [providerId]);
+  if (existingByProvider.rows[0]) return existingByProvider.rows[0];
+
+  const existingByEmail = await client.query('SELECT id, role FROM user_account WHERE email = $1', [email]);
+  if (existingByEmail.rows[0]) {
+    await client.query(`UPDATE user_account SET ${providerColumn} = $1, updated_at = now() WHERE id = $2`, [providerId, existingByEmail.rows[0].id]);
+    return existingByEmail.rows[0];
+  }
+
+  const customerResult = await client.query('INSERT INTO customer (full_name, email) VALUES ($1, $2) RETURNING id', [fullName, email]);
+  const accountResult = await client.query(
+    `INSERT INTO user_account (customer_id, email, ${providerColumn}) VALUES ($1, $2, $3) RETURNING id, role`,
+    [customerResult.rows[0].id, email, providerId]
+  );
+  return accountResult.rows[0];
 }
 
 async function requireAuthentication(req, res, next) {
@@ -283,9 +507,22 @@ async function requireAuthentication(req, res, next) {
   }
 }
 
-function requireRole(...roles) {
+function hasPermission(role, permission) {
+  return ROLE_PERMISSIONS[role]?.includes(permission) === true;
+}
+
+function requirePermission(permission) {
   return (req, res, next) => {
-    if (!roles.includes(req.auth.role)) return res.status(403).json({ success: false, message: 'Droits insuffisants' });
+    if (!hasPermission(req.auth.role, permission)) return res.status(403).json({ success: false, message: 'Droits insuffisants' });
+    next();
+  };
+}
+
+function requireAnyPermission(...permissions) {
+  return (req, res, next) => {
+    if (!permissions.some((permission) => hasPermission(req.auth.role, permission))) {
+      return res.status(403).json({ success: false, message: 'Droits insuffisants' });
+    }
     next();
   };
 }
@@ -428,6 +665,7 @@ app.get('/api', (req, res) => {
     message: 'API MonChantier',
     version: '1.0.0',
     endpoints: [
+      'GET /api/health',
       'GET /api/products',
       'GET /api/products/:id',
       'GET /api/products/category/:category',
@@ -437,6 +675,21 @@ app.get('/api', (req, res) => {
       'DELETE /api/cart/:sessionId'
     ]
   });
+});
+
+// Sonde de disponibilité: dit en un appel si l'API répond et si la base est joignable.
+app.get('/api/health', async (req, res) => {
+  const health = { success: true, api: 'ok', database: database ? 'inconnu' : 'non configuré', uptime: Math.round(process.uptime()) };
+  if (database) {
+    try {
+      await database.query('SELECT 1');
+      health.database = 'ok';
+    } catch (error) {
+      health.success = false;
+      health.database = 'injoignable';
+    }
+  }
+  res.status(health.success ? 200 : 503).json(health);
 });
 
 // Récupérer tous les produits
@@ -586,6 +839,56 @@ app.post('/api/auth/login', async (req, res, next) => {
   }
 });
 
+// Permet au frontend de savoir quels boutons afficher et avec quel identifiant public
+// d'application, sans dupliquer cette configuration dans chaque client statique.
+app.get('/api/auth/social-config', (req, res) => {
+  res.json({
+    success: true,
+    google: googleOAuthClient ? { clientId: GOOGLE_CLIENT_ID } : null,
+    facebook: FACEBOOK_APP_ID ? { appId: FACEBOOK_APP_ID } : null
+  });
+});
+
+async function completeSocialAuth(req, res, next, provider, verify, credentialField) {
+  if (!requireDatabase(res)) return;
+  try {
+    requireJwtSecret();
+  } catch (error) {
+    return next(error);
+  }
+  const parsed = (provider === 'google' ? googleAuthSchema : facebookAuthSchema).safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Jeton manquant ou invalide' });
+  let identity;
+  try {
+    identity = await verify(parsed.data[credentialField]);
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    return next(error);
+  }
+  let client;
+  try {
+    client = await database.connect();
+    await client.query('BEGIN');
+    const account = await findOrCreateSocialAccount(client, provider, identity);
+    const accountResult = await client.query('SELECT is_active FROM user_account WHERE id = $1', [account.id]);
+    if (!accountResult.rows[0]?.is_active) {
+      await client.query('ROLLBACK');
+      return res.status(401).json({ success: false, message: 'Compte désactivé' });
+    }
+    const refreshToken = await createRefreshToken(client, account.id);
+    await client.query('COMMIT');
+    res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: identity.email } });
+  } catch (error) {
+    if (client) await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    if (client) client.release();
+  }
+}
+
+app.post('/api/auth/google', (req, res, next) => completeSocialAuth(req, res, next, 'google', verifyGoogleCredential, 'credential'));
+app.post('/api/auth/facebook', (req, res, next) => completeSocialAuth(req, res, next, 'facebook', verifyFacebookAccessToken, 'accessToken'));
+
 app.post('/api/auth/refresh', async (req, res, next) => {
   if (!requireDatabase(res)) return;
   try {
@@ -616,8 +919,134 @@ app.post('/api/auth/refresh', async (req, res, next) => {
   }
 });
 
+app.post('/api/auth/forgot-password', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const genericResponse = { success: true, message: 'Si ces informations correspondent à un compte, un lien de réinitialisation sera envoyé.' };
+  const parsed = forgotPasswordSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Canal ou identifiant invalide' });
+  const { channel } = parsed.data;
+  if (!isPasswordResetChannelConfigured(channel)) return res.status(503).json({ success: false, message: 'Ce canal de récupération est momentanément indisponible' });
+  const identifier = channel === 'email' ? parsed.data.identifier.toLowerCase() : parsed.data.identifier.replace(/[^\d+]/g, '');
+  try {
+    const contactColumn = channel === 'whatsapp' ? 'COALESCE(NULLIF(customer.whatsapp, \'\'), customer.phone)' : 'customer.phone';
+    const result = await database.query(
+      `SELECT user_account.id, user_account.email,
+              ${contactColumn} AS phone
+       FROM user_account LEFT JOIN customer ON customer.id = user_account.customer_id
+       WHERE user_account.is_active = true AND ${channel === 'email'
+         ? 'user_account.email = $1'
+         : `regexp_replace(COALESCE(${contactColumn}, ''), '[^0-9+]', '', 'g') = $1`}
+       LIMIT 1`,
+      [identifier]
+    );
+    const account = result.rows[0];
+    if (!account || (channel !== 'email' && !account.phone)) return res.json(genericResponse);
+    const destination = channel === 'email' ? account.email : account.phone;
+    const token = crypto.randomBytes(32).toString('base64url');
+    const client = await database.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('UPDATE password_reset_token SET used_at = now() WHERE user_id = $1 AND used_at IS NULL', [account.id]);
+      await client.query(
+        'INSERT INTO password_reset_token (user_id, token_hash, channel, expires_at) VALUES ($1, $2, $3, now() + ($4 * interval \'1 minute\'))',
+        [account.id, hashToken(token), channel, PASSWORD_RESET_MINUTES]
+      );
+      await client.query('COMMIT');
+    } finally {
+      client.release();
+    }
+    await sendPasswordResetMessage({ channel, destination, token });
+    res.json(genericResponse);
+  } catch (error) {
+    console.error('Échec de l’envoi du lien de réinitialisation:', error.message);
+    if (error.message.startsWith('Envoi ')) return res.status(503).json({ success: false, message: 'Ce canal de récupération est momentanément indisponible' });
+    next(error);
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  const parsed = resetPasswordSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Jeton ou mot de passe invalide' });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      'SELECT id, user_id FROM password_reset_token WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now() FOR UPDATE',
+      [hashToken(parsed.data.token)]
+    );
+    const resetToken = result.rows[0];
+    if (!resetToken) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Lien de réinitialisation invalide ou expiré' });
+    }
+    const passwordHash = await argon2.hash(parsed.data.password, { type: argon2.argon2id });
+    await client.query('UPDATE user_account SET password_hash = $1, updated_at = now() WHERE id = $2', [passwordHash, resetToken.user_id]);
+    await client.query('UPDATE password_reset_token SET used_at = now() WHERE id = $1', [resetToken.id]);
+    await client.query('UPDATE refresh_token SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL', [resetToken.user_id]);
+    await client.query('COMMIT');
+    res.json({ success: true, message: 'Mot de passe réinitialisé. Vous pouvez vous connecter.' });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
 app.get('/api/auth/me', requireAuthentication, (req, res) => {
-  res.json({ success: true, user: { id: req.auth.userId, role: req.auth.role } });
+  res.json({
+    success: true,
+    user: { id: req.auth.userId, role: req.auth.role, permissions: ROLE_PERMISSIONS[req.auth.role] || [] }
+  });
+});
+
+app.get('/api/admin/users', requireAuthentication, requirePermission('users:assign_role'), async (req, res, next) => {
+  const parsed = adminListQuerySchema.safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Paramètres de recherche invalides' });
+  const { search, limit, offset } = parsed.data;
+  const values = [];
+  const filters = [];
+  if (search) {
+    values.push(`%${search.toLowerCase()}%`);
+    filters.push(`email LIKE $${values.length}`);
+  }
+  values.push(limit, offset);
+  try {
+    const result = await database.query(
+      `SELECT id, email, role, is_active, created_at, updated_at,
+              COUNT(*) OVER()::integer AS total_count
+       FROM user_account
+       ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''}
+       ORDER BY created_at DESC
+       LIMIT $${values.length - 1} OFFSET $${values.length}`,
+      values
+    );
+    const total = result.rows[0]?.total_count || 0;
+    res.json({ success: true, total, users: result.rows.map(({ total_count, ...user }) => user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/audit-log', requireAuthentication, requirePermission('users:assign_role'), async (req, res, next) => {
+  const parsed = adminListQuerySchema.pick({ limit: true, offset: true }).safeParse(req.query);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Paramètres de pagination invalides' });
+  const { limit, offset } = parsed.data;
+  try {
+    const result = await database.query(
+      `SELECT audit_log.id, audit_log.action, audit_log.details, audit_log.created_at,
+              actor.email AS actor_email, target.email AS target_email
+       FROM audit_log
+       LEFT JOIN user_account actor ON actor.id = audit_log.actor_user_id
+       LEFT JOIN user_account target ON target.id = audit_log.target_user_id
+       ORDER BY audit_log.created_at DESC LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+    res.json({ success: true, events: result.rows });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post('/api/auth/logout', requireAuthentication, async (req, res, next) => {
@@ -631,20 +1060,35 @@ app.post('/api/auth/logout', requireAuthentication, async (req, res, next) => {
   }
 });
 
-app.patch('/api/admin/users/:userId/role', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+app.patch('/api/admin/users/:userId/role', requireAuthentication, requirePermission('users:assign_role'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.userId).success) return res.status(400).json({ success: false, message: 'Identifiant utilisateur invalide' });
   const parsed = userRoleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Rôle utilisateur invalide' });
+  if (req.params.userId === req.auth.userId) return res.status(409).json({ success: false, message: 'Vous ne pouvez pas modifier votre propre rôle' });
+  const client = await database.connect();
   try {
-    const result = await database.query('UPDATE user_account SET role = $1, updated_at = now() WHERE id = $2 RETURNING id, email, role, is_active', [parsed.data.role, req.params.userId]);
-    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Utilisateur introuvable' });
+    await client.query('BEGIN');
+    const result = await client.query('UPDATE user_account SET role = $1, updated_at = now() WHERE id = $2 RETURNING id, email, role, is_active', [parsed.data.role, req.params.userId]);
+    if (!result.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Utilisateur introuvable' });
+    }
+    await client.query(
+      `INSERT INTO audit_log (actor_user_id, action, target_user_id, details)
+       VALUES ($1, 'user.role_updated', $2, $3::jsonb)`,
+      [req.auth.userId, req.params.userId, JSON.stringify({ role: parsed.data.role })]
+    );
+    await client.query('COMMIT');
     res.json({ success: true, user: result.rows[0] });
   } catch (error) {
+    await client.query('ROLLBACK');
     next(error);
+  } finally {
+    client.release();
   }
 });
 
-app.post('/api/orders', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+app.post('/api/orders', requireAuthentication, requirePermission('orders:create'), async (req, res, next) => {
   if (!requireDatabase(res)) return;
   const parsedOrder = orderSchema.safeParse(req.body);
   if (!parsedOrder.success) {
@@ -730,7 +1174,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
   }
 });
 
-app.post('/api/orders/:orderId/paypal', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+app.post('/api/orders/:orderId/paypal', requireAuthentication, requirePermission('payments:create_own'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   try {
     const paymentResult = await database.query(
@@ -820,15 +1264,55 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
   }
 });
 
-app.get('/api/orders', requireAuthentication, async (req, res, next) => {
+app.post('/api/orders/:orderId/stripe', requireAuthentication, requirePermission('payments:create_own'), async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  if (!stripe) return res.status(503).json({ success: false, message: 'Paiement par carte non configuré' });
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  try {
+    const paymentResult = await database.query(
+      `SELECT payment.id, payment.amount, payment.currency, payment.provider
+       FROM payment JOIN orders ON orders.id = payment.order_id
+       WHERE payment.order_id = $1 AND orders.customer_id = $2
+         AND payment.provider IN ('stripe_card', 'google_pay') AND payment.status = 'pending'`,
+      [req.params.orderId, req.auth.customerId]
+    );
+    if (paymentResult.rowCount !== 1) return res.status(404).json({ success: false, message: 'Paiement Stripe introuvable ou déjà traité' });
+    const payment = paymentResult.rows[0];
+    if (!['USD', 'EUR'].includes(payment.currency.trim())) return res.status(400).json({ success: false, message: 'La carte bancaire et Google Pay acceptent USD ou EUR uniquement.' });
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: payment.currency.trim().toLowerCase(),
+          product_data: { name: `Commande MonChantier ${req.params.orderId.slice(0, 8)}` },
+          unit_amount: Math.round(Number(payment.amount) * 100)
+        },
+        quantity: 1
+      }],
+      metadata: { orderId: req.params.orderId, paymentId: payment.id },
+      success_url: `${process.env.APP_URL || 'http://localhost:3000'}/payment-success.html?provider=stripe&orderId=${req.params.orderId}&session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${process.env.APP_URL || 'http://localhost:3000'}/cart.html?payment=cancelled`
+    });
+    await database.query('UPDATE payment SET provider_reference = $1, updated_at = now() WHERE id = $2', [session.id, payment.id]);
+    res.json({ success: true, checkoutUrl: session.url });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/orders', requireAuthentication, requireAnyPermission('orders:read_own', 'orders:read_operational', 'orders:read_all'), async (req, res, next) => {
+  const canReadOwn = hasPermission(req.auth.role, 'orders:read_own');
+  const canReadOperational = hasPermission(req.auth.role, 'orders:read_operational');
+  const canReadAll = hasPermission(req.auth.role, 'orders:read_all');
   const status = z.enum(['pending', 'confirmed', 'delivering', 'completed', 'cancelled']).safeParse(req.query.status);
   if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
   const filters = [];
   const values = [];
-  if (req.auth.role === 'customer') {
+  if (canReadOwn) {
     values.push(req.auth.customerId);
     filters.push(`orders.customer_id = $${values.length}`);
-  } else if (req.auth.role === 'staff') {
+  } else if (canReadOperational) {
     values.push(req.auth.userId);
     filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
   }
@@ -844,7 +1328,7 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
   }
 });
 
-app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
+app.post('/api/orders/:orderId/claim', requireAuthentication, requirePermission('orders:claim'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   try {
     const result = await database.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId]);
@@ -855,14 +1339,16 @@ app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff
   }
 });
 
-app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/orders/:orderId/status', requireAuthentication, requireAnyPermission('orders:update_assigned', 'orders:update_any'), async (req, res, next) => {
+  const canUpdateAny = hasPermission(req.auth.role, 'orders:update_any');
+  const canUpdateAssigned = hasPermission(req.auth.role, 'orders:update_assigned');
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsed = orderStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
   const allowedPreviousStatuses = { confirmed: ['pending'], delivering: ['confirmed'], completed: ['delivering'], cancelled: ['pending', 'confirmed'] };
   const values = [req.params.orderId, parsed.data.status, allowedPreviousStatuses[parsed.data.status]];
   let ownership = '';
-  if (req.auth.role === 'staff') {
+  if (canUpdateAssigned && !canUpdateAny) {
     values.push(req.auth.userId);
     ownership = ` AND assigned_to = $${values.length}`;
   }

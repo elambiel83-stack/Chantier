@@ -3,6 +3,7 @@ import { View, Text, FlatList, TouchableOpacity, TextInput, ScrollView, Linking,
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import * as WebBrowser from 'expo-web-browser';
+import * as AuthSession from 'expo-auth-session';
 import * as Google from 'expo-auth-session/providers/google';
 import CommerceHomeScreen from './screens/HomeScreen';
 import ProductsScreen from './screens/ProductsScreen';
@@ -13,6 +14,28 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 WebBrowser.maybeCompleteAuthSession();
 
 const Stack = createNativeStackNavigator();
+
+// À remplacer par vos identifiants Google Cloud / Meta for Developers (voir GOOGLE_AUTH_SETUP.md).
+const GOOGLE_CLIENT_ID = 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com';
+const GOOGLE_IOS_CLIENT_ID = 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com';
+const GOOGLE_ANDROID_CLIENT_ID = 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com';
+const FACEBOOK_APP_ID = 'YOUR_FACEBOOK_APP_ID';
+
+const FACEBOOK_OAUTH_DISCOVERY = { authorizationEndpoint: 'https://www.facebook.com/v19.0/dialog/oauth' };
+
+// expo-auth-session n'a plus de provider Facebook dédié: on pilote le dialogue OAuth
+// générique en demandant directement un jeton d'accès (flux implicite).
+function useFacebookAuthRequest() {
+  return AuthSession.useAuthRequest(
+    {
+      clientId: FACEBOOK_APP_ID,
+      scopes: ['email'],
+      responseType: AuthSession.ResponseType.Token,
+      redirectUri: AuthSession.makeRedirectUri()
+    },
+    FACEBOOK_OAUTH_DISCOVERY
+  );
+}
 
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 16, backgroundColor: '#F8FAFC' },
@@ -34,10 +57,10 @@ const styles = StyleSheet.create({
   dividerText: { marginHorizontal: 8, color: '#999' },
 });
 
-function notifyGoogleUnavailable() {
+function notifySocialAuthError(provider, error) {
   Alert.alert(
-    'Connexion Google indisponible',
-    "La connexion Google n'est pas encore reliée au serveur MonChantier. Utilisez votre e-mail et votre mot de passe."
+    `Connexion ${provider} impossible`,
+    error?.message || `Vérifiez votre connexion et réessayez, ou utilisez votre e-mail et votre mot de passe.`
   );
 }
 
@@ -51,21 +74,31 @@ const PRODUCTS = [
 
 // Écran de connexion
 function LoginScreen({ navigation }) {
-  const { login, continueAsGuest } = useAuth();
+  const { login, loginWithGoogle, loginWithFacebook, continueAsGuest } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com', // À remplacer
-    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
+  const [googleRequest, googleResponse, promptGoogleAsync] = Google.useAuthRequest({
+    clientId: GOOGLE_CLIENT_ID,
+    iosClientId: GOOGLE_IOS_CLIENT_ID,
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
+    scopes: ['openid', 'profile', 'email']
   });
+  const [facebookRequest, facebookResponse, promptFacebookAsync] = useFacebookAuthRequest();
 
   React.useEffect(() => {
-    if (response?.type === 'success') {
-      notifyGoogleUnavailable();
-    }
-  }, [response]);
+    if (googleResponse?.type !== 'success') return;
+    const idToken = googleResponse.authentication?.idToken;
+    if (!idToken) return;
+    loginWithGoogle(idToken).catch((error) => notifySocialAuthError('Google', error));
+  }, [googleResponse]);
+
+  React.useEffect(() => {
+    if (facebookResponse?.type !== 'success') return;
+    const accessToken = facebookResponse.params?.access_token;
+    if (!accessToken) return;
+    loginWithFacebook(accessToken).catch((error) => notifySocialAuthError('Facebook', error));
+  }, [facebookResponse]);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -80,11 +113,6 @@ function LoginScreen({ navigation }) {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const handleGooglePress = async () => {
-    // Le backend n'expose pas encore d'échange de jeton Google: pas de session factice.
-    notifyGoogleUnavailable();
   };
 
   return (
@@ -126,30 +154,21 @@ function LoginScreen({ navigation }) {
         <View style={styles.dividerLine} />
       </View>
 
-      {/* Google Sign In */}
+      {/* Google Sign In (couvre aussi les comptes Gmail) */}
       <TouchableOpacity
         style={styles.socialButton}
-        onPress={handleGooglePress}
-        disabled={!request}
+        onPress={() => promptGoogleAsync()}
+        disabled={!googleRequest}
       >
         <Text style={{ fontSize: 20 }}>🔵</Text>
         <Text style={styles.socialButtonText}>Se connecter avec Google</Text>
       </TouchableOpacity>
 
-      {/* Gmail Sign In (alias Google) */}
-      <TouchableOpacity
-        style={styles.socialButton}
-        onPress={handleGooglePress}
-        disabled={!request}
-      >
-        <Text style={{ fontSize: 20 }}>📧</Text>
-        <Text style={styles.socialButtonText}>Se connecter avec Gmail</Text>
-      </TouchableOpacity>
-
       {/* Facebook */}
       <TouchableOpacity
         style={styles.socialButton}
-        onPress={() => Alert.alert('Info', 'Facebook login à venir')}
+        onPress={() => promptFacebookAsync()}
+        disabled={!facebookRequest}
       >
         <Text style={{ fontSize: 20 }}>f</Text>
         <Text style={styles.socialButtonText}>Se connecter avec Facebook</Text>
@@ -160,6 +179,9 @@ function LoginScreen({ navigation }) {
         <Text style={styles.link}>Créer un compte</Text>
       </TouchableOpacity>
 
+      <Text style={styles.hint}>
+        Google et Facebook proposent automatiquement le compte déjà connecté sur cet appareil : validez simplement la fenêtre qui s'ouvre.
+      </Text>
       <Text style={styles.hint}>Le mode visiteur donne accès au catalogue; la commande demande un compte.</Text>
 
       {/* Visiteur */}
@@ -175,23 +197,33 @@ function LoginScreen({ navigation }) {
 
 // Écran d'inscription
 function RegisterScreen({ navigation }) {
-  const { register } = useAuth();
+  const { register, loginWithGoogle, loginWithFacebook } = useAuth();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId: 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com',
-    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
+  const [googleRequest, googleResponse, promptGoogleAsync] = Google.useAuthRequest({
+    clientId: GOOGLE_CLIENT_ID,
+    iosClientId: GOOGLE_IOS_CLIENT_ID,
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
+    scopes: ['openid', 'profile', 'email']
   });
+  const [facebookRequest, facebookResponse, promptFacebookAsync] = useFacebookAuthRequest();
 
   React.useEffect(() => {
-    if (response?.type === 'success') {
-      notifyGoogleUnavailable();
-    }
-  }, [response]);
+    if (googleResponse?.type !== 'success') return;
+    const idToken = googleResponse.authentication?.idToken;
+    if (!idToken) return;
+    loginWithGoogle(idToken).catch((error) => notifySocialAuthError('Google', error));
+  }, [googleResponse]);
+
+  React.useEffect(() => {
+    if (facebookResponse?.type !== 'success') return;
+    const accessToken = facebookResponse.params?.access_token;
+    if (!accessToken) return;
+    loginWithFacebook(accessToken).catch((error) => notifySocialAuthError('Facebook', error));
+  }, [facebookResponse]);
 
   const handleRegister = async () => {
     if (!name || !email || !password || !phone) {
@@ -210,10 +242,6 @@ function RegisterScreen({ navigation }) {
     } finally {
       setSubmitting(false);
     }
-  };
-
-  const handleGooglePress = async () => {
-    notifyGoogleUnavailable();
   };
 
   return (
@@ -270,24 +298,24 @@ function RegisterScreen({ navigation }) {
         <View style={styles.dividerLine} />
       </View>
 
-      {/* Google Sign Up */}
+      {/* Google Sign Up (couvre aussi les comptes Gmail) */}
       <TouchableOpacity
         style={styles.socialButton}
-        onPress={handleGooglePress}
-        disabled={!request}
+        onPress={() => promptGoogleAsync()}
+        disabled={!googleRequest}
       >
         <Text style={{ fontSize: 20 }}>🔵</Text>
         <Text style={styles.socialButtonText}>S'inscrire avec Google</Text>
       </TouchableOpacity>
 
-      {/* Gmail Sign Up */}
+      {/* Facebook Sign Up */}
       <TouchableOpacity
         style={styles.socialButton}
-        onPress={handleGooglePress}
-        disabled={!request}
+        onPress={() => promptFacebookAsync()}
+        disabled={!facebookRequest}
       >
-        <Text style={{ fontSize: 20 }}>📧</Text>
-        <Text style={styles.socialButtonText}>S'inscrire avec Gmail</Text>
+        <Text style={{ fontSize: 20 }}>f</Text>
+        <Text style={styles.socialButtonText}>S'inscrire avec Facebook</Text>
       </TouchableOpacity>
 
       {/* Connexion */}

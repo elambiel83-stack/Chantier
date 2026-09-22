@@ -316,6 +316,13 @@
           window.location.assign(paymentResponse.approvalUrl);
           return;
         }
+        if (paymentProvider === "stripe_card" || paymentProvider === "google_pay") {
+          status.textContent = lang === "fr" ? "Redirection sécurisée vers le paiement..." : "Redirecting securely to payment...";
+          const paymentResponse = await window.apiCall(window.API_CONFIG.endpoints.stripeOrder(orderResponse.order.id), { method: "POST" });
+          if (!paymentResponse.checkoutUrl) throw new Error("Lien de paiement indisponible");
+          window.location.assign(paymentResponse.checkoutUrl);
+          return;
+        }
         localStorage.removeItem("cart");
         renderCart();
         checkoutForm.reset();

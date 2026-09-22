@@ -28,28 +28,22 @@ node server.js
 🌍 CORS activé pour: http://localhost:8080
 ```
 
-### 2. Démarrer le Frontend
+### 2. Ouvrir le Frontend
 
-**Option A - Avec Python :**
-```bash
-cd web
-python3 -m http.server 8080
+Le backend sert déjà le dossier `web/` sur le même domaine :
+
+```text
+http://localhost:3000/
 ```
 
-**Option B - Avec VS Code Live Server :**
-- Installer l'extension "Live Server"
-- Clic droit sur `index.html` → "Open with Live Server"
-
-**Option C - Avec Node.js :**
-```bash
-npx http-server -p 8080
-```
+Un serveur statique séparé sur le port `8080` reste possible pour le développement,
+mais il n’est pas recommandé pour les tests d’authentification et de CORS.
 
 ### 3. Tester l'intégration
 
 Ouvrez dans votre navigateur :
-- **Site principal :** http://localhost:8080/index.html
-- **Page de test API :** http://localhost:8080/test-api.html
+- **Site principal :** http://localhost:3000/
+- **Page de test API :** http://localhost:3000/test-api.html
 
 ## 🧪 Test de l'API
 
@@ -60,6 +54,8 @@ Le fichier `test-api.html` vous permet de tester tous les endpoints de l'API :
 3. 🏷️ Filtrage par catégorie
 4. 🔍 Recherche de produits
 5. 🛒 Gestion du panier
+6. 🔐 Authentification, refresh et déconnexion
+7. 📦 Commandes et paiement
 
 ## 🔌 API Endpoints
 
@@ -118,6 +114,38 @@ Récupérer un panier existant.
 DELETE /api/cart/:sessionId
 ```
 Supprimer un panier.
+
+### Authentification et rôles
+
+Les comptes utilisent JWT Bearer, Argon2id et des refresh tokens rotatifs. Une inscription
+crée toujours un compte `customer` ; seul un `admin` peut attribuer un autre rôle.
+
+Permissions disponibles :
+
+- `customer` : `orders:create`, `orders:read_own`, `payments:create_own`.
+- `staff` : `orders:read_operational`, `orders:claim`, `orders:update_assigned`.
+- `admin` : `orders:read_all`, `orders:update_any`, `users:assign_role`.
+
+Toutes les routes protégées exigent `Authorization: Bearer <accessToken>` et renvoient `403`
+si la permission requise manque. Les changements de rôle sont enregistrés dans `audit_log`.
+
+La récupération de compte est disponible sans session via `forgot-password.html`. Elle prend en
+charge e-mail, SMS et WhatsApp ; les fournisseurs sont configurés uniquement dans `backend/.env`.
+Le lien expire après 15 minutes et ne peut être utilisé qu’une fois.
+
+Routes principales :
+
+```text
+POST  /api/auth/register
+POST  /api/auth/login
+POST  /api/auth/refresh
+GET   /api/auth/me
+POST  /api/auth/logout
+GET   /api/orders
+POST  /api/orders/:orderId/claim
+PATCH /api/orders/:orderId/status
+PATCH /api/admin/users/:userId/role
+```
 
 ## 📦 Fichiers Créés/Modifiés
 
@@ -199,12 +227,12 @@ window.USE_API = false;
 
 ### Sécurité
 - ✅ CORS configuré
-- ⚠️ Ajouter une vraie base de données (MongoDB, PostgreSQL)
-- ⚠️ Implémenter l'authentification JWT
-- ⚠️ Valider toutes les entrées (joi, express-validator)
-- ⚠️ Utiliser HTTPS uniquement
-- ⚠️ Ajouter un rate limiting (express-rate-limit)
-- ⚠️ Variables d'environnement sécurisées
+- ✅ PostgreSQL prévu par `backend/schema.sql`
+- ✅ Authentification JWT, Argon2id et refresh tokens rotatifs
+- ✅ Validation des entrées avec Zod
+- ✅ Rate limiting avec `express-rate-limit`
+- ⚠️ Utiliser HTTPS uniquement en production
+- ⚠️ Variables d’environnement sécurisées
 
 ### Performance
 - ⚠️ Ajouter un cache Redis
@@ -220,10 +248,10 @@ window.USE_API = false;
 ## 📝 Prochaines Étapes
 
 ### Backend
-- [ ] Intégrer une base de données (MongoDB/PostgreSQL)
-- [ ] Système d'authentification
-- [ ] Gestion des commandes
-- [ ] Interface d'administration
+- [x] Intégrer PostgreSQL et le schéma métier
+- [x] Système d’authentification et RBAC
+- [x] Gestion des commandes et paiements
+- [ ] Interface d’administration web
 - [ ] Webhooks pour les notifications
 
 ### Frontend

@@ -4,8 +4,12 @@
 const params = new URLSearchParams(window.location.search);
 const orderId = params.get('orderId');
 const confirmationToken = params.get('ct');
+const provider = params.get('provider');
 const status = document.getElementById('status');
-if (!orderId || !confirmationToken) { status.textContent = 'Lien de confirmation incomplet. Contactez le support avec votre référence de commande.'; } else {
+if (provider === 'stripe') {
+  localStorage.removeItem('cart');
+  status.textContent = `Paiement reçu. Votre commande ${orderId || ''} sera confirmée après vérification sécurisée.`;
+} else if (!orderId || !confirmationToken) { status.textContent = 'Lien de confirmation incomplet. Contactez le support avec votre référence de commande.'; } else {
   window.apiCall(`/orders/${orderId}/paypal/capture`, { method: 'POST', body: { confirmationToken } }).then((response) => {
     localStorage.removeItem('cart');
     status.textContent = `Paiement confirmé. Votre commande ${response.orderId} est confirmée.`;

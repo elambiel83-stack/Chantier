@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Script de démarrage rapide pour MonChantier
-# Ce script démarre le backend et ouvre le frontend
+# Le backend sert l'API ET les pages web: une seule origine, donc pas de CORS,
+# pas de contenu mixte et rien à configurer côté navigateur.
 
 echo "🚀 Démarrage de MonChantier..."
 echo ""
@@ -31,35 +32,43 @@ if [ ! -d "$BACKEND_DIR/node_modules" ]; then
     npm install
 fi
 
-# Démarrer le backend en arrière-plan
-echo -e "${BLUE}🔧 Démarrage du backend sur http://localhost:3000${NC}"
+# Démarrer le backend en arrière-plan (API + site sur le même port)
+echo -e "${BLUE}🔧 Démarrage du site et de l'API sur http://localhost:3000${NC}"
 cd "$BACKEND_DIR"
 node server.js &
 BACKEND_PID=$!
 
-# Attendre que le backend soit prêt
-sleep 2
+# Attendre que le backend réponde vraiment (et pas seulement que le processus existe)
+for attempt in $(seq 1 15); do
+    if curl -sf http://localhost:3000/api/health > /dev/null; then
+        break
+    fi
+    sleep 1
+done
 
-# Vérifier si le backend est démarré
-if ps -p $BACKEND_PID > /dev/null; then
-    echo -e "${GREEN}✅ Backend démarré (PID: $BACKEND_PID)${NC}"
+if curl -sf http://localhost:3000/api/health > /dev/null; then
+    echo -e "${GREEN}✅ Démarré (PID: $BACKEND_PID)${NC}"
+    curl -s http://localhost:3000/api/health
+    echo ""
 else
-    echo -e "${RED}❌ Erreur lors du démarrage du backend${NC}"
+    echo -e "${RED}❌ Le serveur ne répond pas sur http://localhost:3000/api/health${NC}"
+    kill $BACKEND_PID 2>/dev/null
     exit 1
 fi
 
 echo ""
 echo -e "${GREEN}✅ MonChantier est prêt !${NC}"
 echo ""
-echo "📍 Backend API : http://localhost:3000/api"
-echo "📍 Frontend : Utilisez un serveur web pour ouvrir web/index.html"
+echo "📍 Site      : http://localhost:3000/"
+echo "📍 API       : http://localhost:3000/api"
+echo "📍 État      : http://localhost:3000/api/health"
 echo ""
-echo "💡 Pour démarrer le frontend :"
-echo "   cd $WEB_DIR"
-echo "   python3 -m http.server 8080"
+echo "💡 N'ouvrez pas les pages depuis un autre serveur (python -m http.server, Live Server...) :"
+echo "   le navigateur les servirait depuis une autre origine et les appels à l'API échoueraient"
+echo "   avec « Failed to fetch »."
 echo ""
 echo "🧪 Pour tester l'API, ouvrez :"
-echo "   http://localhost:8080/test-api.html"
+echo "   http://localhost:3000/test-api.html"
 echo ""
 echo "🛑 Pour arrêter le backend :"
 echo "   kill $BACKEND_PID"
