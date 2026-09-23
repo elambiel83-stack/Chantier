@@ -46,6 +46,49 @@
     }
   }
 
+  function timeAgo(iso) {
+    const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (seconds < 60) return 'à l’instant';
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `il y a ${minutes} min`;
+    const hours = Math.round(minutes / 60);
+    return `il y a ${hours} h`;
+  }
+
+  // Partage de position en direct pendant la livraison: le staff/admin active le partage
+  // pour une commande donnée, une position est envoyée immédiatement puis toutes les 15s
+  // tant que le partage reste actif — jamais un suivi permanent en arrière-plan, l'agent
+  // doit explicitement l'activer pour chaque commande.
+  const activeShares = new Map(); // orderId -> intervalId
+
+  function sendLocationUpdate(orderId) {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        window.apiCall(`/orders/${orderId}/location`, {
+          method: 'PATCH',
+          body: { latitude: position.coords.latitude, longitude: position.coords.longitude }
+        }).catch(() => {
+          // Best-effort: une commande passée à un autre statut/agent entre-temps ne doit
+          // pas interrompre bruyamment le partage, il s'arrêtera via toggleShare/stopShare.
+        });
+      },
+      () => {}
+    );
+  }
+
+  function startShare(orderId) {
+    if (activeShares.has(orderId)) return;
+    sendLocationUpdate(orderId);
+    activeShares.set(orderId, setInterval(() => sendLocationUpdate(orderId), 15000));
+  }
+
+  function stopShare(orderId) {
+    const intervalId = activeShares.get(orderId);
+    if (intervalId) clearInterval(intervalId);
+    activeShares.delete(orderId);
+  }
+
   function assignmentLabel(order) {
     if (!order.assigned_to) return 'Non assignée';
     if (order.assigned_to === me.id) return 'Assignée à vous';
@@ -59,6 +102,14 @@
       return `${label} · à vérifier manuellement`;
     }
     return `${label} · ${order.payment_status}`;
+  }
+
+  // Même périmètre que le serveur (voir PATCH /orders/:id/location): un staff ne partage
+  // que sur ses propres commandes assignées, un admin sur n'importe laquelle, seulement
+  // tant qu'elle est confirmée ou en livraison.
+  function canShareLocation(order) {
+    if (!['confirmed', 'delivering'].includes(order.status)) return false;
+    return me.role === 'admin' || order.assigned_to === me.id;
   }
 
   // Boutons proposés: le serveur reste la seule autorité (409 si refusé), ceci n'évite
@@ -116,6 +167,25 @@
             <span>${assignmentLabel(order)}</span>
             ${payment ? `<span>${escapeHtml(payment)}</span>` : ''}
           </div>
+          ${order.delivery_latitude != null && order.delivery_longitude != null
+            ? `<a class="mt-2 inline-block text-sm text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.delivery_latitude},${order.delivery_longitude}">Voir la position de livraison</a>`
+            : ''}
+          ${order.driver_latitude != null && order.driver_longitude != null
+            ? `<p class="mt-2 text-sm">
+                 <a class="text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.driver_latitude},${order.driver_longitude}">Position du livreur</a>
+                 <span class="text-slate-400">(${timeAgo(order.driver_location_updated_at)})</span>
+               </p>`
+            : ''}
+          ${order.possible_delay
+            ? `<p class="mt-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-800">⚠️ Position du livreur non rafraîchie depuis un moment — blocage possible.</p>`
+            : ''}
+          ${canShareLocation(order)
+            ? `<div class="mt-2">
+                 <button type="button" class="location-share px-3 py-2 rounded-lg text-sm outline-button border"
+                   data-order-id="${order.id}">${activeShares.has(order.id) ? 'Arrêter le partage de ma position' : 'Partager ma position (livraison)'}</button>
+                 <p class="mt-1 text-xs text-slate-400">Visible par le client et les autres agents pendant cette livraison, puis effacée automatiquement (voir <a class="underline" href="privacy.html" target="_blank" rel="noopener">politique de confidentialité</a>).</p>
+               </div>`
+            : ''}
           ${actions.length ? `<div class="mt-3 flex flex-wrap gap-2">${actions.map((action, index) => `
             <button type="button" class="order-action px-3 py-2 rounded-lg text-sm ${action.variant === 'signal' ? 'signal-button text-white' : 'outline-button border'}"
               data-order-id="${order.id}" data-action-index="${index}">${action.label}</button>
@@ -130,6 +200,19 @@
         const order = currentOrders.find((item) => item.id === orderId);
         const action = availableActions(order)[Number(button.dataset.actionIndex)];
         if (action) runAction(order, action, button);
+      });
+    });
+
+    ordersEl.querySelectorAll('.location-share').forEach((button) => {
+      button.addEventListener('click', () => {
+        const orderId = button.dataset.orderId;
+        if (activeShares.has(orderId)) {
+          stopShare(orderId);
+          button.textContent = 'Partager ma position (livraison)';
+        } else {
+          startShare(orderId);
+          button.textContent = 'Arrêter le partage de ma position';
+        }
       });
     });
   }
@@ -163,6 +246,13 @@
     try {
       const data = await window.apiCall(`/orders${status ? `?status=${encodeURIComponent(status)}` : ''}`);
       currentOrders = data.orders || [];
+      // Une commande qui a changé de statut/affectation entre-temps (ex: marquée terminée
+      // par un autre agent) n'est plus partageable: on coupe l'intervalle, sans quoi il
+      // continuerait à tourner sans qu'aucun bouton ne permette plus de l'arrêter.
+      for (const orderId of [...activeShares.keys()]) {
+        const order = currentOrders.find((item) => item.id === orderId);
+        if (!order || !canShareLocation(order)) stopShare(orderId);
+      }
       renderOrders(currentOrders);
       ordersStatusEl.textContent = '';
     } catch (error) {
@@ -195,7 +285,75 @@
       : 'Vous voyez les commandes confirmées non affectées et celles qui vous sont assignées.';
     dashboardEl.classList.remove('hidden');
     await loadOrders();
+    // Créer/suspendre des partenaires reste une décision admin: le staff ne gère que les
+    // commandes qui lui sont assignées, pas la marketplace elle-même.
+    if (me.role === 'admin') {
+      document.getElementById('vendors-section').classList.remove('hidden');
+      await loadVendors();
+    }
   }
+
+  const VENDOR_CATEGORY_LABELS = {
+    produits: 'Produits',
+    services: 'Services',
+    facilitation: 'Facilitation',
+    partenaires: 'Partenaires'
+  };
+
+  async function loadVendors() {
+    const statusEl = document.getElementById('vendor-create-status');
+    const listEl = document.getElementById('vendors-list');
+    try {
+      const data = await window.apiCall('/admin/vendors');
+      const vendors = data.vendors || [];
+      listEl.innerHTML = vendors.length
+        ? vendors.map((vendor) => `
+            <div class="bg-white rounded-xl p-3 shadow flex flex-wrap items-center justify-between gap-2" data-vendor-id="${vendor.id}">
+              <div>
+                <div class="font-semibold">${escapeHtml(vendor.business_name)} <span class="text-xs font-normal text-slate-400">(${VENDOR_CATEGORY_LABELS[vendor.category] || vendor.category})</span></div>
+                <div class="text-slate-500 text-sm">${escapeHtml(vendor.email)}${vendor.phone ? ` · ${escapeHtml(vendor.phone)}` : ''}</div>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-semibold px-2 py-1 rounded-full ${vendor.is_active ? 'bg-green-100 text-green-800' : 'bg-slate-100 text-slate-500'}">${vendor.is_active ? 'Actif' : 'Suspendu'}</span>
+                <button type="button" class="vendor-toggle px-3 py-1 rounded-lg text-sm outline-button border" data-vendor-id="${vendor.id}" data-active="${vendor.is_active}">${vendor.is_active ? 'Suspendre' : 'Réactiver'}</button>
+              </div>
+            </div>
+          `).join('')
+        : '<p class="text-slate-500 text-sm">Aucun partenaire pour le moment.</p>';
+      listEl.querySelectorAll('.vendor-toggle').forEach((button) => {
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            await window.apiCall(`/admin/vendors/${button.dataset.vendorId}`, { method: 'PATCH', body: { isActive: button.dataset.active !== 'true' } });
+            await loadVendors();
+          } catch (error) {
+            statusEl.textContent = error.message || 'Action refusée.';
+            button.disabled = false;
+          }
+        });
+      });
+    } catch (error) {
+      statusEl.textContent = error.message || 'Impossible de charger les partenaires.';
+    }
+  }
+
+  document.getElementById('vendor-create-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const statusEl = document.getElementById('vendor-create-status');
+    const email = document.getElementById('vendor-email').value.trim();
+    const businessName = document.getElementById('vendor-business-name').value.trim();
+    const category = document.getElementById('vendor-category').value;
+    const phone = document.getElementById('vendor-phone').value.trim();
+    statusEl.textContent = 'Création en cours...';
+    try {
+      await window.apiCall('/admin/vendors', { method: 'POST', body: { email, businessName, category, ...(phone ? { phone } : {}) } });
+      statusEl.textContent = 'Partenaire créé.';
+      event.target.reset();
+      await loadVendors();
+    } catch (error) {
+      statusEl.textContent = error.message || 'Création refusée.';
+    }
+  });
 
   statusFilterEl.addEventListener('change', loadOrders);
   document.getElementById('refresh').addEventListener('click', loadOrders);

@@ -25,17 +25,17 @@ header {
   box-shadow: 0 4px 18px rgba(23, 33, 43, .08) !important;
 }
 
-button, a, input, select { transition: border-color .2s ease, background-color .2s ease, color .2s ease, transform .2s ease; }
+button, a, input, select { transition: border-color .2s ease, background-color .2s ease, color .2s ease, transform .25s ease, box-shadow .25s ease; }
 button, a { border-radius: var(--radius) !important; }
 input, select { border-color: var(--line) !important; border-radius: var(--radius) !important; background: var(--surface); }
 input:focus, select:focus { outline: 3px solid rgba(214, 73, 47, .18); border-color: var(--signal) !important; }
 
 .brand-name { letter-spacing: .02em; }
 .signal-button { background: var(--signal) !important; }
-.signal-button:hover { background: var(--signal-dark) !important; transform: translateY(-1px); }
+.signal-button:hover { background: var(--signal-dark) !important; transform: translateY(-2px); box-shadow: 0 10px 18px rgba(173, 53, 34, .28) !important; }
 .dark-button { background: var(--ink) !important; }
-.dark-button:hover { background: #0e151b !important; transform: translateY(-1px); }
-.outline-button:hover { background: #eef1f0 !important; }
+.dark-button:hover { background: #0e151b !important; transform: translateY(-2px); box-shadow: 0 10px 18px rgba(23, 33, 43, .28) !important; }
+.outline-button:hover { background: #eef1f0 !important; transform: translateY(-2px); box-shadow: 0 8px 16px rgba(23, 33, 43, .1) !important; }
 .hero-panel { background: var(--surface); }
 .hero-image { border-radius: var(--radius) !important; box-shadow: 14px 14px 0 var(--accent) !important; }
 .section-rule { border-top: 1px solid var(--line); }

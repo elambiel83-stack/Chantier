@@ -1,13 +1,35 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getApiUrl } from '../config';
+import { useAuth } from './AuthContext';
 
 const CartContext = createContext();
 
 const CART_KEY = 'monchantier.cart';
 const CURRENCY_KEY = 'monchantier.currency';
+// Retient pour quel compte le panier local a déjà été fusionné avec le serveur, pour ne
+// fusionner (additionner) qu'une fois par compte plutôt qu'à chaque lancement de l'app —
+// sinon un panier déjà synchronisé se dédoublerait à chaque ouverture.
+const SYNCED_USER_KEY = 'monchantier.cart.syncedUserId';
 // Repli hors ligne uniquement: les taux facturés viennent de /api/currency-rates.
 const FALLBACK_RATES = { USD: 1, CDF: 2800, EUR: 0.92 };
+
+// Le serveur ne connaît que {id, qty}: on récupère les détails produit (nom, prix, image...)
+// du catalogue pour reconstruire des entrées de panier utilisables par l'UI mobile.
+async function enrichWireItems(items) {
+  if (!items.length) return [];
+  try {
+    const response = await fetch(getApiUrl('/products'));
+    if (!response.ok) return [];
+    const data = await response.json();
+    const catalog = new Map((data.products || []).map((product) => [product.id, product]));
+    return items
+      .map(({ id, qty }) => (catalog.has(id) ? { ...catalog.get(id), quantity: qty } : null))
+      .filter(Boolean);
+  } catch (error) {
+    return [];
+  }
+}
 
 export const useCart = () => {
   const context = useContext(CartContext);
@@ -24,6 +46,11 @@ export const CartProvider = ({ children }) => {
   // Évite d'écraser le panier/devise persistés par un tableau vide pendant le tout
   // premier rendu, avant que la lecture depuis AsyncStorage n'ait eu le temps de finir.
   const hydrated = useRef(false);
+  const cartRef = useRef(cart);
+  useEffect(() => { cartRef.current = cart; }, [cart]);
+
+  const { session, authFetch } = useAuth();
+  const userId = session?.user?.id || null;
 
   useEffect(() => {
     (async () => {
@@ -47,6 +74,47 @@ export const CartProvider = ({ children }) => {
       })
       .catch(() => {});
   }, []);
+
+  // Synchronise avec le panier serveur quand un compte devient actif (connexion, ou session
+  // restaurée au lancement). Ce compte n'a encore jamais été synchronisé sur cet appareil ->
+  // fusionne (additionne les quantités communes) pour ne rien perdre d'un panier visiteur ou
+  // d'un ancien compte. Déjà synchronisé -> adopte simplement le panier serveur, qui reflète
+  // peut-être un changement fait depuis un autre appareil.
+  useEffect(() => {
+    if (!userId) return;
+    (async () => {
+      try {
+        const { cart: serverCart } = await authFetch('/cart');
+        const serverItems = serverCart.items;
+        const syncedUserId = await AsyncStorage.getItem(SYNCED_USER_KEY);
+        let wireItems;
+        if (syncedUserId === userId) {
+          wireItems = serverItems;
+        } else {
+          const merged = new Map(serverItems.map((item) => [item.id, item.qty]));
+          for (const item of cartRef.current) {
+            merged.set(item.id, (merged.get(item.id) || 0) + item.quantity);
+          }
+          wireItems = [...merged].map(([id, qty]) => ({ id, qty }));
+          await AsyncStorage.setItem(SYNCED_USER_KEY, userId);
+        }
+        if (wireItems.length) {
+          await authFetch('/cart', { method: 'PUT', body: { items: wireItems } });
+        }
+        setCart(await enrichWireItems(wireItems));
+      } catch (error) {
+        // Hors ligne ou session invalide: le panier local reste utilisable tel quel.
+      }
+    })();
+  }, [userId]);
+
+  // Répercute toute modification locale du panier vers le serveur, pour que les autres
+  // appareils du même compte la voient (best-effort, ne bloque jamais l'UI).
+  useEffect(() => {
+    if (!hydrated.current || !userId) return;
+    const wireItems = cart.map(({ id, quantity }) => ({ id, qty: quantity }));
+    authFetch('/cart', { method: 'PUT', body: { items: wireItems } }).catch(() => {});
+  }, [cart, userId]);
 
   useEffect(() => {
     if (!hydrated.current) return;
