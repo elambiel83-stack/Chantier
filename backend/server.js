@@ -146,7 +146,10 @@ app.use(helmet({
     }
   }
 }));
-app.use(express.json({ limit: '100kb' }));
+// rawBody: nécessaire pour vérifier la signature X-Hub-Signature-256 des webhooks Meta
+// (WhatsApp/Messenger, voir channels/meta.js), calculée sur les octets bruts du corps et
+// non sur le JSON re-sérialisé (qui ne serait pas forcément identique octet pour octet).
+app.use(express.json({ limit: '100kb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // Sonde de santé pour l'orchestrateur/monitoring: hors quota et hors authentification.
 app.get('/healthz', async (req, res) => {
@@ -700,6 +703,98 @@ function aggregateQuantities(items) {
   return quantities;
 }
 
+// Création de commande: verrouille le catalogue, décrémente le stock et écrit
+// commande + paiement dans une même transaction. Partagée entre la route HTTP
+// authentifiée (POST /api/orders) et le bot de vente WhatsApp/Messenger
+// (channels/salesBot.js), qui n'a pas de jeton mais un customerId résolu par téléphone.
+// Lève une erreur avec .status (400/409/503) pour les cas attendus, à traduire en
+// réponse HTTP par l'appelant; toute autre erreur est une panne interne (500).
+async function createOrder({ customerId, customer, currency, paymentProvider, items }) {
+  if (paymentProvider === 'paypal' && currency === 'CDF') {
+    throw Object.assign(new Error('PayPal ne prend pas en charge le CDF. Sélectionnez USD ou EUR.'), { status: 400 });
+  }
+  if (paymentProvider === 'cinetpay' && !CINETPAY_SUPPORTED_CURRENCIES.includes(currency)) {
+    throw Object.assign(new Error('CinetPay ne prend pas en charge l’EUR. Sélectionnez USD ou CDF.'), { status: 400 });
+  }
+  const mobileMoneyProvider = MOBILE_MONEY_PROVIDERS[paymentProvider];
+  if (mobileMoneyProvider && !mobileMoneyProvider.payoutNumber) {
+    throw Object.assign(new Error(`Le paiement ${mobileMoneyProvider.label} n’est pas encore configuré. Contactez-nous.`), { status: 503 });
+  }
+  const quantities = aggregateQuantities(items);
+  const productIds = [...quantities.keys()];
+
+  await syncCatalog();
+
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
+    // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
+    const productResult = await client.query(
+      'SELECT id, price_usd, stock_qty FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
+      [productIds]
+    );
+    if (productResult.rowCount !== productIds.length) {
+      await client.query('ROLLBACK');
+      throw Object.assign(new Error('Un produit du panier est introuvable'), { status: 400 });
+    }
+    const products = new Map(productResult.rows.map((row) => [row.id, row]));
+
+    for (const [productId, qty] of quantities) {
+      const decrement = await client.query(
+        'UPDATE product SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1',
+        [qty, productId]
+      );
+      if (!decrement.rowCount) {
+        await client.query('ROLLBACK');
+        throw Object.assign(new Error(`Stock insuffisant pour ${productId}: ${Number(products.get(productId).stock_qty)} disponible(s)`), { status: 409 });
+      }
+    }
+
+    await client.query('UPDATE customer SET full_name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4', [customer.fullName, customer.phone, customer.email || null, customerId]);
+    const rateResult = await client.query('SELECT units_per_usd FROM currency_rate WHERE currency = $1', [currency]);
+    if (rateResult.rowCount !== 1) throw new Error('Devise indisponible');
+    const rate = Number(rateResult.rows[0].units_per_usd);
+    let subtotalUsd = 0;
+    for (const [productId, qty] of quantities) {
+      subtotalUsd += Number(products.get(productId).price_usd) * qty;
+    }
+    const subtotal = Number((subtotalUsd * rate).toFixed(2));
+    const orderResult = await client.query(
+      'INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount) VALUES ($1, $2, $3, $3) RETURNING id, status, total_amount, currency',
+      [customerId, currency, subtotal]
+    );
+    const order = orderResult.rows[0];
+    for (const [productId, qty] of quantities) {
+      await client.query(
+        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd) VALUES ($1, $2, $3, $4)',
+        [order.id, productId, qty, Number(products.get(productId).price_usd)]
+      );
+    }
+    await client.query(
+      'INSERT INTO payment (order_id, provider, amount, currency) VALUES ($1, $2, $3, $4)',
+      [order.id, paymentProvider, order.total_amount, order.currency]
+    );
+    await client.query('COMMIT');
+    // Airtel/Orange Money: pas de redirection ni d'appel externe, on renvoie directement
+    // les instructions de paiement (le client PayPal, lui, appelle /orders/:id/paypal ensuite).
+    const payment = mobileMoneyProvider
+      ? { provider: paymentProvider, label: mobileMoneyProvider.label, payoutNumber: mobileMoneyProvider.payoutNumber, reference: order.id }
+      : undefined;
+    return { order, payment };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Vente conversationnelle via WhatsApp/Messenger (voir channels/salesBot.js): reçoit les
+// webhooks Meta et crée des commandes avec la même logique que le web/mobile.
+const { createSalesBot } = require('./channels/salesBot');
+const salesBot = createSalesBot({ database, createOrder, listCatalog, MOBILE_MONEY_PROVIDERS, captureError, captureSecurityEvent });
+
 // Routes API
 
 // Route de test
@@ -1116,105 +1211,17 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
   if (!parsedOrder.success) {
     return res.status(400).json({ success: false, message: 'Commande invalide', errors: parsedOrder.error.flatten().fieldErrors });
   }
-
   const { customer, currency, paymentProvider, items } = parsedOrder.data;
-  if (paymentProvider === 'paypal' && currency === 'CDF') {
-    return res.status(400).json({
-      success: false,
-      message: 'PayPal ne prend pas en charge le CDF. Sélectionnez USD ou EUR.'
-    });
-  }
-  if (paymentProvider === 'cinetpay' && !CINETPAY_SUPPORTED_CURRENCIES.includes(currency)) {
-    return res.status(400).json({
-      success: false,
-      message: 'CinetPay ne prend pas en charge l’EUR. Sélectionnez USD ou CDF.'
-    });
-  }
-  const mobileMoneyProvider = MOBILE_MONEY_PROVIDERS[paymentProvider];
-  if (mobileMoneyProvider && !mobileMoneyProvider.payoutNumber) {
-    return res.status(503).json({
-      success: false,
-      message: `Le paiement ${mobileMoneyProvider.label} n’est pas encore configuré. Contactez-nous.`
-    });
-  }
-  const quantities = aggregateQuantities(items);
-  const productIds = [...quantities.keys()];
-
   try {
-    await syncCatalog();
-  } catch (error) {
-    return next(error);
-  }
-
-  const client = await database.connect();
-  try {
-    await client.query('BEGIN');
-    // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
-    // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
-    const productResult = await client.query(
-      'SELECT id, price_usd, stock_qty FROM product WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE',
-      [productIds]
-    );
-    if (productResult.rowCount !== productIds.length) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ success: false, message: 'Un produit du panier est introuvable' });
-    }
-    const products = new Map(productResult.rows.map((row) => [row.id, row]));
-
-    for (const [productId, qty] of quantities) {
-      const decrement = await client.query(
-        'UPDATE product SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1',
-        [qty, productId]
-      );
-      if (!decrement.rowCount) {
-        await client.query('ROLLBACK');
-        return res.status(409).json({
-          success: false,
-          message: `Stock insuffisant pour ${productId}: ${Number(products.get(productId).stock_qty)} disponible(s)`
-        });
-      }
-    }
-
-    await client.query('UPDATE customer SET full_name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4', [customer.fullName, customer.phone, customer.email || null, req.auth.customerId]);
-    const rateResult = await client.query('SELECT units_per_usd FROM currency_rate WHERE currency = $1', [currency]);
-    if (rateResult.rowCount !== 1) throw new Error('Devise indisponible');
-    const rate = Number(rateResult.rows[0].units_per_usd);
-    let subtotalUsd = 0;
-    for (const [productId, qty] of quantities) {
-      subtotalUsd += Number(products.get(productId).price_usd) * qty;
-    }
-    const subtotal = Number((subtotalUsd * rate).toFixed(2));
-    const orderResult = await client.query(
-      'INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount) VALUES ($1, $2, $3, $3) RETURNING id, status, total_amount, currency',
-      [req.auth.customerId, currency, subtotal]
-    );
-    const order = orderResult.rows[0];
-    for (const [productId, qty] of quantities) {
-      await client.query(
-        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd) VALUES ($1, $2, $3, $4)',
-        [order.id, productId, qty, Number(products.get(productId).price_usd)]
-      );
-    }
-    await client.query(
-      'INSERT INTO payment (order_id, provider, amount, currency) VALUES ($1, $2, $3, $4)',
-      [order.id, paymentProvider, order.total_amount, order.currency]
-    );
-    await client.query('COMMIT');
-    // Airtel/Orange Money: pas de redirection ni d'appel externe, on renvoie directement
-    // les instructions de paiement (le client PayPal, lui, appelle /orders/:id/paypal ensuite).
-    const payment = mobileMoneyProvider
-      ? { provider: paymentProvider, label: mobileMoneyProvider.label, payoutNumber: mobileMoneyProvider.payoutNumber, reference: order.id }
-      : undefined;
+    const { order, payment } = await createOrder({ customerId: req.auth.customerId, customer, currency, paymentProvider, items });
     res.status(201).json({
       success: true,
       order: { id: order.id, status: order.status, totalAmount: order.total_amount, currency: order.currency, paymentProvider },
       ...(payment ? { payment } : {})
     });
   } catch (error) {
-    await client.query('ROLLBACK');
+    if (error.status) return res.status(error.status).json({ success: false, message: error.message });
     next(error);
-  } finally {
-    client.release();
   }
 });
 
@@ -1659,12 +1666,17 @@ app.get('/api/cart/:sessionId', (req, res) => {
 // Supprimer le panier
 app.delete('/api/cart/:sessionId', (req, res) => {
   delete carts[req.params.sessionId];
-  
+
   res.json({
     success: true,
     message: 'Panier supprimé'
   });
 });
+
+// Webhooks Meta (WhatsApp Cloud API + Messenger), une seule Meta App pour les deux canaux:
+// GET pour la poignée de main de configuration, POST pour les messages entrants.
+app.get('/webhooks/meta', salesBot.handleVerification);
+app.post('/webhooks/meta', salesBot.handleWebhook);
 
 if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 

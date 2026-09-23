@@ -169,6 +169,19 @@ CREATE TABLE IF NOT EXISTS import_request (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- État de conversation du bot de vente WhatsApp/Messenger (voir channels/salesBot.js):
+-- une ligne par identifiant externe (numéro WhatsApp ou PSID Messenger), pour reprendre la
+-- conversation là où elle en était après un redémarrage du serveur entre deux messages.
+CREATE TABLE IF NOT EXISTS chat_session (
+  channel TEXT NOT NULL CHECK (channel IN ('whatsapp', 'messenger')),
+  external_id TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'menu',
+  cart JSONB NOT NULL DEFAULT '[]',
+  context JSONB NOT NULL DEFAULT '{}',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (channel, external_id)
+);
+
 CREATE INDEX IF NOT EXISTS product_category_idx ON product(category);
 CREATE INDEX IF NOT EXISTS import_request_customer_id_idx ON import_request(customer_id);
 CREATE INDEX IF NOT EXISTS import_request_assigned_to_idx ON import_request(assigned_to);

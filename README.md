@@ -74,6 +74,35 @@ Une fois le paiement reçu et vérifié manuellement (SMS, relevé marchand...),
 `admin` confirme la commande via `PATCH /api/orders/:orderId/status` (`{"status": "confirmed"}`),
 ce qui marque aussi le paiement correspondant comme `paid`.
 
+## Vente via WhatsApp et Messenger
+
+`backend/channels/salesBot.js` (webhooks reçus sur `POST /webhooks/meta`) permet de commander
+directement depuis WhatsApp ou Messenger, sans passer par le site ou l’app : un menu numéroté
+(catégories → produits → quantité → panier → nom/téléphone → moyen de paiement) qui crée une vraie
+commande avec la même logique que le web/mobile (`createOrder` dans `server.js`, verrouillage de
+stock inclus). L’état de la conversation est conservé dans la table `chat_session` (une ligne par
+numéro WhatsApp ou identifiant Messenger), donc résiste à un redémarrage du serveur entre deux
+messages du client.
+
+WhatsApp et Messenger passent par une seule Meta App (Meta Business), donc un seul webhook et un
+seul jeu d’identifiants pour la vérification (`META_APP_SECRET`, `META_VERIFY_TOKEN`) — seuls les
+identifiants d’envoi diffèrent par canal (`WHATSAPP_PHONE_NUMBER_ID`/`WHATSAPP_ACCESS_TOKEN` pour
+WhatsApp, `MESSENGER_PAGE_ACCESS_TOKEN` pour Messenger). Voir `backend/.env.example` pour où
+récupérer chaque valeur dans Meta Business Suite. Non configurées, `GET /webhooks/meta` (poignée de
+main de configuration) et `POST /webhooks/meta` (chaque message reçu) répondent respectivement
+`403` et ignorent silencieusement l’événement (journalisé comme événement de sécurité), plutôt que
+de traiter des appels non vérifiés.
+
+Volontairement hors périmètre de cette première version : la sélection de devise (tout est commandé
+en `USD`) et PayPal/CinetPay comme moyen de paiement (leur redirection vers un navigateur ne
+convient pas à une conversation) — seuls Airtel Money et Orange Money, confirmés manuellement par
+le staff exactement comme ci-dessus, sont proposés dans le bot.
+
+TikTok n’a pas d’intégration équivalente : TikTok Shop n’est pas disponible en RDC (ni ailleurs en
+Afrique) et la Business Messaging API de TikTok n’est pas en libre-service (accès réservé à des
+partenaires agréés). Un lien `wa.me` en bio/description TikTok, comme celui déjà utilisé sur le
+web et l’app, reste la seule option pour rediriger vers une vente WhatsApp depuis TikTok.
+
 ## Sourcing produits et demandes d’importation
 
 Objectif : permettre à un client de demander l’importation d’un produit repéré chez un
