@@ -240,7 +240,7 @@
           function(position) {
             const lat = position.coords.latitude;
             const lng = position.coords.longitude;
-            const mapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+            const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(lat + ',' + lng)}`;
             const message = encodeURIComponent(
               (lang === "fr" ? "Bonjour, voici ma localisation: " : "Hello, here is my location: ") + mapsUrl
             );

@@ -97,11 +97,11 @@
       </p>
       ${statusStepper(order.status)}
       ${order.delivery_latitude != null && order.delivery_longitude != null
-        ? `<a class="mt-3 inline-block text-sm text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.delivery_latitude},${order.delivery_longitude}">Voir la position de livraison</a>`
+        ? `<a class="mt-3 inline-block text-sm text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(order.delivery_latitude + ',' + order.delivery_longitude)}">Voir la position de livraison</a>`
         : ''}
       ${order.status === 'delivering' && order.driver_latitude != null && order.driver_longitude != null
         ? `<p class="mt-2 text-sm">
-             <a class="text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${order.driver_latitude},${order.driver_longitude}">Suivre le livreur en direct</a>
+             <a class="text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(order.driver_latitude + ',' + order.driver_longitude)}">Suivre le livreur en direct</a>
              <span class="text-slate-400">(position ${timeAgo(order.driver_location_updated_at)})</span>
            </p>`
         : ''}

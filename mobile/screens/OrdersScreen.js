@@ -118,12 +118,12 @@ function OrderCard({ order, authFetch }) {
       </Text>
       <StatusStepper status={order.status} />
       {order.delivery_latitude != null && order.delivery_longitude != null && (
-        <TouchableOpacity onPress={() => Linking.openURL(`https://www.google.com/maps?q=${order.delivery_latitude},${order.delivery_longitude}`)}>
+        <TouchableOpacity onPress={() => Linking.openURL(`https://www.google.com/maps?q=${encodeURIComponent(order.delivery_latitude + ',' + order.delivery_longitude)}`)}>
           <Text style={styles.toggleLink}>Voir la position de livraison</Text>
         </TouchableOpacity>
       )}
       {order.status === 'delivering' && order.driver_latitude != null && order.driver_longitude != null && (
-        <TouchableOpacity onPress={() => Linking.openURL(`https://www.google.com/maps?q=${order.driver_latitude},${order.driver_longitude}`)}>
+        <TouchableOpacity onPress={() => Linking.openURL(`https://www.google.com/maps?q=${encodeURIComponent(order.driver_latitude + ',' + order.driver_longitude)}`)}>
           <Text style={styles.toggleLink}>Suivre le livreur en direct ({timeAgo(order.driver_location_updated_at)})</Text>
         </TouchableOpacity>
       )}

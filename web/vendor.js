@@ -115,7 +115,7 @@
       <div class="mt-2 text-sm text-slate-600">
         Client : ${escapeHtml(item.full_name || '—')} · ${escapeHtml(item.phone || '')}
         ${item.delivery_latitude != null && item.delivery_longitude != null
-          ? ` · <a class="text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${item.delivery_latitude},${item.delivery_longitude}">Voir la position de livraison</a>`
+          ? ` · <a class="text-red-600 underline" target="_blank" rel="noopener" href="https://www.google.com/maps?q=${encodeURIComponent(item.delivery_latitude + ',' + item.delivery_longitude)}">Voir la position de livraison</a>`
           : ''}
       </div>
       ${actions.length ? `<div class="mt-3 flex flex-wrap gap-2">${actions.map((action, index) => `
