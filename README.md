@@ -25,6 +25,41 @@ même, les taux de change facturés proviennent de la table `currency_rate` et s
 clients par `GET /api/currency-rates` : les valeurs présentes dans `web/config.js` et l’app mobile
 ne sont qu’un repli hors ligne.
 
+## Multi-tenant
+
+Le dépôt héberge en principe plusieurs entreprises clientes indépendantes (« tenants ») sur la même
+installation, chacune avec ses propres comptes, son propre catalogue et ses propres commandes —
+jamais visibles d’un tenant à l’autre. Non configuré, tout se comporte comme un déploiement
+mono-tenant classique : un seul tenant (`monchantier`, créé par `schema.sql`) reçoit toutes les
+requêtes.
+
+**Résolution du tenant** : par sous-domaine (`acme.monchantier.net` → tenant `acme`), pilotée par
+`TENANT_BASE_DOMAIN` (voir `backend/.env.example`). Non définie, toute requête est routée vers le
+tenant par défaut. Un sous-domaine qui ne correspond à aucun tenant actif répond `404`.
+
+**Rôles** : `customer`/`staff`/`admin`/`vendor` restent strictement locaux à un tenant — un `admin`
+d’un tenant n’a aucune autorité sur un autre. Un rôle distinct, `superadmin`, gère la plateforme
+elle-même (`POST/GET/PATCH /api/platform/tenants` pour créer, lister, activer/désactiver un tenant)
+et vit dans un tenant réservé (`platform`) jamais utilisé par de vrais clients ; un jeton superadmin
+reste valide quel que soit le sous-domaine sur lequel il est présenté, contrairement à tous les
+autres rôles. Comme pour le tout premier `admin` (voir plus bas), aucune route ne permet de
+promouvoir un compte en `superadmin` — uniquement un accès direct à la base.
+
+**Configuration par tenant** : chaque tenant peut définir ses propres identifiants de paiement
+(PayPal, CinetPay, numéros marchands Airtel/Orange Money) via `GET`/`PATCH /api/admin/settings`
+(rôle `admin`, jamais superadmin — cette route reste locale au tenant de l’appelant). Un identifiant
+non configuré pour un tenant retombe sur la variable d’environnement globale correspondante (voir
+`backend/.env.example`) — en pratique, celle du tenant `monchantier` tant qu’il n’a pas les siens.
+Les secrets (`PAYPAL_CLIENT_SECRET`, `CINETPAY_API_KEY`) sont chiffrés en base (AES-256-GCM, voir
+`backend/secrets.js`) avec `TENANT_SECRETS_ENCRYPTION_KEY` — sans cette variable, `PATCH
+/api/admin/settings` refuse d’enregistrer un secret (`503`) plutôt que de l’écrire en clair ; les
+champs non secrets (numéros, identifiants de site) restent modifiables sans elle. `GET
+/api/admin/settings` ne renvoie jamais un secret déjà enregistré, seulement sa présence
+(`paypalClientSecretConfigured: true/false`).
+
+Reste hors périmètre à ce stade : configuration par tenant de l’image de marque (e-mail expéditeur,
+numéro WhatsApp, thème web/mobile) et de la clé de site Turnstile — ces éléments restent globaux.
+
 ## Commandes, stock et paiement
 
 Le stock est réservé au moment de la création de la commande, dans la même transaction que

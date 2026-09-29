@@ -12,6 +12,7 @@ const { Pool } = require('pg');
 const { createOidcVerifier, isOidcTokenError } = require('./oidc');
 const { sendEmail, sendSms, sendWhatsApp, channelAvailability } = require('./notifications');
 const { verifyTurnstileToken } = require('./turnstile');
+const { encryptSecret, decryptSecret } = require('./secrets');
 require('dotenv').config();
 
 // Champs qui ne doivent jamais atteindre Sentry, quelle que soit la route: mots de passe,
@@ -94,10 +95,18 @@ const FALLBACK_CURRENCY_RATES = { USD: 1, CDF: 2800, EUR: 0.92 };
 // Airtel Money et Orange Money n'ont pas d'API de collecte automatisée branchée ici: le
 // client envoie le paiement à ce numéro marchand avec la référence de commande, et le
 // staff confirme manuellement (PATCH /api/orders/:orderId/status) après vérification.
-const MOBILE_MONEY_PROVIDERS = {
-  airtel_money: { label: 'Airtel Money', payoutNumber: process.env.AIRTEL_MONEY_PAYOUT_NUMBER },
-  orange_money: { label: 'Orange Money', payoutNumber: process.env.ORANGE_MONEY_PAYOUT_NUMBER }
-};
+const MOBILE_MONEY_LABELS = { airtel_money: 'Airtel Money', orange_money: 'Orange Money' };
+const MOBILE_MONEY_ENV_VARS = { airtel_money: 'AIRTEL_MONEY_PAYOUT_NUMBER', orange_money: 'ORANGE_MONEY_PAYOUT_NUMBER' };
+const MOBILE_MONEY_SETTINGS_COLUMNS = { airtel_money: 'airtel_money_payout_number', orange_money: 'orange_money_payout_number' };
+// Numéro marchand propre au tenant (voir tenant_settings, phase 4) s'il en a configuré un,
+// sinon replie sur la variable d'environnement globale (identifiants du tenant par défaut).
+async function getMobileMoneyProvider(providerKey, tenantId) {
+  const label = MOBILE_MONEY_LABELS[providerKey];
+  if (!label) return null;
+  const settings = await getTenantSettings(tenantId);
+  const payoutNumber = settings?.[MOBILE_MONEY_SETTINGS_COLUMNS[providerKey]] || process.env[MOBILE_MONEY_ENV_VARS[providerKey]];
+  return { label, payoutNumber };
+}
 // CinetPay (paiement Mobile Money automatisé) ne prend en charge que USD et CDF ici.
 const CINETPAY_SUPPORTED_CURRENCIES = ['USD', 'CDF'];
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
@@ -122,6 +131,24 @@ const PLATFORM_TENANT_ID = '00000000-0000-0000-0000-000000000002';
 // tenant, jamais en cours de requête cliente).
 const tenantCache = new Map();
 const TENANT_CACHE_TTL_MS = 60 * 1000;
+
+// Configuration par tenant (phase 4 — identifiants de paiement propres à chaque entreprise
+// cliente, voir tenant_settings dans schema.sql). Même esprit de cache que tenantCache
+// ci-dessus: appelée à chaque paiement, pour une table qui ne change qu'à la
+// configuration par un admin (voir PATCH /api/admin/settings, qui invalide explicitement).
+const tenantSettingsCache = new Map();
+const TENANT_SETTINGS_CACHE_TTL_MS = 60 * 1000;
+async function getTenantSettings(tenantId) {
+  const cached = tenantSettingsCache.get(tenantId);
+  if (cached && cached.expiresAt > Date.now()) return cached.settings;
+  const result = await database.query('SELECT * FROM tenant_settings WHERE tenant_id = $1', [tenantId]);
+  const settings = result.rows[0] || null;
+  tenantSettingsCache.set(tenantId, { settings, expiresAt: Date.now() + TENANT_SETTINGS_CACHE_TTL_MS });
+  return settings;
+}
+function invalidateTenantSettingsCache(tenantId) {
+  tenantSettingsCache.delete(tenantId);
+}
 
 // Connexion Google/Apple: le client (web ou mobile) obtient un jeton d'identité
 // directement du fournisseur puis nous l'envoie; on ne fait confiance qu'à ce que sa
@@ -458,6 +485,33 @@ const tenantCreateSchema = z.object({
   slug: z.string().trim().min(2).max(63).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/, 'slug invalide (minuscules, chiffres, tirets, sans tiret aux extrémités)'),
   name: z.string().trim().min(2).max(120)
 });
+
+// Configuration de paiement propre à un tenant (phase 4). Un champ absent du corps de la
+// requête reste inchangé; un champ envoyé à null efface la valeur du tenant et fait
+// retomber sur la variable d'environnement globale (voir getPaypalCredentials/
+// getCinetpayCredentials/getMobileMoneyProvider) — .nullable().optional() distingue bien
+// ces trois cas (absent / null / valeur), contrairement à .optional() seul.
+const tenantSettingsUpdateSchema = z.object({
+  paypalClientId: z.string().trim().max(200).nullable().optional(),
+  paypalClientSecret: z.string().trim().max(500).nullable().optional(),
+  paypalApiBase: z.string().trim().url().max(200).nullable().optional(),
+  cinetpayApiKey: z.string().trim().max(500).nullable().optional(),
+  cinetpaySiteId: z.string().trim().max(100).nullable().optional(),
+  airtelMoneyPayoutNumber: z.string().trim().max(30).nullable().optional(),
+  orangeMoneyPayoutNumber: z.string().trim().max(30).nullable().optional()
+});
+// Associe chaque champ du corps de requête à sa colonne tenant_settings, et indique si sa
+// valeur doit être chiffrée (identifiant secret) ou stockée telle quelle (numéro de
+// téléphone, identifiant de site — pas des secrets).
+const tenantSettingsFieldMap = {
+  paypalClientId: { column: 'paypal_client_id', encrypt: false },
+  paypalClientSecret: { column: 'paypal_client_secret_encrypted', encrypt: true },
+  paypalApiBase: { column: 'paypal_api_base', encrypt: false },
+  cinetpayApiKey: { column: 'cinetpay_api_key_encrypted', encrypt: true },
+  cinetpaySiteId: { column: 'cinetpay_site_id', encrypt: false },
+  airtelMoneyPayoutNumber: { column: 'airtel_money_payout_number', encrypt: false },
+  orangeMoneyPayoutNumber: { column: 'orange_money_payout_number', encrypt: false }
+};
 // z.string().url() accepte n'importe quel schéma bien formé (y compris javascript:) — cette
 // image est ensuite posée telle quelle dans un attribut src par tout le monde (voir
 // web/site.js), donc seuls http(s) sont acceptés ici.
@@ -700,14 +754,26 @@ async function checkTurnstile(req, res, token) {
   return ok;
 }
 
-async function getPaypalAccessToken() {
-  const { PAYPAL_CLIENT_ID, PAYPAL_CLIENT_SECRET, PAYPAL_API_BASE } = process.env;
-  if (!PAYPAL_CLIENT_ID || !PAYPAL_CLIENT_SECRET) {
+// Identifiants propres au tenant (voir tenant_settings, phase 4) s'il en a configuré,
+// sinon replie sur les variables d'environnement globales (identifiants du tenant par
+// défaut) — le secret n'est déchiffré qu'à cet instant, jamais conservé en clair ailleurs.
+async function getPaypalCredentials(tenantId) {
+  const settings = await getTenantSettings(tenantId);
+  return {
+    clientId: settings?.paypal_client_id || process.env.PAYPAL_CLIENT_ID,
+    clientSecret: settings?.paypal_client_secret_encrypted ? decryptSecret(settings.paypal_client_secret_encrypted) : process.env.PAYPAL_CLIENT_SECRET,
+    apiBase: settings?.paypal_api_base || process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com'
+  };
+}
+
+async function getPaypalAccessToken(tenantId) {
+  const { clientId, clientSecret, apiBase } = await getPaypalCredentials(tenantId);
+  if (!clientId || !clientSecret) {
     throw Object.assign(new Error('PayPal n’est pas configuré'), { status: 503 });
   }
 
-  const authorization = Buffer.from(`${PAYPAL_CLIENT_ID}:${PAYPAL_CLIENT_SECRET}`).toString('base64');
-  const response = await fetch(`${PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com'}/v1/oauth2/token`, {
+  const authorization = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const response = await fetch(`${apiBase}/v1/oauth2/token`, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${authorization}`,
@@ -716,23 +782,25 @@ async function getPaypalAccessToken() {
     body: 'grant_type=client_credentials'
   });
   if (!response.ok) throw new Error('Authentification PayPal refusée');
-  return (await response.json()).access_token;
+  return { accessToken: (await response.json()).access_token, apiBase };
 }
 
-function requireCinetpayCredentials() {
-  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = process.env;
-  if (!CINETPAY_API_KEY || !CINETPAY_SITE_ID) throw new Error('CinetPay n’est pas configuré');
-  return { CINETPAY_API_KEY, CINETPAY_SITE_ID };
+async function getCinetpayCredentials(tenantId) {
+  const settings = await getTenantSettings(tenantId);
+  const apiKey = settings?.cinetpay_api_key_encrypted ? decryptSecret(settings.cinetpay_api_key_encrypted) : process.env.CINETPAY_API_KEY;
+  const siteId = settings?.cinetpay_site_id || process.env.CINETPAY_SITE_ID;
+  if (!apiKey || !siteId) throw Object.assign(new Error('CinetPay n’est pas configuré'), { status: 503 });
+  return { apiKey, siteId };
 }
 
-async function initCinetpayPayment({ transactionId, amount, currency, description, customerName, customerPhone, returnUrl, notifyUrl }) {
-  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = requireCinetpayCredentials();
+async function initCinetpayPayment({ tenantId, transactionId, amount, currency, description, customerName, customerPhone, returnUrl, notifyUrl }) {
+  const { apiKey, siteId } = await getCinetpayCredentials(tenantId);
   const response = await fetch('https://api-cinetpay.com/v2/payment', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      apikey: CINETPAY_API_KEY,
-      site_id: CINETPAY_SITE_ID,
+      apikey: apiKey,
+      site_id: siteId,
       transaction_id: transactionId,
       amount,
       currency,
@@ -755,12 +823,12 @@ async function initCinetpayPayment({ transactionId, amount, currency, descriptio
 // Seule source de vérité sur le statut d'un paiement CinetPay: la notification
 // serveur-à-serveur (POST /api/cinetpay/notify) ne contient que l'identifiant de
 // transaction, jamais le statut ni le montant, précisément pour forcer cet appel.
-async function checkCinetpayPayment(transactionId) {
-  const { CINETPAY_API_KEY, CINETPAY_SITE_ID } = requireCinetpayCredentials();
+async function checkCinetpayPayment(transactionId, tenantId) {
+  const { apiKey, siteId } = await getCinetpayCredentials(tenantId);
   const response = await fetch('https://api-cinetpay.com/v2/payment/check', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ apikey: CINETPAY_API_KEY, site_id: CINETPAY_SITE_ID, transaction_id: transactionId })
+    body: JSON.stringify({ apikey: apiKey, site_id: siteId, transaction_id: transactionId })
   });
   return response.json();
 }
@@ -768,10 +836,12 @@ async function checkCinetpayPayment(transactionId) {
 // Appelée à la fois par la page de retour client (POST /orders/:id/cinetpay/check) et par
 // le webhook CinetPay: dans les deux cas on revérifie le statut réel auprès de CinetPay
 // avant de confirmer quoi que ce soit, et on n'agit que si le paiement est encore 'pending'
-// (idempotent en cas de double appel).
+// (idempotent en cas de double appel). Le webhook CinetPay n'a aucune notion de sous-
+// domaine (il rappelle toujours la même notify_url, quel que soit le tenant d'origine) —
+// le tenant est donc retrouvé ici via la commande elle-même, jamais via req.tenant.
 async function finalizeCinetpayPayment(transactionId) {
   const paymentResult = await database.query(
-    `SELECT payment.id, payment.order_id, payment.amount, payment.currency, payment.status
+    `SELECT payment.id, payment.order_id, payment.amount, payment.currency, payment.status, payment.tenant_id
      FROM payment WHERE payment.provider = 'cinetpay' AND payment.provider_reference = $1`,
     [transactionId]
   );
@@ -779,7 +849,7 @@ async function finalizeCinetpayPayment(transactionId) {
   if (!payment) return null;
   if (payment.status !== 'pending') return { orderId: payment.order_id, status: payment.status === 'paid' ? 'confirmed' : payment.status };
 
-  const result = await checkCinetpayPayment(transactionId);
+  const result = await checkCinetpayPayment(transactionId, payment.tenant_id);
   let accepted = result.code === '00' && result.data?.status === 'ACCEPTED';
   if (accepted) {
     const paidAmount = Number(result.data.amount);
@@ -1478,6 +1548,68 @@ app.patch('/api/platform/tenants/:tenantId', requireAuthentication, requireRole(
   }
 });
 
+// Configuration de paiement du TENANT DE L'APPELANT (jamais d'un autre — requireRole('admin')
+// reste local à un tenant, contrairement à requireRole('superadmin') ci-dessus). Les secrets
+// ne sont jamais renvoyés en clair, seulement leur présence (paypalClientSecretConfigured...):
+// un round-trip du secret vers le client n'apporte rien et l'expose inutilement.
+app.get('/api/admin/settings', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  try {
+    const result = await database.query('SELECT * FROM tenant_settings WHERE tenant_id = $1', [req.tenant.id]);
+    const row = result.rows[0] || {};
+    res.json({
+      success: true,
+      settings: {
+        paypalClientId: row.paypal_client_id || null,
+        paypalClientSecretConfigured: Boolean(row.paypal_client_secret_encrypted),
+        paypalApiBase: row.paypal_api_base || null,
+        cinetpayApiKeyConfigured: Boolean(row.cinetpay_api_key_encrypted),
+        cinetpaySiteId: row.cinetpay_site_id || null,
+        airtelMoneyPayoutNumber: row.airtel_money_payout_number || null,
+        orangeMoneyPayoutNumber: row.orange_money_payout_number || null
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/admin/settings', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  const parsed = tenantSettingsUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Configuration invalide', errors: parsed.error.flatten().fieldErrors });
+  const columns = ['tenant_id'];
+  const placeholders = ['$1'];
+  const values = [req.tenant.id];
+  const updates = [];
+  try {
+    for (const [key, { column, encrypt }] of Object.entries(tenantSettingsFieldMap)) {
+      if (!(key in parsed.data)) continue; // absent du corps: inchangé
+      const raw = parsed.data[key];
+      const value = raw === null || raw === '' ? null : (encrypt ? encryptSecret(raw) : raw);
+      values.push(value);
+      columns.push(column);
+      placeholders.push(`$${values.length}`);
+      updates.push(`${column} = EXCLUDED.${column}`);
+    }
+  } catch (error) {
+    if (error.code === 'ENCRYPTION_KEY_MISSING' || error.code === 'ENCRYPTION_KEY_INVALID') {
+      return res.status(503).json({ success: false, message: 'Chiffrement des secrets non configuré côté serveur (TENANT_SECRETS_ENCRYPTION_KEY)' });
+    }
+    return next(error);
+  }
+  if (!updates.length) return res.status(400).json({ success: false, message: 'Aucune modification fournie' });
+  try {
+    await database.query(
+      `INSERT INTO tenant_settings (${columns.join(', ')}) VALUES (${placeholders.join(', ')})
+       ON CONFLICT (tenant_id) DO UPDATE SET ${updates.join(', ')}, updated_at = now()`,
+      values
+    );
+    invalidateTenantSettingsCache(req.tenant.id);
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch('/api/admin/users/:userId/role', requireAuthentication, requireRole('admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.userId).success) return res.status(400).json({ success: false, message: 'Identifiant utilisateur invalide' });
   const parsed = userRoleSchema.safeParse(req.body);
@@ -1676,7 +1808,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       message: 'CinetPay ne prend pas en charge l’EUR. Sélectionnez USD ou CDF.'
     });
   }
-  const mobileMoneyProvider = MOBILE_MONEY_PROVIDERS[paymentProvider];
+  const mobileMoneyProvider = await getMobileMoneyProvider(paymentProvider, req.tenant.id);
   if (mobileMoneyProvider && !mobileMoneyProvider.payoutNumber) {
     return res.status(503).json({
       success: false,
@@ -1792,12 +1924,12 @@ app.post('/api/orders/:orderId/paypal', requireAuthentication, requireRole('cust
     if (paymentResult.rowCount !== 1) return res.status(404).json({ success: false, message: 'Paiement PayPal introuvable ou déjà traité' });
     const payment = paymentResult.rows[0];
     if (payment.currency === 'CDF') return res.status(400).json({ success: false, message: 'PayPal ne prend pas en charge le CDF. Sélectionnez USD ou EUR.' });
-    const accessToken = await getPaypalAccessToken();
+    const { accessToken, apiBase } = await getPaypalAccessToken(req.tenant.id);
     const applicationUrl = process.env.APP_URL || 'http://localhost:3002';
     // Jeton à usage unique: la page de retour peut confirmer le paiement sans session ouverte
     // (retour depuis le navigateur système sur mobile) mais personne d'autre ne le peut.
     const confirmationToken = crypto.randomBytes(32).toString('base64url');
-    const paypalResponse = await fetch(`${process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com'}/v2/checkout/orders`, {
+    const paypalResponse = await fetch(`${apiBase}/v2/checkout/orders`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json', 'PayPal-Request-Id': req.params.orderId },
       body: JSON.stringify({
@@ -1839,8 +1971,8 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
     if (!tokensMatch(parsedCapture.data.confirmationToken, pendingPayment.confirmation_token_hash)) {
       return res.status(403).json({ success: false, message: 'Jeton de confirmation invalide' });
     }
-    const accessToken = await getPaypalAccessToken();
-    const paypalResponse = await fetch(`${process.env.PAYPAL_API_BASE || 'https://api-m.sandbox.paypal.com'}/v2/checkout/orders/${pendingPayment.provider_reference}/capture`, {
+    const { accessToken, apiBase } = await getPaypalAccessToken(req.tenant.id);
+    const paypalResponse = await fetch(`${apiBase}/v2/checkout/orders/${pendingPayment.provider_reference}/capture`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }
     });
@@ -1895,6 +2027,7 @@ app.post('/api/orders/:orderId/cinetpay', requireAuthentication, requireRole('cu
     const customerResult = await database.query('SELECT full_name, phone FROM customer WHERE id = $1 AND tenant_id = $2', [req.auth.customerId, req.tenant.id]);
     const customer = customerResult.rows[0];
     const paymentUrl = await initCinetpayPayment({
+      tenantId: req.tenant.id,
       transactionId,
       amount: Number(payment.amount),
       currency,
@@ -1910,6 +2043,7 @@ app.post('/api/orders/:orderId/cinetpay', requireAuthentication, requireRole('cu
     );
     res.json({ success: true, paymentUrl, confirmationToken });
   } catch (error) {
+    if (error.status === 503) return res.status(503).json({ success: false, message: 'CinetPay n’est pas configuré. Contactez-nous.' });
     next(error);
   }
 });

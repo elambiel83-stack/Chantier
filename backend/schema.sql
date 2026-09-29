@@ -37,6 +37,26 @@ INSERT INTO tenant (id, slug, name)
 VALUES ('00000000-0000-0000-0000-000000000002', 'platform', 'Plateforme (superadmin)')
 ON CONFLICT (id) DO NOTHING;
 
+-- Configuration par tenant (phase 4 — voir le doc de cadrage): identifiants de paiement
+-- propres à chaque entreprise cliente. Une ligne absente (ou une colonne NULL) signifie
+-- "pas encore configuré pour ce tenant" — server.js retombe alors sur les variables
+-- d'environnement globales (backend/.env), qui restent les identifiants du tenant
+-- "monchantier" par défaut. Les colonnes *_encrypted stockent un blob AES-256-GCM
+-- (iv + tag + texte chiffré, voir backend/secrets.js), jamais le secret en clair — un accès
+-- direct à la base ne suffit pas à lire un identifiant de paiement, il faut aussi
+-- TENANT_SECRETS_ENCRYPTION_KEY (backend/.env, jamais commité).
+CREATE TABLE IF NOT EXISTS tenant_settings (
+  tenant_id UUID PRIMARY KEY REFERENCES tenant(id) ON DELETE CASCADE,
+  paypal_client_id TEXT,
+  paypal_client_secret_encrypted BYTEA,
+  paypal_api_base TEXT,
+  cinetpay_api_key_encrypted BYTEA,
+  cinetpay_site_id TEXT,
+  airtel_money_payout_number TEXT,
+  orange_money_payout_number TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS product (
   id TEXT PRIMARY KEY,
   name_fr TEXT NOT NULL,
