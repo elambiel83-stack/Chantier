@@ -112,6 +112,11 @@ const REFRESH_TOKEN_DAYS = 30;
 // fichier.
 const TENANT_BASE_DOMAIN = process.env.TENANT_BASE_DOMAIN || '';
 const DEFAULT_TENANT_SLUG = 'monchantier';
+// Tenant réservé qui héberge exclusivement les comptes superadmin (voir schema.sql) — un
+// jeton dont le compte a réellement ce rôle ET ce tenant_id est valide sur n'importe quel
+// sous-domaine résolu (voir requireAuthentication), jamais l'inverse: un compte non-
+// superadmin qui se trouverait dans ce tenant reste normalement confiné à lui seul.
+const PLATFORM_TENANT_ID = '00000000-0000-0000-0000-000000000002';
 // La résolution s'exécute sur chaque requête, y compris non authentifiée: un cache court
 // évite une requête SQL par appel pour une table qui change rarement (création d'un
 // tenant, jamais en cours de requête cliente).
@@ -445,6 +450,14 @@ const createVendorSchema = z.object({
   phone: z.string().trim().min(6).max(30).optional()
 });
 const vendorActiveSchema = z.object({ isActive: z.boolean() });
+
+// Provisioning de tenant (rôle superadmin plateforme, voir requireAuthentication et
+// schema.sql): slug destiné à un sous-domaine (acme.monchantier.net), donc contraint au
+// même format qu'un label DNS.
+const tenantCreateSchema = z.object({
+  slug: z.string().trim().min(2).max(63).regex(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/, 'slug invalide (minuscules, chiffres, tirets, sans tiret aux extrémités)'),
+  name: z.string().trim().min(2).max(120)
+});
 // z.string().url() accepte n'importe quel schéma bien formé (y compris javascript:) — cette
 // image est ensuite posée telle quelle dans un attribut src par tout le monde (voir
 // web/site.js), donc seuls http(s) sont acceptés ici.
@@ -597,18 +610,27 @@ async function requireAuthentication(req, res, next) {
   try {
     requireJwtSecret();
     const payload = jwt.verify(match[1], JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
-    // Un jeton émis pour un autre tenant ne doit jamais être accepté ici, même s'il est
-    // par ailleurs valide (signature, expiration) — évite qu'un jeton volé sur un tenant
-    // soit rejoué sur un autre.
-    if (payload.tenant_id !== req.tenant.id) return res.status(401).json({ success: false, message: 'Jeton d’authentification invalide ou expire' });
+    // Le compte est recherché dans le tenant que le jeton revendique, pas encore dans
+    // celui résolu pour cette requête: un superadmin (voir plus bas) vit dans le tenant
+    // plateforme, distinct de req.tenant, et doit rester joignable depuis n'importe quel
+    // sous-domaine business.
     const accountResult = await database.query(
       `SELECT user_account.id, user_account.customer_id, user_account.role, user_account.is_active, vendor.id AS vendor_id
        FROM user_account LEFT JOIN vendor ON vendor.user_id = user_account.id
        WHERE user_account.id = $1 AND user_account.tenant_id = $2`,
-      [payload.sub, req.tenant.id]
+      [payload.sub, payload.tenant_id]
     );
     const account = accountResult.rows[0];
     if (!account || !account.is_active) return res.status(401).json({ success: false, message: 'Session invalide ou compte desactive' });
+    // Un jeton émis pour un autre tenant ne doit jamais être accepté ici, même s'il est
+    // par ailleurs valide (signature, expiration) — évite qu'un jeton volé sur un tenant
+    // soit rejoué sur un autre. Seule exception: un compte réellement superadmin (vérifié
+    // en base, jamais sur la seule foi du jeton) du tenant plateforme, qui a besoin d'agir
+    // depuis n'importe quel sous-domaine pour administrer la plateforme elle-même.
+    const isSuperadminToken = account.role === 'superadmin' && payload.tenant_id === PLATFORM_TENANT_ID;
+    if (!isSuperadminToken && payload.tenant_id !== req.tenant.id) {
+      return res.status(401).json({ success: false, message: 'Jeton d’authentification invalide ou expire' });
+    }
     req.auth = { userId: account.id, customerId: account.customer_id, role: account.role, vendorId: account.vendor_id };
     next();
   } catch (error) {
@@ -1402,6 +1424,55 @@ app.post('/api/auth/logout', requireAuthentication, async (req, res, next) => {
   try {
     await database.query('UPDATE refresh_token SET revoked_at = now() WHERE user_id = $1 AND token_hash = $2 AND revoked_at IS NULL', [req.auth.userId, hashRefreshToken(parsed.data.token)]);
     res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Administration de la plateforme elle-même (créer/lister/activer un tenant) — réservée au
+// rôle superadmin (voir requireAuthentication et schema.sql), jamais à un admin de tenant
+// business: requireRole('admin') plus bas reste strictement local à un tenant, il ne donne
+// aucun accès à ces routes. Le sous-domaine sur lequel ces requêtes arrivent n'a pas
+// d'importance (le jeton superadmin est valide partout), seules ces routes elles-mêmes
+// n'appliquent aucun filtre tenant_id — normal, "tenant" n'est pas une table scopée par
+// tenant, c'est la table qui définit les tenants.
+app.post('/api/platform/tenants', requireAuthentication, requireRole('superadmin'), async (req, res, next) => {
+  const parsed = tenantCreateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Tenant invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    const result = await database.query(
+      'INSERT INTO tenant (slug, name) VALUES ($1, $2) RETURNING id, slug, name, is_active, created_at',
+      [parsed.data.slug, parsed.data.name]
+    );
+    res.status(201).json({ success: true, tenant: result.rows[0] });
+  } catch (error) {
+    if (error.code === '23505') return res.status(409).json({ success: false, message: 'Ce slug est déjà utilisé' });
+    next(error);
+  }
+});
+
+app.get('/api/platform/tenants', requireAuthentication, requireRole('superadmin'), async (req, res, next) => {
+  try {
+    const result = await database.query('SELECT id, slug, name, is_active, created_at FROM tenant ORDER BY created_at DESC');
+    res.json({ success: true, tenants: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/platform/tenants/:tenantId', requireAuthentication, requireRole('superadmin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.tenantId).success) return res.status(400).json({ success: false, message: 'Identifiant de tenant invalide' });
+  if (req.params.tenantId === PLATFORM_TENANT_ID) return res.status(400).json({ success: false, message: 'Le tenant plateforme ne peut pas être désactivé' });
+  const parsed = vendorActiveSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
+  try {
+    const result = await database.query('UPDATE tenant SET is_active = $1 WHERE id = $2 RETURNING id, slug, name, is_active', [parsed.data.isActive, req.params.tenantId]);
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Tenant introuvable' });
+    // Le cache de résolution (voir resolveTenant) peut encore contenir l'ancien état
+    // jusqu'à TENANT_CACHE_TTL_MS: invalidé immédiatement pour que la désactivation soit
+    // effective tout de suite, pas seulement après expiration du cache.
+    tenantCache.delete(result.rows[0].slug);
+    res.json({ success: true, tenant: result.rows[0] });
   } catch (error) {
     next(error);
   }

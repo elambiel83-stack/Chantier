@@ -26,6 +26,17 @@ INSERT INTO tenant (id, slug, name)
 VALUES ('00000000-0000-0000-0000-000000000001', 'monchantier', 'MonChantier')
 ON CONFLICT (id) DO NOTHING;
 
+-- Tenant réservé qui héberge exclusivement les comptes superadmin (rôle plateforme, voir
+-- plus bas): jamais de client, de staff, de panier ni de catalogue. Distinct du tenant
+-- "monchantier" ci-dessus, qui EST une entreprise cliente (la première de la plateforme) —
+-- un superadmin gère la création/désactivation des tenants eux-mêmes, jamais les données
+-- métier d'un tenant business (voir requireAuthentication dans server.js: un jeton
+-- superadmin, reconnu par tenant_id = cet identifiant ET role = 'superadmin', est valide
+-- quel que soit le sous-domaine réel de la requête — jamais l'inverse).
+INSERT INTO tenant (id, slug, name)
+VALUES ('00000000-0000-0000-0000-000000000002', 'platform', 'Plateforme (superadmin)')
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS product (
   id TEXT PRIMARY KEY,
   name_fr TEXT NOT NULL,
@@ -102,10 +113,15 @@ ALTER TABLE user_account ADD COLUMN IF NOT EXISTS google_sub TEXT UNIQUE;
 ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
 
 -- 'vendor': partenaire de la marketplace (transporteur, fournisseur, artisan, vendeur de
--- matériaux...) — voir table vendor ci-dessous. Retirer/ajouter la contrainte avant de la
--- recréer, sans quoi le second déploiement échouerait ("constraint already exists").
+-- matériaux...) — voir table vendor ci-dessous. 'superadmin': gère la plateforme elle-même
+-- (création/désactivation des tenants), voir tenant "platform" ci-dessus — n'est jamais
+-- assignable via PATCH /api/admin/users/:userId/role (qui n'accepte volontairement que
+-- customer/staff/admin/vendor, voir userRoleSchema dans server.js): un compte superadmin
+-- ne peut être créé que par accès direct à la base, comme le tout premier admin (voir
+-- README). Retirer/ajouter la contrainte avant de la recréer, sans quoi le second
+-- déploiement échouerait ("constraint already exists").
 ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_role_check;
-ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor'));
+ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor', 'superadmin'));
 
 -- tenant_id: un compte appartient à un seul tenant. L'unicité de l'e-mail et des
 -- identifiants Google/Apple passe d'un périmètre global à un périmètre par tenant — la
