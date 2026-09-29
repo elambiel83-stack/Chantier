@@ -843,7 +843,7 @@ function mapProductRow(row) {
   };
 }
 
-async function listCatalog({ category, search } = {}) {
+async function listCatalog({ category, search } = {}, tenantId) {
   if (!database) {
     const searchLower = (search || '').toLowerCase();
     return PRODUCTS.filter((product) =>
@@ -855,8 +855,8 @@ async function listCatalog({ category, search } = {}) {
     );
   }
   await syncCatalog();
-  const values = [];
-  const filters = [];
+  const values = [tenantId];
+  const filters = ['product.tenant_id = $1'];
   if (category) {
     values.push(category);
     filters.push(`product.category = $${values.length}`);
@@ -880,15 +880,15 @@ async function listCatalog({ category, search } = {}) {
   return result.rows.map(mapProductRow);
 }
 
-async function findProduct(id) {
+async function findProduct(id, tenantId) {
   if (!database) return PRODUCTS.find((product) => product.id === id) || null;
   await syncCatalog();
   const result = await database.query(
     `SELECT product.id, product.name_fr, product.name_en, product.unit, product.price_usd, product.image_url, product.category, product.stock_qty,
             vendor.business_name AS vendor_business_name
      FROM product LEFT JOIN vendor ON vendor.id = product.vendor_id
-     WHERE product.id = $1 AND product.is_active = true AND (product.vendor_id IS NULL OR vendor.is_active = true)`,
-    [id]
+     WHERE product.id = $1 AND product.tenant_id = $2 AND product.is_active = true AND (product.vendor_id IS NULL OR vendor.is_active = true)`,
+    [id, tenantId]
   );
   return result.rowCount ? mapProductRow(result.rows[0]) : null;
 }
@@ -1014,7 +1014,7 @@ app.get('/api/products', async (req, res, next) => {
   }).safeParse(req.query);
   if (!parsedQuery.success) return res.status(400).json({ success: false, message: 'Filtres de recherche invalides' });
   try {
-    const products = await listCatalog(parsedQuery.data);
+    const products = await listCatalog(parsedQuery.data, req.tenant.id);
     res.json({ success: true, count: products.length, products });
   } catch (error) {
     next(error);
@@ -1036,7 +1036,7 @@ app.get('/api/currency-rates', async (req, res, next) => {
 // Récupérer un produit par ID
 app.get('/api/products/:id', async (req, res, next) => {
   try {
-    const product = await findProduct(req.params.id);
+    const product = await findProduct(req.params.id, req.tenant.id);
     if (!product) return res.status(404).json({ success: false, message: 'Produit non trouvé' });
     res.json({ success: true, product });
   } catch (error) {
@@ -1047,7 +1047,7 @@ app.get('/api/products/:id', async (req, res, next) => {
 // Récupérer les produits par catégorie
 app.get('/api/products/category/:category', async (req, res, next) => {
   try {
-    const products = await listCatalog({ category: req.params.category });
+    const products = await listCatalog({ category: req.params.category }, req.tenant.id);
     res.json({ success: true, category: req.params.category, count: products.length, products });
   } catch (error) {
     next(error);
@@ -1060,8 +1060,8 @@ app.get('/api/products/category/:category', async (req, res, next) => {
 app.get('/api/cart', requireAuthentication, async (req, res, next) => {
   try {
     const result = await database.query(
-      'SELECT product_id AS id, qty FROM cart_item WHERE user_id = $1 ORDER BY product_id',
-      [req.auth.userId]
+      'SELECT product_id AS id, qty FROM cart_item WHERE user_id = $1 AND tenant_id = $2 ORDER BY product_id',
+      [req.auth.userId, req.tenant.id]
     );
     res.json({ success: true, cart: { items: result.rows } });
   } catch (error) {
@@ -1085,7 +1085,7 @@ app.put('/api/cart', requireAuthentication, async (req, res, next) => {
   try {
     // Le stock affiché reste indicatif: seul le passage de commande le réserve.
     if (quantities.size) {
-      const catalog = new Map((await listCatalog()).map((product) => [product.id, product]));
+      const catalog = new Map((await listCatalog({}, req.tenant.id)).map((product) => [product.id, product]));
       for (const [id, qty] of quantities) {
         const product = catalog.get(id);
         if (!product || qty > product.stock) {
@@ -1103,9 +1103,9 @@ app.put('/api/cart', requireAuthentication, async (req, res, next) => {
   const client = await database.connect();
   try {
     await client.query('BEGIN');
-    await client.query('DELETE FROM cart_item WHERE user_id = $1', [req.auth.userId]);
+    await client.query('DELETE FROM cart_item WHERE user_id = $1 AND tenant_id = $2', [req.auth.userId, req.tenant.id]);
     for (const [id, qty] of quantities) {
-      await client.query('INSERT INTO cart_item (user_id, product_id, qty) VALUES ($1, $2, $3)', [req.auth.userId, id, qty]);
+      await client.query('INSERT INTO cart_item (user_id, product_id, qty, tenant_id) VALUES ($1, $2, $3, $4)', [req.auth.userId, id, qty, req.tenant.id]);
     }
     await client.query('COMMIT');
     res.json({ success: true, message: 'Panier mis à jour', cart: { items: [...quantities].map(([id, qty]) => ({ id, qty })) } });
@@ -1119,7 +1119,7 @@ app.put('/api/cart', requireAuthentication, async (req, res, next) => {
 
 app.delete('/api/cart', requireAuthentication, async (req, res, next) => {
   try {
-    await database.query('DELETE FROM cart_item WHERE user_id = $1', [req.auth.userId]);
+    await database.query('DELETE FROM cart_item WHERE user_id = $1 AND tenant_id = $2', [req.auth.userId, req.tenant.id]);
     res.json({ success: true, message: 'Panier vidé' });
   } catch (error) {
     next(error);
@@ -1343,8 +1343,8 @@ app.post('/api/auth/verification/send', requireAuthentication, verificationSendL
     // Un seul code actif à la fois par compte: les précédents non consommés sont annulés.
     await database.query('DELETE FROM verification_code WHERE user_id = $1 AND consumed_at IS NULL', [req.auth.userId]);
     await database.query(
-      'INSERT INTO verification_code (user_id, channel, code_hash, expires_at) VALUES ($1, $2, $3, $4)',
-      [req.auth.userId, channel, hashToken(code), expiresAt]
+      'INSERT INTO verification_code (user_id, channel, code_hash, expires_at, tenant_id) VALUES ($1, $2, $3, $4, $5)',
+      [req.auth.userId, channel, hashToken(code), expiresAt, req.tenant.id]
     );
     const message = `Votre code de vérification MonChantier : ${code} (valable 10 minutes).`;
     if (channel === 'email') await sendEmail(destination, 'Votre code de vérification MonChantier', message);
@@ -1412,7 +1412,7 @@ app.patch('/api/admin/users/:userId/role', requireAuthentication, requireRole('a
   const parsed = userRoleSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Rôle utilisateur invalide' });
   try {
-    const result = await database.query('UPDATE user_account SET role = $1, updated_at = now() WHERE id = $2 RETURNING id, email, role, is_active', [parsed.data.role, req.params.userId]);
+    const result = await database.query('UPDATE user_account SET role = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 RETURNING id, email, role, is_active', [parsed.data.role, req.params.userId, req.tenant.id]);
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Utilisateur introuvable' });
     res.json({ success: true, user: result.rows[0] });
   } catch (error) {
@@ -1430,17 +1430,17 @@ app.post('/api/admin/vendors', requireAuthentication, requireRole('admin'), asyn
   const client = await database.connect();
   try {
     await client.query('BEGIN');
-    const userResult = await client.query('SELECT id FROM user_account WHERE email = $1', [parsed.data.email]);
+    const userResult = await client.query('SELECT id FROM user_account WHERE email = $1 AND tenant_id = $2', [parsed.data.email, req.tenant.id]);
     if (!userResult.rowCount) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, message: 'Aucun compte avec cet e-mail — la personne doit d’abord créer un compte' });
     }
     const userId = userResult.rows[0].id;
     const vendorResult = await client.query(
-      `INSERT INTO vendor (user_id, business_name, category, phone) VALUES ($1, $2, $3, $4)
+      `INSERT INTO vendor (user_id, business_name, category, phone, tenant_id) VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (user_id) DO UPDATE SET business_name = EXCLUDED.business_name, category = EXCLUDED.category, phone = EXCLUDED.phone, is_active = true
        RETURNING id, business_name, category, phone, is_active`,
-      [userId, parsed.data.businessName, parsed.data.category, parsed.data.phone || null]
+      [userId, parsed.data.businessName, parsed.data.category, parsed.data.phone || null, req.tenant.id]
     );
     await client.query("UPDATE user_account SET role = 'vendor', updated_at = now() WHERE id = $1", [userId]);
     await client.query('COMMIT');
@@ -1458,7 +1458,9 @@ app.get('/api/admin/vendors', requireAuthentication, requireRole('admin'), async
     const result = await database.query(
       `SELECT vendor.id, vendor.business_name, vendor.category, vendor.phone, vendor.is_active, vendor.created_at, user_account.email
        FROM vendor JOIN user_account ON user_account.id = vendor.user_id
-       ORDER BY vendor.created_at DESC`
+       WHERE vendor.tenant_id = $1
+       ORDER BY vendor.created_at DESC`,
+      [req.tenant.id]
     );
     res.json({ success: true, vendors: result.rows });
   } catch (error) {
@@ -1473,7 +1475,7 @@ app.patch('/api/admin/vendors/:vendorId', requireAuthentication, requireRole('ad
   const parsed = vendorActiveSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
   try {
-    const result = await database.query('UPDATE vendor SET is_active = $1 WHERE id = $2 RETURNING id, business_name, is_active', [parsed.data.isActive, req.params.vendorId]);
+    const result = await database.query('UPDATE vendor SET is_active = $1 WHERE id = $2 AND tenant_id = $3 RETURNING id, business_name, is_active', [parsed.data.isActive, req.params.vendorId, req.tenant.id]);
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Partenaire introuvable' });
     res.json({ success: true, vendor: result.rows[0] });
   } catch (error) {
@@ -1487,8 +1489,8 @@ app.patch('/api/admin/vendors/:vendorId', requireAuthentication, requireRole('ad
 app.get('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
   try {
     const result = await database.query(
-      'SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active FROM product WHERE vendor_id = $1 ORDER BY id',
-      [req.auth.vendorId]
+      'SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active FROM product WHERE vendor_id = $1 AND tenant_id = $2 ORDER BY id',
+      [req.auth.vendorId, req.tenant.id]
     );
     res.json({ success: true, products: result.rows.map((row) => ({ ...mapProductRow(row), isActive: row.is_active })) });
   } catch (error) {
@@ -1504,10 +1506,10 @@ app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), r
     // dédié évite toute collision avec ce catalogue existant ou entre partenaires.
     const id = `V-${crypto.randomUUID().slice(0, 8)}`;
     const result = await database.query(
-      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, vendor_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, vendor_id, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active`,
-      [id, parsed.data.nameFr, parsed.data.nameEn, parsed.data.unit, parsed.data.price, parsed.data.imageUrl || null, parsed.data.category, parsed.data.stockQty ?? 0, req.auth.vendorId]
+      [id, parsed.data.nameFr, parsed.data.nameEn, parsed.data.unit, parsed.data.price, parsed.data.imageUrl || null, parsed.data.category, parsed.data.stockQty ?? 0, req.auth.vendorId, req.tenant.id]
     );
     res.status(201).json({ success: true, product: { ...mapProductRow(result.rows[0]), isActive: result.rows[0].is_active } });
   } catch (error) {
@@ -1528,10 +1530,10 @@ app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole(
     }
   }
   if (!sets.length) return res.status(400).json({ success: false, message: 'Aucune modification fournie' });
-  values.push(req.params.productId, req.auth.vendorId);
+  values.push(req.params.productId, req.auth.vendorId, req.tenant.id);
   try {
     const result = await database.query(
-      `UPDATE product SET ${sets.join(', ')} WHERE id = $${values.length - 1} AND vendor_id = $${values.length}
+      `UPDATE product SET ${sets.join(', ')} WHERE id = $${values.length - 2} AND vendor_id = $${values.length - 1} AND tenant_id = $${values.length}
        RETURNING id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active`,
       values
     );
@@ -1557,9 +1559,9 @@ app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor'), requ
        JOIN orders ON orders.id = order_item.order_id
        JOIN customer ON customer.id = orders.customer_id
        JOIN product ON product.id = order_item.product_id
-       WHERE order_item.vendor_id = $1
+       WHERE order_item.vendor_id = $1 AND order_item.tenant_id = $2
        ORDER BY orders.created_at DESC`,
-      [req.auth.vendorId]
+      [req.auth.vendorId, req.tenant.id]
     );
     res.json({ success: true, items: result.rows });
   } catch (error) {
@@ -1573,8 +1575,8 @@ app.patch('/api/vendor/order-items/:itemId/status', requireAuthentication, requi
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
   try {
     const result = await database.query(
-      'UPDATE order_item SET vendor_status = $1 WHERE id = $2 AND vendor_id = $3 RETURNING id, vendor_status',
-      [parsed.data.status, req.params.itemId, req.auth.vendorId]
+      'UPDATE order_item SET vendor_status = $1 WHERE id = $2 AND vendor_id = $3 AND tenant_id = $4 RETURNING id, vendor_status',
+      [parsed.data.status, req.params.itemId, req.auth.vendorId, req.tenant.id]
     );
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Article introuvable' });
     res.json({ success: true, item: result.rows[0] });
@@ -1625,8 +1627,8 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     // Verrouillage des lignes catalogue par ordre d'identifiant: prix et stock ne peuvent plus bouger
     // entre la vérification et le décrément, et l'ordre stable évite les interblocages.
     const productResult = await client.query(
-      'SELECT id, name_fr, unit, price_usd, stock_qty, vendor_id FROM product WHERE id = ANY($1::text[]) AND is_active = true ORDER BY id FOR UPDATE',
-      [productIds]
+      'SELECT id, name_fr, unit, price_usd, stock_qty, vendor_id FROM product WHERE id = ANY($1::text[]) AND tenant_id = $2 AND is_active = true ORDER BY id FOR UPDATE',
+      [productIds, req.tenant.id]
     );
     if (productResult.rowCount !== productIds.length) {
       await client.query('ROLLBACK');
@@ -1636,8 +1638,8 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
 
     for (const [productId, qty] of quantities) {
       const decrement = await client.query(
-        'UPDATE product SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1',
-        [qty, productId]
+        'UPDATE product SET stock_qty = stock_qty - $1 WHERE id = $2 AND tenant_id = $3 AND stock_qty >= $1',
+        [qty, productId, req.tenant.id]
       );
       if (!decrement.rowCount) {
         await client.query('ROLLBACK');
@@ -1649,8 +1651,8 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     }
 
     const customerResult = await client.query(
-      'UPDATE customer SET full_name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4 RETURNING email',
-      [customer.fullName, customer.phone, customer.email || null, req.auth.customerId]
+      'UPDATE customer SET full_name = $1, phone = $2, email = COALESCE($3, email) WHERE id = $4 AND tenant_id = $5 RETURNING email',
+      [customer.fullName, customer.phone, customer.email || null, req.auth.customerId, req.tenant.id]
     );
     const customerEmail = customerResult.rows[0].email;
     const rateResult = await client.query('SELECT units_per_usd FROM currency_rate WHERE currency = $1', [currency]);
@@ -1662,9 +1664,9 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     }
     const subtotal = Number((subtotalUsd * rate).toFixed(2));
     const orderResult = await client.query(
-      `INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount, delivery_latitude, delivery_longitude)
-       VALUES ($1, $2, $3, $3, $4, $5) RETURNING id, status, total_amount, currency`,
-      [req.auth.customerId, currency, subtotal, deliveryLatitude ?? null, deliveryLongitude ?? null]
+      `INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount, delivery_latitude, delivery_longitude, tenant_id)
+       VALUES ($1, $2, $3, $3, $4, $5, $6) RETURNING id, status, total_amount, currency`,
+      [req.auth.customerId, currency, subtotal, deliveryLatitude ?? null, deliveryLongitude ?? null, req.tenant.id]
     );
     const order = orderResult.rows[0];
     for (const [productId, qty] of quantities) {
@@ -1672,13 +1674,13 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       // schema.sql): un partenaire qui modifie ce produit plus tard ne doit pas faire
       // perdre la trace de qui devait fournir cette ligne déjà commandée.
       await client.query(
-        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd, vendor_id) VALUES ($1, $2, $3, $4, $5)',
-        [order.id, productId, qty, Number(products.get(productId).price_usd), products.get(productId).vendor_id]
+        'INSERT INTO order_item (order_id, product_id, qty, unit_price_usd, vendor_id, tenant_id) VALUES ($1, $2, $3, $4, $5, $6)',
+        [order.id, productId, qty, Number(products.get(productId).price_usd), products.get(productId).vendor_id, req.tenant.id]
       );
     }
     await client.query(
-      'INSERT INTO payment (order_id, provider, amount, currency) VALUES ($1, $2, $3, $4)',
-      [order.id, paymentProvider, order.total_amount, order.currency]
+      'INSERT INTO payment (order_id, provider, amount, currency, tenant_id) VALUES ($1, $2, $3, $4, $5)',
+      [order.id, paymentProvider, order.total_amount, order.currency, req.tenant.id]
     );
     await client.query('COMMIT');
     // Airtel/Orange Money: pas de redirection ni d'appel externe, on renvoie directement
@@ -1713,8 +1715,8 @@ app.post('/api/orders/:orderId/paypal', requireAuthentication, requireRole('cust
     const paymentResult = await database.query(
       `SELECT payment.id, payment.amount, payment.currency FROM payment
        JOIN orders ON orders.id = payment.order_id
-       WHERE payment.order_id = $1 AND orders.customer_id = $2 AND payment.provider = 'paypal' AND payment.status = 'pending'`,
-      [req.params.orderId, req.auth.customerId]
+       WHERE payment.order_id = $1 AND orders.customer_id = $2 AND payment.tenant_id = $3 AND payment.provider = 'paypal' AND payment.status = 'pending'`,
+      [req.params.orderId, req.auth.customerId, req.tenant.id]
     );
     if (paymentResult.rowCount !== 1) return res.status(404).json({ success: false, message: 'Paiement PayPal introuvable ou déjà traité' });
     const payment = paymentResult.rows[0];
@@ -1758,8 +1760,8 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
   try {
     const paymentResult = await database.query(
       `SELECT payment.id, payment.provider_reference, payment.amount, payment.currency, payment.confirmation_token_hash FROM payment
-       WHERE payment.order_id = $1 AND payment.provider = 'paypal' AND payment.status = 'pending'`,
-      [req.params.orderId]
+       WHERE payment.order_id = $1 AND payment.tenant_id = $2 AND payment.provider = 'paypal' AND payment.status = 'pending'`,
+      [req.params.orderId, req.tenant.id]
     );
     const pendingPayment = paymentResult.rows[0];
     if (paymentResult.rowCount !== 1 || !pendingPayment.provider_reference) return res.status(404).json({ success: false, message: 'Paiement PayPal introuvable ou déjà traité' });
@@ -1805,8 +1807,8 @@ app.post('/api/orders/:orderId/cinetpay', requireAuthentication, requireRole('cu
     const paymentResult = await database.query(
       `SELECT payment.id, payment.amount, payment.currency FROM payment
        JOIN orders ON orders.id = payment.order_id
-       WHERE payment.order_id = $1 AND orders.customer_id = $2 AND payment.provider = 'cinetpay' AND payment.status = 'pending'`,
-      [req.params.orderId, req.auth.customerId]
+       WHERE payment.order_id = $1 AND orders.customer_id = $2 AND payment.tenant_id = $3 AND payment.provider = 'cinetpay' AND payment.status = 'pending'`,
+      [req.params.orderId, req.auth.customerId, req.tenant.id]
     );
     if (paymentResult.rowCount !== 1) return res.status(404).json({ success: false, message: 'Paiement CinetPay introuvable ou déjà traité' });
     const payment = paymentResult.rows[0];
@@ -1819,7 +1821,7 @@ app.post('/api/orders/:orderId/cinetpay', requireAuthentication, requireRole('cu
     // Un identifiant de transaction CinetPay ne peut être réutilisé: on en dérive un nouveau
     // à chaque tentative, même pour une commande déjà tentée sans succès.
     const transactionId = `${req.params.orderId}-${crypto.randomBytes(4).toString('hex')}`;
-    const customerResult = await database.query('SELECT full_name, phone FROM customer WHERE id = $1', [req.auth.customerId]);
+    const customerResult = await database.query('SELECT full_name, phone FROM customer WHERE id = $1 AND tenant_id = $2', [req.auth.customerId, req.tenant.id]);
     const customer = customerResult.rows[0];
     const paymentUrl = await initCinetpayPayment({
       transactionId,
@@ -1851,8 +1853,8 @@ app.post('/api/orders/:orderId/cinetpay/check', async (req, res, next) => {
   try {
     const paymentResult = await database.query(
       `SELECT provider_reference, confirmation_token_hash, status FROM payment
-       WHERE order_id = $1 AND provider = 'cinetpay'`,
-      [req.params.orderId]
+       WHERE order_id = $1 AND tenant_id = $2 AND provider = 'cinetpay'`,
+      [req.params.orderId, req.tenant.id]
     );
     const payment = paymentResult.rows[0];
     if (!payment || !payment.provider_reference) return res.status(404).json({ success: false, message: 'Paiement CinetPay introuvable' });
@@ -1894,8 +1896,8 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
   if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
   const status = z.enum(['pending', 'confirmed', 'delivering', 'completed', 'cancelled']).safeParse(req.query.status);
   if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
-  const filters = [];
-  const values = [];
+  const values = [req.tenant.id];
+  const filters = ['orders.tenant_id = $1'];
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`orders.customer_id = $${values.length}`);
@@ -1932,8 +1934,8 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
 app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) => {
   if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
-  const filters = ['orders.id = $1'];
-  const values = [req.params.orderId];
+  const filters = ['orders.id = $1', 'orders.tenant_id = $2'];
+  const values = [req.params.orderId, req.tenant.id];
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`orders.customer_id = $${values.length}`);
@@ -1973,7 +1975,7 @@ app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) =>
 app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   try {
-    const result = await database.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId]);
+    const result = await database.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId, req.tenant.id]);
     if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette commande n’est plus disponible pour affectation' });
     res.json({ success: true, order: result.rows[0] });
   } catch (error) {
@@ -1989,7 +1991,7 @@ app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('s
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsed = driverLocationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Coordonnées invalides' });
-  const values = [req.params.orderId, parsed.data.latitude, parsed.data.longitude];
+  const values = [req.params.orderId, parsed.data.latitude, parsed.data.longitude, req.tenant.id];
   let ownership = '';
   if (req.auth.role === 'staff') {
     values.push(req.auth.userId);
@@ -1998,7 +2000,7 @@ app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('s
   try {
     const result = await database.query(
       `UPDATE orders SET driver_latitude = $2, driver_longitude = $3, driver_location_updated_at = now(), delay_notified_at = NULL, updated_at = now()
-       WHERE id = $1 AND status IN ('confirmed', 'delivering')${ownership}
+       WHERE id = $1 AND tenant_id = $4 AND status IN ('confirmed', 'delivering')${ownership}
        RETURNING id, driver_latitude, driver_longitude, driver_location_updated_at`,
       values
     );
@@ -2014,7 +2016,7 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
   const parsed = orderStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
   const allowedPreviousStatuses = { confirmed: ['pending'], delivering: ['confirmed'], completed: ['delivering'], cancelled: ['pending', 'confirmed'] };
-  const values = [req.params.orderId, parsed.data.status, allowedPreviousStatuses[parsed.data.status]];
+  const values = [req.params.orderId, parsed.data.status, allowedPreviousStatuses[parsed.data.status], req.tenant.id];
   let ownership = '';
   if (req.auth.role === 'staff') {
     values.push(req.auth.userId);
@@ -2023,7 +2025,7 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
   const client = await database.connect();
   try {
     await client.query('BEGIN');
-    const result = await client.query(`UPDATE orders SET status = $2, updated_at = now() WHERE id = $1 AND status = ANY($3::text[])${ownership} RETURNING id, status, assigned_to`, values);
+    const result = await client.query(`UPDATE orders SET status = $2, updated_at = now() WHERE id = $1 AND status = ANY($3::text[]) AND tenant_id = $4${ownership} RETURNING id, status, assigned_to`, values);
     if (!result.rowCount) {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Transition de statut non autorisée' });
@@ -2065,8 +2067,8 @@ app.post('/api/import-requests', requireAuthentication, requireRole('customer'),
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Demande d’importation invalide', errors: parsed.error.flatten().fieldErrors });
   try {
     const result = await database.query(
-      'INSERT INTO import_request (customer_id, source_url, description, target_qty) VALUES ($1, $2, $3, $4) RETURNING id, status, created_at',
-      [req.auth.customerId, parsed.data.sourceUrl || null, parsed.data.description, parsed.data.targetQty]
+      'INSERT INTO import_request (customer_id, source_url, description, target_qty, tenant_id) VALUES ($1, $2, $3, $4, $5) RETURNING id, status, created_at',
+      [req.auth.customerId, parsed.data.sourceUrl || null, parsed.data.description, parsed.data.targetQty, req.tenant.id]
     );
     res.status(201).json({ success: true, request: result.rows[0] });
   } catch (error) {
@@ -2077,8 +2079,8 @@ app.post('/api/import-requests', requireAuthentication, requireRole('customer'),
 app.get('/api/import-requests', requireAuthentication, async (req, res, next) => {
   const status = z.enum(['submitted', 'quoted', 'compliance_cleared', 'ordered', 'delivered', 'rejected', 'cancelled']).safeParse(req.query.status);
   if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de demande invalide' });
-  const filters = [];
-  const values = [];
+  const values = [req.tenant.id];
+  const filters = ['import_request.tenant_id = $1'];
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`import_request.customer_id = $${values.length}`);
@@ -2111,8 +2113,8 @@ app.post('/api/import-requests/:id/claim', requireAuthentication, requireRole('s
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   try {
     const result = await database.query(
-      "UPDATE import_request SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'submitted' RETURNING id, status, assigned_to",
-      [req.auth.userId, req.params.id]
+      "UPDATE import_request SET assigned_to = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 AND assigned_to IS NULL AND status = 'submitted' RETURNING id, status, assigned_to",
+      [req.auth.userId, req.params.id, req.tenant.id]
     );
     if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande n’est plus disponible pour affectation' });
     res.json({ success: true, request: result.rows[0] });
@@ -2121,11 +2123,16 @@ app.post('/api/import-requests/:id/claim', requireAuthentication, requireRole('s
   }
 });
 
-// Un staff ne peut agir que sur les demandes qui lui sont affectées; un admin peut toujours agir.
+// Un staff ne peut agir que sur les demandes qui lui sont affectées; un admin peut toujours
+// agir, mais jamais hors de son propre tenant.
 function importRequestOwnership(req, values) {
-  if (req.auth.role !== 'staff') return '';
-  values.push(req.auth.userId);
-  return ` AND assigned_to = $${values.length}`;
+  values.push(req.tenant.id);
+  let clause = ` AND tenant_id = $${values.length}`;
+  if (req.auth.role === 'staff') {
+    values.push(req.auth.userId);
+    clause += ` AND assigned_to = $${values.length}`;
+  }
+  return clause;
 }
 
 app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
@@ -2198,8 +2205,8 @@ app.post('/api/import-requests/:id/cancel', requireAuthentication, requireRole('
   try {
     const result = await database.query(
       `UPDATE import_request SET status = 'cancelled', updated_at = now()
-       WHERE id = $1 AND customer_id = $2 AND status IN ('submitted', 'quoted') RETURNING id, status`,
-      [req.params.id, req.auth.customerId]
+       WHERE id = $1 AND customer_id = $2 AND tenant_id = $3 AND status IN ('submitted', 'quoted') RETURNING id, status`,
+      [req.params.id, req.auth.customerId, req.tenant.id]
     );
     if (!result.rowCount) return res.status(409).json({ success: false, message: 'Cette demande ne peut plus être annulée' });
     res.json({ success: true, request: result.rows[0] });
@@ -2235,7 +2242,7 @@ app.post('/api/tickets', attachOptionalAuth, async (req, res, next) => {
     channel = parsed.data.channel || 'web';
     if (parsed.data.customerId) {
       try {
-        const customerCheck = await database.query('SELECT id FROM customer WHERE id = $1', [parsed.data.customerId]);
+        const customerCheck = await database.query('SELECT id FROM customer WHERE id = $1 AND tenant_id = $2', [parsed.data.customerId, req.tenant.id]);
         if (!customerCheck.rowCount) return res.status(400).json({ success: false, message: 'Client introuvable' });
       } catch (error) {
         return next(error);
@@ -2264,14 +2271,14 @@ app.post('/api/tickets', attachOptionalAuth, async (req, res, next) => {
   try {
     await client.query('BEGIN');
     const ticketResult = await client.query(
-      `INSERT INTO ticket (channel, customer_id, contact_name, contact_phone, contact_email, subject)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, channel, status, created_at`,
-      [channel, customerId, contactName, contactPhone, contactEmail, parsed.data.subject]
+      `INSERT INTO ticket (channel, customer_id, contact_name, contact_phone, contact_email, subject, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, channel, status, created_at`,
+      [channel, customerId, contactName, contactPhone, contactEmail, parsed.data.subject, req.tenant.id]
     );
     const ticket = ticketResult.rows[0];
     await client.query(
-      'INSERT INTO ticket_message (ticket_id, author_type, author_user_id, body) VALUES ($1, $2, $3, $4)',
-      [ticket.id, isStaff ? 'staff' : 'customer', req.auth ? req.auth.userId : null, parsed.data.message]
+      'INSERT INTO ticket_message (ticket_id, author_type, author_user_id, body, tenant_id) VALUES ($1, $2, $3, $4, $5)',
+      [ticket.id, isStaff ? 'staff' : 'customer', req.auth ? req.auth.userId : null, parsed.data.message, req.tenant.id]
     );
     await client.query('COMMIT');
     res.status(201).json({ success: true, ticket });
@@ -2286,8 +2293,8 @@ app.post('/api/tickets', attachOptionalAuth, async (req, res, next) => {
 app.get('/api/tickets', requireAuthentication, async (req, res, next) => {
   const statusParsed = req.query.status ? ticketStatusSchema.safeParse(req.query.status) : null;
   if (req.query.status && !statusParsed.success) return res.status(400).json({ success: false, message: 'Statut de ticket invalide' });
-  const filters = [];
-  const values = [];
+  const values = [req.tenant.id];
+  const filters = ['ticket.tenant_id = $1'];
   if (req.auth.role === 'customer') {
     if (!req.auth.customerId) return res.json({ success: true, tickets: [] });
     values.push(req.auth.customerId);
@@ -2326,16 +2333,16 @@ app.get('/api/tickets/:id', requireAuthentication, async (req, res, next) => {
     const ticketResult = await database.query(
       `SELECT ticket.*, customer.full_name AS customer_name, customer.phone AS customer_phone, customer.email AS customer_email
        FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id
-       WHERE ticket.id = $1`,
-      [req.params.id]
+       WHERE ticket.id = $1 AND ticket.tenant_id = $2`,
+      [req.params.id, req.tenant.id]
     );
     const ticket = ticketResult.rows[0];
     const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
     const isStaff = ['staff', 'admin'].includes(req.auth.role);
     if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
     const messagesResult = await database.query(
-      'SELECT id, author_type, author_user_id, body, sent_via_channel, created_at FROM ticket_message WHERE ticket_id = $1 ORDER BY created_at ASC',
-      [req.params.id]
+      'SELECT id, author_type, author_user_id, body, sent_via_channel, created_at FROM ticket_message WHERE ticket_id = $1 AND tenant_id = $2 ORDER BY created_at ASC',
+      [req.params.id, req.tenant.id]
     );
     res.json({ success: true, ticket, messages: messagesResult.rows });
   } catch (error) {
@@ -2350,8 +2357,8 @@ app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, ne
   try {
     const ticketResult = await database.query(
       `SELECT ticket.*, customer.phone AS customer_phone, customer.email AS customer_email
-       FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id WHERE ticket.id = $1`,
-      [req.params.id]
+       FROM ticket LEFT JOIN customer ON customer.id = ticket.customer_id WHERE ticket.id = $1 AND ticket.tenant_id = $2`,
+      [req.params.id, req.tenant.id]
     );
     const ticket = ticketResult.rows[0];
     const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
@@ -2385,11 +2392,11 @@ app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, ne
     }
 
     const messageResult = await database.query(
-      `INSERT INTO ticket_message (ticket_id, author_type, author_user_id, body, sent_via_channel)
-       VALUES ($1, $2, $3, $4, $5) RETURNING id, author_type, author_user_id, body, sent_via_channel, created_at`,
-      [ticket.id, isOwner ? 'customer' : 'staff', req.auth.userId, parsed.data.message, sentViaChannel]
+      `INSERT INTO ticket_message (ticket_id, author_type, author_user_id, body, sent_via_channel, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, author_type, author_user_id, body, sent_via_channel, created_at`,
+      [ticket.id, isOwner ? 'customer' : 'staff', req.auth.userId, parsed.data.message, sentViaChannel, req.tenant.id]
     );
-    await database.query('UPDATE ticket SET updated_at = now() WHERE id = $1', [ticket.id]);
+    await database.query('UPDATE ticket SET updated_at = now() WHERE id = $1 AND tenant_id = $2', [ticket.id, req.tenant.id]);
     res.status(201).json({ success: true, message: messageResult.rows[0] });
   } catch (error) {
     next(error);
@@ -2400,8 +2407,8 @@ app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', '
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
   try {
     const result = await database.query(
-      'UPDATE ticket SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL RETURNING id, status, assigned_to',
-      [req.auth.userId, req.params.id]
+      'UPDATE ticket SET assigned_to = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 AND assigned_to IS NULL RETURNING id, status, assigned_to',
+      [req.auth.userId, req.params.id, req.tenant.id]
     );
     if (!result.rowCount) return res.status(409).json({ success: false, message: 'Ce ticket n’est plus disponible pour affectation' });
     res.json({ success: true, ticket: result.rows[0] });
@@ -2420,8 +2427,8 @@ app.patch('/api/tickets/:id/status', requireAuthentication, requireRole('staff',
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
   try {
     const result = await database.query(
-      'UPDATE ticket SET status = $2, updated_at = now() WHERE id = $1 RETURNING id, status',
-      [req.params.id, parsed.data.status]
+      'UPDATE ticket SET status = $2, updated_at = now() WHERE id = $1 AND tenant_id = $3 RETURNING id, status',
+      [req.params.id, parsed.data.status, req.tenant.id]
     );
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
     res.json({ success: true, ticket: result.rows[0] });
@@ -2438,12 +2445,12 @@ app.patch('/api/tickets/:id/assign', requireAuthentication, requireRole('admin')
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Affectation invalide' });
   try {
     if (parsed.data.assigneeUserId) {
-      const staffCheck = await database.query("SELECT id FROM user_account WHERE id = $1 AND role IN ('staff', 'admin')", [parsed.data.assigneeUserId]);
+      const staffCheck = await database.query("SELECT id FROM user_account WHERE id = $1 AND tenant_id = $2 AND role IN ('staff', 'admin')", [parsed.data.assigneeUserId, req.tenant.id]);
       if (!staffCheck.rowCount) return res.status(400).json({ success: false, message: 'Agent introuvable' });
     }
     const result = await database.query(
-      'UPDATE ticket SET assigned_to = $2, updated_at = now() WHERE id = $1 RETURNING id, assigned_to',
-      [req.params.id, parsed.data.assigneeUserId]
+      'UPDATE ticket SET assigned_to = $2, updated_at = now() WHERE id = $1 AND tenant_id = $3 RETURNING id, assigned_to',
+      [req.params.id, parsed.data.assigneeUserId, req.tenant.id]
     );
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
     res.json({ success: true, ticket: result.rows[0] });
