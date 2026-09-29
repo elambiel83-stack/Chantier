@@ -104,6 +104,20 @@ const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
 
+// Résolution du tenant par sous-domaine (architecture multi-tenant, phase 3 — voir le doc
+// de cadrage). TENANT_BASE_DOMAIN non défini (par défaut aujourd'hui) désactive la
+// résolution par sous-domaine et route tout le monde vers le tenant par défaut: rétro-
+// compatible avec le déploiement mono-tenant actuel tant qu'un opérateur ne l'active pas
+// explicitement, même principe que TURNSTILE_SECRET_KEY ou SENTRY_DSN ailleurs dans ce
+// fichier.
+const TENANT_BASE_DOMAIN = process.env.TENANT_BASE_DOMAIN || '';
+const DEFAULT_TENANT_SLUG = 'monchantier';
+// La résolution s'exécute sur chaque requête, y compris non authentifiée: un cache court
+// évite une requête SQL par appel pour une table qui change rarement (création d'un
+// tenant, jamais en cours de requête cliente).
+const tenantCache = new Map();
+const TENANT_CACHE_TTL_MS = 60 * 1000;
+
 // Connexion Google/Apple: le client (web ou mobile) obtient un jeton d'identité
 // directement du fournisseur puis nous l'envoie; on ne fait confiance qu'à ce que sa
 // signature (vérifiée contre les clés publiques du fournisseur) atteste, jamais à ce que
@@ -114,6 +128,48 @@ const verifyAppleIdToken = createOidcVerifier('https://appleid.apple.com/auth/ke
 // différentes pour un même fournisseur: toutes doivent être acceptées.
 const GOOGLE_CLIENT_IDS = (process.env.GOOGLE_CLIENT_IDS || '').split(',').map((id) => id.trim()).filter(Boolean);
 const APPLE_CLIENT_IDS = (process.env.APPLE_CLIENT_IDS || '').split(',').map((id) => id.trim()).filter(Boolean);
+
+// req.hostname (Express, respecte 'trust proxy') -> slug du tenant. Un sous-domaine
+// imbriqué (ex: "www.acme") ou vide n'identifie pas un tenant valide et retombe sur le
+// tenant par défaut, comme l'absence totale de TENANT_BASE_DOMAIN.
+function extractTenantSlug(hostname) {
+  if (!TENANT_BASE_DOMAIN || !hostname) return DEFAULT_TENANT_SLUG;
+  const suffix = `.${TENANT_BASE_DOMAIN}`;
+  if (!hostname.endsWith(suffix)) return DEFAULT_TENANT_SLUG;
+  const subdomain = hostname.slice(0, -suffix.length);
+  if (!subdomain || subdomain.includes('.')) return DEFAULT_TENANT_SLUG;
+  return subdomain;
+}
+
+// Résout req.tenant avant toute route qui en dépend (voir requireAuthentication plus bas,
+// qui vérifie que le tenant du jeton JWT correspond à req.tenant.id). Un tenant inconnu ou
+// désactivé répond 404 plutôt que de laisser une requête continuer sans tenant résolu.
+async function resolveTenant(req, res, next) {
+  const slug = extractTenantSlug(req.hostname);
+  if (!database) {
+    // Sans base, aucune route qui dépend réellement du tenant ne peut de toute façon
+    // aboutir (requireDatabase le signale plus loin) — un repli évite de faire planter
+    // les routes qui n'en ont pas besoin (fichiers statiques, catalogue de repli).
+    req.tenant = { id: null, slug, name: slug };
+    return next();
+  }
+  const cached = tenantCache.get(slug);
+  if (cached && cached.expiresAt > Date.now()) {
+    if (!cached.tenant) return res.status(404).json({ success: false, message: 'Tenant inconnu' });
+    req.tenant = cached.tenant;
+    return next();
+  }
+  try {
+    const result = await database.query('SELECT id, slug, name FROM tenant WHERE slug = $1 AND is_active = true', [slug]);
+    const tenant = result.rows[0] || null;
+    tenantCache.set(slug, { tenant, expiresAt: Date.now() + TENANT_CACHE_TTL_MS });
+    if (!tenant) return res.status(404).json({ success: false, message: 'Tenant inconnu' });
+    req.tenant = tenant;
+    next();
+  } catch (error) {
+    next(error);
+  }
+}
 
 // Middleware
 app.use(cors({
@@ -158,6 +214,8 @@ app.get('/healthz', async (req, res) => {
     res.status(503).json({ status: 'error', database: 'unavailable' });
   }
 });
+
+app.use(resolveTenant);
 
 // Le quota ne vise que l'API: une page web charge plusieurs fichiers et l'épuiserait.
 app.use('/api', rateLimit({
@@ -484,7 +542,7 @@ function requireJwtSecret() {
 
 function createAccessToken(account) {
   requireJwtSecret();
-  return jwt.sign({ sub: account.id, role: account.role }, JWT_ACCESS_SECRET, {
+  return jwt.sign({ sub: account.id, role: account.role, tenant_id: account.tenant_id }, JWT_ACCESS_SECRET, {
     algorithm: 'HS256', expiresIn: ACCESS_TOKEN_TTL, issuer: JWT_ISSUER, audience: 'monchantier-web'
   });
 }
@@ -502,10 +560,10 @@ function tokensMatch(candidate, storedHash) {
   return candidateHash.length === expected.length && crypto.timingSafeEqual(candidateHash, expected);
 }
 
-async function createRefreshToken(client, userId) {
+async function createRefreshToken(client, userId, tenantId) {
   const token = crypto.randomBytes(48).toString('base64url');
   const expiresAt = new Date(Date.now() + REFRESH_TOKEN_DAYS * 24 * 60 * 60 * 1000);
-  await client.query('INSERT INTO refresh_token (user_id, token_hash, expires_at) VALUES ($1, $2, $3)', [userId, hashRefreshToken(token), expiresAt]);
+  await client.query('INSERT INTO refresh_token (user_id, tenant_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)', [userId, tenantId, hashRefreshToken(token), expiresAt]);
   return token;
 }
 
@@ -513,21 +571,21 @@ async function createRefreshToken(client, userId) {
 // à défaut, le relie à un compte existant avec le même e-mail (fournisseur garantit cet
 // e-mail vérifié); sinon crée le compte. Appelée à l'intérieur d'une transaction déjà
 // ouverte par l'appelant.
-async function findOrCreateSocialAccount(client, { column, sub, email, fullName }) {
-  const bySub = await client.query(`SELECT id, role, is_active FROM user_account WHERE ${column} = $1`, [sub]);
+async function findOrCreateSocialAccount(client, { column, sub, email, fullName, tenantId }) {
+  const bySub = await client.query(`SELECT id, role, is_active, tenant_id FROM user_account WHERE ${column} = $1 AND tenant_id = $2`, [sub, tenantId]);
   if (bySub.rowCount) return bySub.rows[0];
   if (email) {
-    const byEmail = await client.query('SELECT id, role, is_active FROM user_account WHERE email = $1', [email]);
+    const byEmail = await client.query('SELECT id, role, is_active, tenant_id FROM user_account WHERE email = $1 AND tenant_id = $2', [email, tenantId]);
     if (byEmail.rowCount) {
       await client.query(`UPDATE user_account SET ${column} = $1, updated_at = now() WHERE id = $2`, [sub, byEmail.rows[0].id]);
       return byEmail.rows[0];
     }
   }
   if (!email) throw Object.assign(new Error('E-mail requis pour créer un compte'), { status: 400 });
-  const customerResult = await client.query('INSERT INTO customer (full_name, email) VALUES ($1, $2) RETURNING id', [fullName || null, email]);
+  const customerResult = await client.query('INSERT INTO customer (full_name, email, tenant_id) VALUES ($1, $2, $3) RETURNING id', [fullName || null, email, tenantId]);
   const accountResult = await client.query(
-    `INSERT INTO user_account (customer_id, email, ${column}) VALUES ($1, $2, $3) RETURNING id, role, is_active`,
-    [customerResult.rows[0].id, email, sub]
+    `INSERT INTO user_account (customer_id, email, ${column}, tenant_id) VALUES ($1, $2, $3, $4) RETURNING id, role, is_active, tenant_id`,
+    [customerResult.rows[0].id, email, sub, tenantId]
   );
   return accountResult.rows[0];
 }
@@ -539,11 +597,15 @@ async function requireAuthentication(req, res, next) {
   try {
     requireJwtSecret();
     const payload = jwt.verify(match[1], JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
+    // Un jeton émis pour un autre tenant ne doit jamais être accepté ici, même s'il est
+    // par ailleurs valide (signature, expiration) — évite qu'un jeton volé sur un tenant
+    // soit rejoué sur un autre.
+    if (payload.tenant_id !== req.tenant.id) return res.status(401).json({ success: false, message: 'Jeton d’authentification invalide ou expire' });
     const accountResult = await database.query(
       `SELECT user_account.id, user_account.customer_id, user_account.role, user_account.is_active, vendor.id AS vendor_id
        FROM user_account LEFT JOIN vendor ON vendor.user_id = user_account.id
-       WHERE user_account.id = $1`,
-      [payload.sub]
+       WHERE user_account.id = $1 AND user_account.tenant_id = $2`,
+      [payload.sub, req.tenant.id]
     );
     const account = accountResult.rows[0];
     if (!account || !account.is_active) return res.status(401).json({ success: false, message: 'Session invalide ou compte desactive' });
@@ -579,11 +641,12 @@ async function attachOptionalAuth(req, res, next) {
   try {
     requireJwtSecret();
     const payload = jwt.verify(match[1], JWT_ACCESS_SECRET, { algorithms: ['HS256'], issuer: JWT_ISSUER, audience: 'monchantier-web' });
+    if (payload.tenant_id !== req.tenant.id) { req.auth = null; return next(); }
     const accountResult = await database.query(
       `SELECT user_account.id, user_account.customer_id, user_account.role, user_account.is_active, vendor.id AS vendor_id
        FROM user_account LEFT JOIN vendor ON vendor.user_id = user_account.id
-       WHERE user_account.id = $1`,
-      [payload.sub]
+       WHERE user_account.id = $1 AND user_account.tenant_id = $2`,
+      [payload.sub, req.tenant.id]
     );
     const account = accountResult.rows[0];
     req.auth = (account && account.is_active)
@@ -1078,10 +1141,10 @@ app.post('/api/auth/register', async (req, res, next) => {
   try {
     await client.query('BEGIN');
     const passwordHash = await argon2.hash(password, { type: argon2.argon2id });
-    const customerResult = await client.query('INSERT INTO customer (full_name, phone, email) VALUES ($1, $2, $3) RETURNING id', [fullName, phone, email]);
-    const accountResult = await client.query("INSERT INTO user_account (customer_id, email, password_hash) VALUES ($1, $2, $3) RETURNING id, role", [customerResult.rows[0].id, email, passwordHash]);
-    const account = { id: accountResult.rows[0].id, role: accountResult.rows[0].role };
-    const refreshToken = await createRefreshToken(client, account.id);
+    const customerResult = await client.query('INSERT INTO customer (full_name, phone, email, tenant_id) VALUES ($1, $2, $3, $4) RETURNING id', [fullName, phone, email, req.tenant.id]);
+    const accountResult = await client.query("INSERT INTO user_account (customer_id, email, password_hash, tenant_id) VALUES ($1, $2, $3, $4) RETURNING id, role, tenant_id", [customerResult.rows[0].id, email, passwordHash, req.tenant.id]);
+    const account = { id: accountResult.rows[0].id, role: accountResult.rows[0].role, tenant_id: accountResult.rows[0].tenant_id };
+    const refreshToken = await createRefreshToken(client, account.id, req.tenant.id);
     await client.query('COMMIT');
     res.status(201).json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email } });
   } catch (error) {
@@ -1104,12 +1167,12 @@ app.post('/api/auth/login', async (req, res, next) => {
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Identifiants invalides' });
   if (!(await checkTurnstile(req, res, parsed.data['cf-turnstile-response']))) return;
   try {
-    const accountResult = await database.query('SELECT id, email, password_hash, role, is_active FROM user_account WHERE email = $1', [parsed.data.email]);
+    const accountResult = await database.query('SELECT id, email, password_hash, role, is_active, tenant_id FROM user_account WHERE email = $1 AND tenant_id = $2', [parsed.data.email, req.tenant.id]);
     const account = accountResult.rows[0];
     // password_hash est NULL pour un compte créé via Google/Apple (aucun mot de passe).
     const validPassword = account && account.is_active && account.password_hash && await argon2.verify(account.password_hash, parsed.data.password);
     if (!validPassword) return res.status(401).json({ success: false, message: 'Adresse e-mail ou mot de passe incorrect' });
-    const refreshToken = await createRefreshToken(database, account.id);
+    const refreshToken = await createRefreshToken(database, account.id, account.tenant_id);
     res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: account.email } });
   } catch (error) {
     next(error);
@@ -1145,13 +1208,13 @@ app.post('/api/auth/google', async (req, res, next) => {
   try {
     await client.query('BEGIN');
     const account = await findOrCreateSocialAccount(client, {
-      column: 'google_sub', sub: payload.sub, email: String(payload.email).toLowerCase(), fullName: payload.name
+      column: 'google_sub', sub: payload.sub, email: String(payload.email).toLowerCase(), fullName: payload.name, tenantId: req.tenant.id
     });
     if (!account.is_active) {
       await client.query('ROLLBACK');
       return res.status(401).json({ success: false, message: 'Compte désactivé' });
     }
-    const refreshToken = await createRefreshToken(client, account.id);
+    const refreshToken = await createRefreshToken(client, account.id, account.tenant_id);
     await client.query('COMMIT');
     res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: payload.email } });
   } catch (error) {
@@ -1188,13 +1251,13 @@ app.post('/api/auth/apple', async (req, res, next) => {
   try {
     await client.query('BEGIN');
     const account = await findOrCreateSocialAccount(client, {
-      column: 'apple_sub', sub: payload.sub, email: String(payload.email).toLowerCase(), fullName: parsed.data.fullName
+      column: 'apple_sub', sub: payload.sub, email: String(payload.email).toLowerCase(), fullName: parsed.data.fullName, tenantId: req.tenant.id
     });
     if (!account.is_active) {
       await client.query('ROLLBACK');
       return res.status(401).json({ success: false, message: 'Compte désactivé' });
     }
-    const refreshToken = await createRefreshToken(client, account.id);
+    const refreshToken = await createRefreshToken(client, account.id, account.tenant_id);
     await client.query('COMMIT');
     res.json({ success: true, accessToken: createAccessToken(account), refreshToken, user: { id: account.id, role: account.role, email: payload.email } });
   } catch (error) {
@@ -1218,16 +1281,16 @@ app.post('/api/auth/refresh', async (req, res, next) => {
   const client = await database.connect();
   try {
     await client.query('BEGIN');
-    const tokenResult = await client.query(`SELECT refresh_token.id, user_account.id AS user_id, user_account.role, user_account.is_active FROM refresh_token JOIN user_account ON user_account.id = refresh_token.user_id WHERE refresh_token.token_hash = $1 AND refresh_token.revoked_at IS NULL AND refresh_token.expires_at > now() FOR UPDATE`, [hashRefreshToken(parsed.data.token)]);
+    const tokenResult = await client.query(`SELECT refresh_token.id, user_account.id AS user_id, user_account.role, user_account.is_active, user_account.tenant_id FROM refresh_token JOIN user_account ON user_account.id = refresh_token.user_id WHERE refresh_token.token_hash = $1 AND refresh_token.revoked_at IS NULL AND refresh_token.expires_at > now() AND user_account.tenant_id = $2 FOR UPDATE`, [hashRefreshToken(parsed.data.token), req.tenant.id]);
     const token = tokenResult.rows[0];
     if (!token || !token.is_active) {
       await client.query('ROLLBACK');
       return res.status(401).json({ success: false, message: 'Session expirée ou invalide' });
     }
     await client.query('UPDATE refresh_token SET revoked_at = now() WHERE id = $1', [token.id]);
-    const refreshToken = await createRefreshToken(client, token.user_id);
+    const refreshToken = await createRefreshToken(client, token.user_id, token.tenant_id);
     await client.query('COMMIT');
-    res.json({ success: true, accessToken: createAccessToken({ id: token.user_id, role: token.role }), refreshToken });
+    res.json({ success: true, accessToken: createAccessToken({ id: token.user_id, role: token.role, tenant_id: token.tenant_id }), refreshToken });
   } catch (error) {
     await client.query('ROLLBACK');
     next(error);
