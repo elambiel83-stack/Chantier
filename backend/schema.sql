@@ -1,6 +1,31 @@
 -- MonChantier schema (PostgreSQL)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Architecture multi-tenant (phase 1, modèle de données uniquement — voir le doc de
+-- cadrage): chaque ligne de `tenant` représente une entreprise cliente indépendante
+-- hébergée sur cette même installation. `slug` sert à la résolution par sous-domaine
+-- (acme.monchantier.net), à brancher dans une phase ultérieure (middleware de résolution
+-- du tenant, JWT scopé). Doit exister avant toute table référençant tenant(id) ci-dessous.
+CREATE TABLE IF NOT EXISTS tenant (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  slug TEXT NOT NULL UNIQUE CHECK (slug = lower(slug)),
+  name TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Tenant par défaut: rattache tout ce qui a été créé avant l'introduction du multi-tenant
+-- (MonChantier elle-même, premier client de sa propre plateforme). Identifiant fixe pour
+-- que le backfill ci-dessous soit déterministe et rejouable sans relecture. Chaque colonne
+-- tenant_id porte aussi ce même identifiant en DEFAULT: le code applicatif (server.js) ne
+-- sait pas encore résoudre un tenant par requête (phase 3, hors périmètre ici) et continue
+-- donc d'insérer sans jamais préciser tenant_id — sans ce DEFAULT, le premier INSERT
+-- applicatif échouerait sur la contrainte NOT NULL. À retirer quand le middleware de
+-- résolution du tenant fournira explicitement tenant_id sur chaque écriture.
+INSERT INTO tenant (id, slug, name)
+VALUES ('00000000-0000-0000-0000-000000000001', 'monchantier', 'MonChantier')
+ON CONFLICT (id) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS product (
   id TEXT PRIMARY KEY,
   name_fr TEXT NOT NULL,
@@ -23,6 +48,20 @@ ALTER TABLE product ADD COLUMN IF NOT EXISTS vendor_id UUID;
 -- référence order_item.product_id des commandes déjà passées).
 ALTER TABLE product ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
 
+-- tenant_id ajouté en colonne simple (pas dans la clé primaire): product.id reste
+-- l'identifiant global tel quel dans cette phase 1. Un code de catalogue lisible
+-- (ex: "BRQ-001") pourrait donc entrer en collision entre deux tenants si le catalogue
+-- MonChantier est un jour réamorcé pour un nouveau client — à résoudre par la politique
+-- de génération d'identifiants du futur outillage de provisioning (hors périmètre ici),
+-- pas par une clé composite: les produits partenaires ("V-<suffixe aléatoire>") n'y sont
+-- déjà pas exposés.
+ALTER TABLE product ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE product SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE product ALTER COLUMN tenant_id SET NOT NULL;
+
+-- currency_rate reste partagé entre tous les tenants (décision volontaire pour cette phase
+-- 1): ce sont des taux de change de référence, pas une donnée métier propre à une
+-- entreprise cliente. À revisiter si un tenant a besoin de fixer ses propres taux.
 CREATE TABLE IF NOT EXISTS currency_rate (
   currency CHAR(3) PRIMARY KEY CHECK (currency IN ('USD', 'CDF', 'EUR')),
   units_per_usd NUMERIC(18,6) NOT NULL CHECK (units_per_usd > 0),
@@ -40,6 +79,10 @@ CREATE TABLE IF NOT EXISTS customer (
   email TEXT,
   whatsapp TEXT
 );
+
+ALTER TABLE customer ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE customer SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE customer ALTER COLUMN tenant_id SET NOT NULL;
 
 CREATE TABLE IF NOT EXISTS user_account (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -64,6 +107,24 @@ ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
 ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_role_check;
 ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor'));
 
+-- tenant_id: un compte appartient à un seul tenant. L'unicité de l'e-mail et des
+-- identifiants Google/Apple passe d'un périmètre global à un périmètre par tenant — la
+-- même adresse (ou la même identité Google) peut désormais avoir un compte distinct chez
+-- deux entreprises clientes différentes, chacune avec sa propre ligne user_account.
+ALTER TABLE user_account ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE user_account SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE user_account ALTER COLUMN tenant_id SET NOT NULL;
+
+ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_email_key;
+ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_tenant_id_email_key;
+ALTER TABLE user_account ADD CONSTRAINT user_account_tenant_id_email_key UNIQUE (tenant_id, email);
+ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_google_sub_key;
+ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_tenant_id_google_sub_key;
+ALTER TABLE user_account ADD CONSTRAINT user_account_tenant_id_google_sub_key UNIQUE (tenant_id, google_sub);
+ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_apple_sub_key;
+ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_tenant_id_apple_sub_key;
+ALTER TABLE user_account ADD CONSTRAINT user_account_tenant_id_apple_sub_key UNIQUE (tenant_id, apple_sub);
+
 -- Profil partenaire (marketplace multi-vendeurs): un compte 'vendor' publie son propre
 -- catalogue (product.vendor_id) et gère la préparation de ses articles sur les commandes
 -- (order_item.vendor_id/vendor_status) — MonChantier reste l'unique vendeur légal et
@@ -81,6 +142,10 @@ CREATE TABLE IF NOT EXISTS vendor (
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE vendor ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE vendor SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE vendor ALTER COLUMN tenant_id SET NOT NULL;
 
 DO $$
 BEGIN
@@ -103,6 +168,10 @@ CREATE TABLE IF NOT EXISTS refresh_token (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE refresh_token ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE refresh_token SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE refresh_token ALTER COLUMN tenant_id SET NOT NULL;
+
 CREATE TABLE IF NOT EXISTS customer_address (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   customer_id UUID REFERENCES customer(id) ON DELETE CASCADE,
@@ -111,6 +180,10 @@ CREATE TABLE IF NOT EXISTS customer_address (
   latitude DOUBLE PRECISION,
   longitude DOUBLE PRECISION
 );
+
+ALTER TABLE customer_address ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE customer_address SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE customer_address ALTER COLUMN tenant_id SET NOT NULL;
 
 CREATE TABLE IF NOT EXISTS cart (
   session_id UUID PRIMARY KEY,
@@ -151,6 +224,10 @@ CREATE TABLE IF NOT EXISTS cart_item (
   PRIMARY KEY (user_id, product_id)
 );
 
+ALTER TABLE cart_item ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE cart_item SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE cart_item ALTER COLUMN tenant_id SET NOT NULL;
+
 CREATE TABLE IF NOT EXISTS orders (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   customer_id UUID REFERENCES customer(id),
@@ -183,6 +260,10 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS driver_location_updated_at TIMESTAMP
 -- pas été rafraîchie depuis la dernière alerte (voir checkDeliveryDelays dans server.js).
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS delay_notified_at TIMESTAMPTZ;
 
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE orders SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE orders ALTER COLUMN tenant_id SET NOT NULL;
+
 CREATE TABLE IF NOT EXISTS order_item (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
@@ -200,6 +281,10 @@ CREATE TABLE IF NOT EXISTS order_item (
 ALTER TABLE order_item ADD COLUMN IF NOT EXISTS vendor_id UUID REFERENCES vendor(id) ON DELETE SET NULL;
 ALTER TABLE order_item ADD COLUMN IF NOT EXISTS vendor_status TEXT NOT NULL DEFAULT 'pending' CHECK (vendor_status IN ('pending', 'confirmed', 'ready', 'delivered', 'cancelled'));
 CREATE INDEX IF NOT EXISTS order_item_vendor_id_idx ON order_item(vendor_id);
+
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE order_item SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE order_item ALTER COLUMN tenant_id SET NOT NULL;
 
 CREATE TABLE IF NOT EXISTS payment (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -228,6 +313,10 @@ ALTER TABLE payment ADD COLUMN IF NOT EXISTS confirmation_token_hash TEXT;
 ALTER TABLE payment DROP CONSTRAINT IF EXISTS payment_provider_check;
 ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('paypal', 'cinetpay', 'airtel_money', 'orange_money'));
 
+ALTER TABLE payment ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE payment SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE payment ALTER COLUMN tenant_id SET NOT NULL;
+
 -- Code de vérification (e-mail, SMS ou WhatsApp, au choix du client). Stocké haché comme
 -- refresh_token; expire et se limite en tentatives pour résister au brute-force.
 CREATE TABLE IF NOT EXISTS verification_code (
@@ -240,6 +329,10 @@ CREATE TABLE IF NOT EXISTS verification_code (
   consumed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE verification_code ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE verification_code SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE verification_code ALTER COLUMN tenant_id SET NOT NULL;
 
 -- Demande d'importation: le client décrit un produit repéré chez un fournisseur (lien +
 -- description) plutôt que de faire confiance à un scraping automatisé du site fournisseur.
@@ -260,6 +353,10 @@ CREATE TABLE IF NOT EXISTS import_request (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE import_request ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE import_request SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE import_request ALTER COLUMN tenant_id SET NOT NULL;
 
 -- Ticket de support multicanal: un client connecté l'ouvre lui-même depuis le web, mais le
 -- staff peut aussi en créer un pour quelqu'un qui l'a contacté par WhatsApp, e-mail ou
@@ -284,6 +381,10 @@ CREATE TABLE IF NOT EXISTS ticket (
   )
 );
 
+ALTER TABLE ticket ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE ticket SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE ticket ALTER COLUMN tenant_id SET NOT NULL;
+
 -- Fil de messages d'un ticket. 'system' documente une action automatique (ex: changement de
 -- statut) sans lui prêter un auteur humain qu'elle n'a pas. sent_via_channel distingue un
 -- message réellement transmis au client par e-mail/WhatsApp/SMS (voir POST
@@ -298,6 +399,10 @@ CREATE TABLE IF NOT EXISTS ticket_message (
   sent_via_channel BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE ticket_message ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenant(id) DEFAULT '00000000-0000-0000-0000-000000000001';
+UPDATE ticket_message SET tenant_id = '00000000-0000-0000-0000-000000000001' WHERE tenant_id IS NULL;
+ALTER TABLE ticket_message ALTER COLUMN tenant_id SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS ticket_customer_id_idx ON ticket(customer_id);
 CREATE INDEX IF NOT EXISTS ticket_assigned_to_idx ON ticket(assigned_to);
@@ -314,3 +419,21 @@ CREATE INDEX IF NOT EXISTS payment_order_id_idx ON payment(order_id);
 CREATE INDEX IF NOT EXISTS refresh_token_user_id_idx ON refresh_token(user_id);
 CREATE INDEX IF NOT EXISTS verification_code_user_id_idx ON verification_code(user_id);
 CREATE INDEX IF NOT EXISTS cart_item_user_id_idx ON cart_item(user_id);
+
+-- Index tenant_id: chaque route scopée par tenant (phase 3, middleware de résolution)
+-- filtrera par cette colonne en premier — un index par table évite un scan complet une
+-- fois plusieurs tenants réellement actifs.
+CREATE INDEX IF NOT EXISTS customer_tenant_id_idx ON customer(tenant_id);
+CREATE INDEX IF NOT EXISTS user_account_tenant_id_idx ON user_account(tenant_id);
+CREATE INDEX IF NOT EXISTS product_tenant_id_idx ON product(tenant_id);
+CREATE INDEX IF NOT EXISTS vendor_tenant_id_idx ON vendor(tenant_id);
+CREATE INDEX IF NOT EXISTS ticket_tenant_id_idx ON ticket(tenant_id);
+CREATE INDEX IF NOT EXISTS orders_tenant_id_idx ON orders(tenant_id);
+CREATE INDEX IF NOT EXISTS order_item_tenant_id_idx ON order_item(tenant_id);
+CREATE INDEX IF NOT EXISTS payment_tenant_id_idx ON payment(tenant_id);
+CREATE INDEX IF NOT EXISTS cart_item_tenant_id_idx ON cart_item(tenant_id);
+CREATE INDEX IF NOT EXISTS refresh_token_tenant_id_idx ON refresh_token(tenant_id);
+CREATE INDEX IF NOT EXISTS verification_code_tenant_id_idx ON verification_code(tenant_id);
+CREATE INDEX IF NOT EXISTS import_request_tenant_id_idx ON import_request(tenant_id);
+CREATE INDEX IF NOT EXISTS ticket_message_tenant_id_idx ON ticket_message(tenant_id);
+CREATE INDEX IF NOT EXISTS customer_address_tenant_id_idx ON customer_address(tenant_id);
