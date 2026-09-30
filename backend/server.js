@@ -752,8 +752,8 @@ async function ensureCatalog(client) {
   for (const product of PRODUCTS) {
     // stock_qty n'est renseigné qu'à la création: le stock vit ensuite en base.
     await client.query(
-      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, catalog_group)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (id) DO UPDATE SET
          name_fr = EXCLUDED.name_fr,
          name_en = EXCLUDED.name_en,
@@ -761,8 +761,9 @@ async function ensureCatalog(client) {
          price_usd = EXCLUDED.price_usd,
          image_url = EXCLUDED.image_url,
          category = EXCLUDED.category,
+         catalog_group = EXCLUDED.catalog_group,
          stock_qty = COALESCE(product.stock_qty, EXCLUDED.stock_qty)`,
-      [product.id, product.name_fr, product.name_en, product.unit, product.price, product.img, product.category, product.stock]
+      [product.id, product.name_fr, product.name_en, product.unit, product.price, product.img, product.category, product.stock, product.catalog_group || null]
     );
   }
 }
@@ -796,6 +797,7 @@ function mapProductRow(row) {
     price: Number(row.price_usd),
     img: row.image_url,
     category: row.category,
+    catalog_group: row.catalog_group || null,
     stock: row.stock_qty === null ? 0 : Number(row.stock_qty),
     // Absent (undefined) pour le catalogue MonChantier (mode sans base et produits sans
     // partenaire) — présent seulement quand product.vendor_id pointe vers un vendor actif.
