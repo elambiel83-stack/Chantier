@@ -204,7 +204,8 @@ const verificationSendLimiter = rateLimit({
 app.use(express.static(WEB_DIR, { extensions: ['html'] }));
 
 // Base de données simulée pour les produits
-const PRODUCTS = [
+const { CONSTRUCTION_CATALOG } = require('./constructionCatalog');
+const LEGACY_PRODUCTS = [
   { 
     id: "BRQ-001", 
     name_fr: "Brique en bloc ciment", 
@@ -329,6 +330,10 @@ const PRODUCTS = [
     stock: 9999
   }
 ];
+
+// Le catalogue complet remplace désormais l'ancien jeu de démonstration.
+const PRODUCTS = [...LEGACY_PRODUCTS, ...CONSTRUCTION_CATALOG];
+
 
 // Panier synchronisé entre appareils: stocké dans cart_item (table), rattaché au compte
 // (voir GET/PUT/DELETE /api/cart plus bas). Un visiteur non connecté reste en local
