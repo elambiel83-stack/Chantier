@@ -332,7 +332,7 @@ const LEGACY_PRODUCTS = [
 ];
 
 // Le catalogue complet remplace désormais l'ancien jeu de démonstration.
-const PRODUCTS = CONSTRUCTION_CATALOG;
+const PRODUCTS = [...LEGACY_PRODUCTS, ...CONSTRUCTION_CATALOG];
 
 
 // Panier synchronisé entre appareils: stocké dans cart_item (table), rattaché au compte
