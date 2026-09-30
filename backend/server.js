@@ -86,8 +86,11 @@ const codespaceOriginPattern = process.env.CODESPACE_NAME
   ? new RegExp(`^https://${process.env.CODESPACE_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}-\\d+\\.${(process.env.GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN || 'app.github.dev').replace(/\./g, '\\.')}$`)
   : null;
 const WEB_DIR = path.join(__dirname, '..', 'web');
+const databaseSsl = process.env.NODE_ENV === 'production'
+  ? { rejectUnauthorized: process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false' }
+  : false;
 const database = process.env.DATABASE_URL
-  ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false })
+  ? new Pool({ connectionString: process.env.DATABASE_URL, ssl: databaseSsl })
   : null;
 const JWT_ISSUER = process.env.JWT_ISSUER || 'monchantier-api';
 const FALLBACK_CURRENCY_RATES = { USD: 1, CDF: 2800, EUR: 0.92 };
