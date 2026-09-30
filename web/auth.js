@@ -3,6 +3,34 @@
   const registerForm = document.getElementById('register-form');
   const status = document.getElementById('auth-status');
 
+  document.querySelectorAll('.password-toggle').forEach((button) => {
+    button.addEventListener('click', () => {
+      const input = document.getElementById(button.dataset.passwordTarget);
+      const reveal = input.type === 'password';
+      input.type = reveal ? 'text' : 'password';
+      button.textContent = reveal ? 'Masquer' : 'Afficher';
+      button.setAttribute('aria-label', `${reveal ? 'Masquer' : 'Afficher'} le mot de passe`);
+    });
+  });
+
+  async function configureTurnstile() {
+    try {
+      const response = await fetch(`${API_CONFIG.baseURL}/public-config`);
+      const config = response.ok ? await response.json() : {};
+      if (!config.turnstileSiteKey) return;
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => document.querySelectorAll('.turnstile-slot').forEach((slot) => {
+        window.turnstile.render(slot, { sitekey: config.turnstileSiteKey });
+      });
+      document.head.appendChild(script);
+    } catch (error) {
+      // Le CAPTCHA est une protection optionnelle: aucun message technique n'est montré.
+    }
+  }
+
   document.querySelectorAll('[data-auth-view]').forEach((tab) => {
     tab.addEventListener('click', () => {
       const isLogin = tab.dataset.authView === 'login';
@@ -66,6 +94,15 @@
   });
   registerForm.addEventListener('submit', (event) => {
     event.preventDefault();
+    const password = registerForm.elements.password.value;
+    const confirmation = registerForm.elements.confirmPassword.value;
+    if (password !== confirmation) {
+      status.textContent = 'Les deux mots de passe ne correspondent pas.';
+      registerForm.elements.confirmPassword.focus();
+      return;
+    }
     authenticate('/auth/register', registerForm);
   });
+
+  configureTurnstile();
 }());

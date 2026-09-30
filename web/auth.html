@@ -7,8 +7,6 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="styles.css">
   <script src="config.js"></script>
-  <!-- Cloudflare Turnstile (CAPTCHA): script chargé une seule fois pour les deux formulaires. -->
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18453977660"></script>
   <script>
@@ -33,19 +31,17 @@
       </div>
       <form id="login-form" class="mt-6 space-y-4">
         <div><label for="login-email" class="block text-sm font-medium">E-mail</label><input id="login-email" name="email" type="email" autocomplete="email" required class="mt-1 w-full border border-slate-300 px-3 py-2"></div>
-        <div><label for="login-password" class="block text-sm font-medium">Mot de passe</label><input id="login-password" name="password" type="password" autocomplete="current-password" required class="mt-1 w-full border border-slate-300 px-3 py-2"></div>
-        <!-- Remplacez YOUR_TURNSTILE_SITE_KEY par la clé de site (publique) de votre tableau de
-             bord Cloudflare Turnstile. Sans TURNSTILE_SECRET_KEY côté serveur, ce widget reste
-             affiché mais n'est pas vérifié (voir backend/turnstile.js). -->
-        <div class="cf-turnstile" data-sitekey="YOUR_TURNSTILE_SITE_KEY"></div>
+        <div><label for="login-password" class="block text-sm font-medium">Mot de passe</label><div class="relative"><input id="login-password" name="password" type="password" autocomplete="current-password" required class="mt-1 w-full border border-slate-300 px-3 py-2 pr-20"><button type="button" class="password-toggle absolute inset-y-1 right-1 px-3 text-sm font-medium text-slate-600" data-password-target="login-password" aria-label="Afficher le mot de passe">Afficher</button></div></div>
+        <div class="turnstile-slot" data-turnstile-form="login"></div>
         <button type="submit" class="w-full bg-red-600 px-4 py-3 font-semibold text-white hover:bg-red-700">Se connecter</button>
       </form>
       <form id="register-form" class="mt-6 hidden space-y-4">
         <div><label for="register-name" class="block text-sm font-medium">Nom complet</label><input id="register-name" name="fullName" type="text" autocomplete="name" required class="mt-1 w-full border border-slate-300 px-3 py-2"></div>
         <div><label for="register-phone" class="block text-sm font-medium">Téléphone</label><input id="register-phone" name="phone" type="tel" autocomplete="tel" required class="mt-1 w-full border border-slate-300 px-3 py-2"></div>
         <div><label for="register-email" class="block text-sm font-medium">E-mail</label><input id="register-email" name="email" type="email" autocomplete="email" required class="mt-1 w-full border border-slate-300 px-3 py-2"></div>
-        <div><label for="register-password" class="block text-sm font-medium">Mot de passe</label><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="12" required class="mt-1 w-full border border-slate-300 px-3 py-2"><p class="mt-1 text-xs text-slate-500">12 caractères minimum.</p></div>
-        <div class="cf-turnstile" data-sitekey="YOUR_TURNSTILE_SITE_KEY"></div>
+        <div><label for="register-password" class="block text-sm font-medium">Mot de passe</label><div class="relative"><input id="register-password" name="password" type="password" autocomplete="new-password" minlength="12" required class="mt-1 w-full border border-slate-300 px-3 py-2 pr-20"><button type="button" class="password-toggle absolute inset-y-1 right-1 px-3 text-sm font-medium text-slate-600" data-password-target="register-password" aria-label="Afficher le mot de passe">Afficher</button></div><p class="mt-1 text-xs text-slate-500">12 caractères minimum.</p></div>
+        <div><label for="register-password-confirm" class="block text-sm font-medium">Confirmer le mot de passe</label><div class="relative"><input id="register-password-confirm" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" required class="mt-1 w-full border border-slate-300 px-3 py-2 pr-20"><button type="button" class="password-toggle absolute inset-y-1 right-1 px-3 text-sm font-medium text-slate-600" data-password-target="register-password-confirm" aria-label="Afficher la confirmation du mot de passe">Afficher</button></div></div>
+        <div class="turnstile-slot" data-turnstile-form="register"></div>
         <button type="submit" class="w-full bg-red-600 px-4 py-3 font-semibold text-white hover:bg-red-700">Créer mon compte</button>
       </form>
       <p id="auth-status" class="mt-4 text-sm" role="status" aria-live="polite"></p>

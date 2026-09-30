@@ -127,6 +127,17 @@
       window.location.assign('auth.html');
       return;
     }
+    try {
+      const user = JSON.parse(localStorage.getItem('authUser') || 'null');
+      if (user?.role && user.role !== 'customer') {
+        form.querySelectorAll('input, textarea, button').forEach((control) => { control.disabled = true; });
+        formStatus.textContent = 'Les demandes d’importation doivent être envoyées depuis un compte client.';
+        await loadRequests();
+        return;
+      }
+    } catch (error) {
+      localStorage.removeItem('authUser');
+    }
     await loadRequests();
   }
 

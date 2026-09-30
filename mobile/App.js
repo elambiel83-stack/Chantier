@@ -62,6 +62,7 @@ function LoginScreen({ navigation }) {
   const { login, loginWithGoogle, loginWithApple, continueAsGuest } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [request, , promptAsync] = Google.useAuthRequest({
     ...GOOGLE_AUTH_CONFIG,
@@ -130,13 +131,18 @@ function LoginScreen({ navigation }) {
         style={styles.input}
       />
 
-      <TextInput
-        placeholder="Mot de passe"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-        style={styles.input}
-      />
+      <View style={{ position: 'relative' }}>
+        <TextInput
+          placeholder="Mot de passe"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry={!showPassword}
+          style={[styles.input, { paddingRight: 90 }]}
+        />
+        <TouchableOpacity onPress={() => setShowPassword((value) => !value)} style={{ position: 'absolute', right: 12, top: 14 }}>
+          <Text style={{ color: '#475569', fontWeight: '600' }}>{showPassword ? 'Masquer' : 'Afficher'}</Text>
+        </TouchableOpacity>
+      </View>
 
       <TouchableOpacity
         style={[styles.button, { backgroundColor: '#3B82F6' }, submitting && styles.buttonDisabled]}
@@ -218,6 +224,8 @@ function RegisterScreen({ navigation }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [request, , promptAsync] = Google.useAuthRequest({
@@ -227,7 +235,7 @@ function RegisterScreen({ navigation }) {
   });
 
   const handleRegister = async () => {
-    if (!name || !email || !password || !phone) {
+    if (!name || !email || !password || !confirmPassword || !phone) {
       Alert.alert('Erreur', 'Veuillez remplir tous les champs');
       return;
     }
@@ -235,9 +243,13 @@ function RegisterScreen({ navigation }) {
       Alert.alert('Mot de passe trop court', 'Le mot de passe doit contenir au moins 12 caractères.');
       return;
     }
+    if (password !== confirmPassword) {
+      Alert.alert('Confirmation incorrecte', 'Les deux mots de passe ne correspondent pas.');
+      return;
+    }
     setSubmitting(true);
     try {
-      await register({ fullName: name.trim(), email: email.trim(), phone: phone.trim(), password });
+      await register({ fullName: name.trim(), email: email.trim(), phone: phone.trim(), password, confirmPassword });
     } catch (error) {
       Alert.alert('Inscription impossible', error.message || 'Vérifiez les informations saisies.');
     } finally {
@@ -304,11 +316,24 @@ function RegisterScreen({ navigation }) {
         style={styles.input}
       />
 
+      <View style={{ position: 'relative' }}>
+        <TextInput
+          placeholder="Mot de passe (12 caractères minimum)"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry={!showPassword}
+          style={[styles.input, { paddingRight: 90 }]}
+        />
+        <TouchableOpacity onPress={() => setShowPassword((value) => !value)} style={{ position: 'absolute', right: 12, top: 14 }}>
+          <Text style={{ color: '#475569', fontWeight: '600' }}>{showPassword ? 'Masquer' : 'Afficher'}</Text>
+        </TouchableOpacity>
+      </View>
+
       <TextInput
-        placeholder="Mot de passe (12 caractères minimum)"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
+        placeholder="Confirmer le mot de passe"
+        value={confirmPassword}
+        onChangeText={setConfirmPassword}
+        secureTextEntry={!showPassword}
         style={styles.input}
       />
 

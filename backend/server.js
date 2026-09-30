@@ -18,7 +18,7 @@ require('dotenv').config();
 // jetons, codes de vérification. Sentry capture le corps/les en-têtes de la requête en
 // cas d'erreur (Sentry.setupExpressErrorHandler) — sans ce filtre, une erreur survenant
 // pendant un login enverrait le mot de passe en clair à un tiers.
-const SENSITIVE_FIELDS = ['password', 'idToken', 'identityToken', 'accessToken', 'refreshToken', 'token', 'code', 'authorization', 'cookie', 'cf-turnstile-response'];
+const SENSITIVE_FIELDS = ['password', 'confirmpassword', 'idToken', 'identityToken', 'accessToken', 'refreshToken', 'token', 'code', 'authorization', 'cookie', 'cf-turnstile-response'];
 function scrubSensitiveData(value) {
   if (Array.isArray(value)) return value.map(scrubSensitiveData);
   if (value && typeof value === 'object') {
@@ -160,6 +160,12 @@ app.get('/healthz', async (req, res) => {
   } catch (error) {
     res.status(503).json({ status: 'error', database: 'unavailable' });
   }
+});
+
+// Seules les informations publiques nécessaires à l'interface sont exposées ici.
+// Une clé de site Turnstile est publique; la clé secrète reste exclusivement côté serveur.
+app.get('/api/public-config', (req, res) => {
+  res.json({ turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || null });
 });
 
 // Le quota ne vise que l'API: une page web charge plusieurs fichiers et l'épuiserait.
@@ -360,7 +366,11 @@ const credentialsSchema = z.object({
 });
 const registrationSchema = credentialsSchema.extend({
   fullName: z.string().trim().min(2).max(120),
-  phone: z.string().trim().min(6).max(30)
+  phone: z.string().trim().min(6).max(30),
+  confirmPassword: z.string().min(12).max(128)
+}).refine((data) => data.password === data.confirmPassword, {
+  message: 'Les deux mots de passe ne correspondent pas',
+  path: ['confirmPassword']
 });
 const refreshTokenSchema = z.object({ token: z.string().min(32).max(512) });
 const sendVerificationSchema = z.object({ channel: z.enum(['email', 'sms', 'whatsapp']) });
