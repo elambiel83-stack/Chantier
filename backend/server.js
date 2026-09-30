@@ -433,6 +433,10 @@ const vendorProductUpdateSchema = z.object({
   imageUrl: imageUrlSchema.optional(),
   isActive: z.boolean().optional()
 });
+const adminPricingDecisionSchema = z.object({
+  status: z.enum(['approved', 'rejected']),
+  platformFeePercent: z.number().min(0).max(100)
+});
 // 'pending' est l'état initial fixé à la création de la commande, jamais choisi ensuite.
 const vendorItemStatusSchema = z.object({ status: z.enum(['confirmed', 'ready', 'delivered', 'cancelled']) });
 // Au-delà de ce délai sans mise à jour de position pendant une livraison en cours, on
@@ -798,6 +802,9 @@ function mapProductRow(row) {
     img: row.image_url,
     category: row.category,
     catalog_group: row.catalog_group || null,
+    submittedPrice: row.submitted_price_usd === null || row.submitted_price_usd === undefined ? null : Number(row.submitted_price_usd),
+    platformFeePercent: Number(row.platform_fee_percent || 0),
+    pricingStatus: row.pricing_status || 'platform',
     stock: row.stock_qty === null ? 0 : Number(row.stock_qty),
     // Absent (undefined) pour le catalogue MonChantier (mode sans base et produits sans
     // partenaire) — présent seulement quand product.vendor_id pointe vers un vendor actif.
@@ -1449,7 +1456,7 @@ app.patch('/api/admin/vendors/:vendorId', requireAuthentication, requireRole('ad
 app.get('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
   try {
     const result = await database.query(
-      'SELECT id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active FROM product WHERE vendor_id = $1 ORDER BY id',
+      'SELECT id, name_fr, name_en, unit, price_usd, submitted_price_usd, platform_fee_percent, pricing_status, image_url, category, stock_qty, is_active FROM product WHERE vendor_id = $1 ORDER BY id',
       [req.auth.vendorId]
     );
     res.json({ success: true, products: result.rows.map((row) => ({ ...mapProductRow(row), isActive: row.is_active })) });
@@ -1466,9 +1473,9 @@ app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), r
     // dédié évite toute collision avec ce catalogue existant ou entre partenaires.
     const id = `V-${crypto.randomUUID().slice(0, 8)}`;
     const result = await database.query(
-      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, vendor_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active`,
+      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, submitted_price_usd, platform_fee_percent, pricing_status, image_url, category, stock_qty, vendor_id, is_active)
+       VALUES ($1, $2, $3, $4, $5, $5, 0, 'pending', $6, $7, $8, $9, false)
+       RETURNING id, name_fr, name_en, unit, price_usd, submitted_price_usd, platform_fee_percent, pricing_status, image_url, category, stock_qty, is_active`,
       [id, parsed.data.nameFr, parsed.data.nameEn, parsed.data.unit, parsed.data.price, parsed.data.imageUrl || null, parsed.data.category, parsed.data.stockQty ?? 0, req.auth.vendorId]
     );
     res.status(201).json({ success: true, product: { ...mapProductRow(result.rows[0]), isActive: result.rows[0].is_active } });
@@ -1480,7 +1487,7 @@ app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), r
 app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
   const parsed = vendorProductUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Modification invalide', errors: parsed.error.flatten().fieldErrors });
-  const fieldMap = { nameFr: 'name_fr', nameEn: 'name_en', unit: 'unit', price: 'price_usd', category: 'category', stockQty: 'stock_qty', imageUrl: 'image_url', isActive: 'is_active' };
+  const fieldMap = { nameFr: 'name_fr', nameEn: 'name_en', unit: 'unit', price: 'submitted_price_usd', category: 'category', stockQty: 'stock_qty', imageUrl: 'image_url' };
   const sets = [];
   const values = [];
   for (const [key, column] of Object.entries(fieldMap)) {
@@ -1490,15 +1497,38 @@ app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole(
     }
   }
   if (!sets.length) return res.status(400).json({ success: false, message: 'Aucune modification fournie' });
+  sets.push("pricing_status = 'pending'", 'is_active = false');
   values.push(req.params.productId, req.auth.vendorId);
   try {
     const result = await database.query(
       `UPDATE product SET ${sets.join(', ')} WHERE id = $${values.length - 1} AND vendor_id = $${values.length}
-       RETURNING id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, is_active`,
+       RETURNING id, name_fr, name_en, unit, price_usd, submitted_price_usd, platform_fee_percent, pricing_status, image_url, category, stock_qty, is_active`,
       values
     );
     if (!result.rowCount) return res.status(404).json({ success: false, message: 'Produit introuvable' });
     res.json({ success: true, product: { ...mapProductRow(result.rows[0]), isActive: result.rows[0].is_active } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/admin/vendor-products/:productId/pricing', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  const parsed = adminPricingDecisionSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Décision ou commission invalide' });
+  try {
+    const approved = parsed.data.status === 'approved';
+    const result = await database.query(
+      `UPDATE product
+       SET platform_fee_percent = $1,
+           pricing_status = $2,
+           price_usd = CASE WHEN $2 = 'approved' THEN ROUND(submitted_price_usd * (1 + $1 / 100.0), 2) ELSE price_usd END,
+           is_active = ($2 = 'approved')
+       WHERE id = $3 AND vendor_id IS NOT NULL
+       RETURNING id, name_fr, name_en, unit, price_usd, submitted_price_usd, platform_fee_percent, pricing_status, image_url, category, stock_qty, is_active`,
+      [parsed.data.platformFeePercent, parsed.data.status, req.params.productId]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Offre partenaire introuvable' });
+    res.json({ success: true, product: { ...mapProductRow(result.rows[0]), isActive: approved } });
   } catch (error) {
     next(error);
   }
