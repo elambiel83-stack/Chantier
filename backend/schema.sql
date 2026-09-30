@@ -12,6 +12,8 @@ CREATE TABLE IF NOT EXISTS product (
 
 -- Le catalogue devient la source de vérité du stock et des catégories.
 ALTER TABLE product ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'produits';
+-- Sous-famille commerciale utilisée par les filtres du catalogue public.
+ALTER TABLE product ADD COLUMN IF NOT EXISTS catalog_group TEXT;
 -- Volontairement nullable: une colonne NULL signale un produit jamais initialisé, que
 -- la synchronisation du catalogue amorcera; 0 signifie réellement "en rupture".
 ALTER TABLE product ADD COLUMN IF NOT EXISTS stock_qty NUMERIC(12,3) CHECK (stock_qty >= 0);
