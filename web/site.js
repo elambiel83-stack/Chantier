@@ -266,23 +266,31 @@
 
   const grid = document.getElementById("grid");
   const search = document.getElementById("search");
+  const catalogGroup = document.getElementById("catalogGroup");
   const year = document.getElementById("year");
   if (year) year.textContent = new Date().getFullYear();
 
   function render(){
     if(!grid) return;
     const q = (search?.value || "").toLowerCase();
-    const items = (window.PRODUCTS || []).filter(p => (p.category === currentCategory) && ((p.name_fr + " " + p.name_en).toLowerCase().includes(q)));
+    const selectedGroup = catalogGroup?.value || "";
+    const items = (window.PRODUCTS || []).filter(p =>
+      p.category === currentCategory &&
+      (!selectedGroup || p.catalog_group === selectedGroup) &&
+      ((p.name_fr + " " + p.name_en).toLowerCase().includes(q))
+    );
     grid.innerHTML = items.map(p => `
       <div class="catalog-card bg-white rounded-2xl shadow p-4 flex flex-col">
         <img src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name_fr)}" class="h-32 sm:h-40 w-full object-cover rounded-xl">
         <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${escapeHtml(lang === "fr" ? p.name_fr : p.name_en)}</div>
         <div class="text-slate-500 text-xs sm:text-sm">${escapeHtml(p.id)} · ${escapeHtml(p.unit)}${p.stock ? ' · Stock: ' + escapeHtml(p.stock) : ''}</div>
         ${p.vendorName ? `<div class="text-xs text-red-600 mt-0.5">${lang === 'fr' ? 'Vendu par' : 'Sold by'} ${escapeHtml(p.vendorName)}</div>` : ''}
-        <div class="mt-2 text-lg sm:text-xl font-bold">${money(p.price)}</div>
+        <div class="mt-2 text-lg sm:text-xl font-bold">${Number(p.price) > 0 ? money(p.price) : (lang === 'fr' ? 'Sur devis' : 'On request')}</div>
         <div class="mt-3 sm:mt-4 flex gap-2">
-          <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${escapeHtml(p.id)}">
-          <button class="dark-button flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
+          ${Number(p.price) > 0 && Number(p.stock) > 0 ? `
+            <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${escapeHtml(p.id)}">
+            <button class="dark-button flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
+          ` : `<a class="flex-1 px-3 py-2 rounded-lg bg-red-600 text-white text-center text-xs sm:text-sm" href="https://wa.me/243999972466?text=${encodeURIComponent('Bonjour MonChantier, je souhaite un devis pour ' + p.name_fr)}">${lang === 'fr' ? 'Demander un devis' : 'Request a quote'}</a>`}
         </div>
       </div>
     `).join("");
@@ -293,6 +301,10 @@
   const tabs = document.querySelectorAll('.catalog-tab');
   function setCategory(cat){
     currentCategory = cat;
+    if (catalogGroup) {
+      const groups = [...new Set((window.PRODUCTS || []).filter(p => p.category === cat && p.catalog_group).map(p => p.catalog_group))].sort();
+      catalogGroup.innerHTML = `<option value="">${lang === 'fr' ? 'Toutes les familles' : 'All families'}</option>` + groups.map(group => `<option value="${escapeHtml(group)}">${escapeHtml(group.replaceAll('_', ' '))}</option>`).join('');
+    }
     if(tabs && tabs.length){
       tabs.forEach(t=>{
         if(t.dataset.category===cat){
@@ -307,6 +319,7 @@
     render();
   }
   tabs.forEach(t => t.addEventListener('click', ()=> setCategory(t.dataset.category)));
+  catalogGroup?.addEventListener('change', render);
   setCategory(currentCategory);
 
   window.addToCart = function(id){
