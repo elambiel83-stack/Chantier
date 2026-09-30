@@ -137,14 +137,14 @@ app.use(helmet({
       formAction: ["'self'"],
       // Le catalogue charge Tailwind par CDN et utilise des gestionnaires d'événements
       // inline; le CAPTCHA Cloudflare Turnstile s'affiche dans une iframe.
-      scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://challenges.cloudflare.com'],
+      scriptSrc: ["'self'", "'unsafe-inline'", 'https://cdn.tailwindcss.com', 'https://challenges.cloudflare.com', 'https://accounts.google.com', 'https://appleid.cdn-apple.com'],
       scriptSrcAttr: ["'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'", 'https:'],
       imgSrc: ["'self'", 'data:', 'https:'],
-      frameSrc: ["'self'", 'https://challenges.cloudflare.com'],
+      frameSrc: ["'self'", 'https://challenges.cloudflare.com', 'https://accounts.google.com', 'https://appleid.apple.com'],
       // connectSrc: le script Turnstile fait ses propres appels réseau vers Cloudflare
       // (pas seulement dans l'iframe déclarée par frameSrc).
-      connectSrc: ["'self'", ...allowedOrigins, 'https://challenges.cloudflare.com'],
+      connectSrc: ["'self'", ...allowedOrigins, 'https://challenges.cloudflare.com', 'https://accounts.google.com', 'https://appleid.apple.com'],
       ...(process.env.NODE_ENV === 'production' ? { upgradeInsecureRequests: [] } : { upgradeInsecureRequests: null })
     }
   }
@@ -165,7 +165,12 @@ app.get('/healthz', async (req, res) => {
 // Seules les informations publiques nécessaires à l'interface sont exposées ici.
 // Une clé de site Turnstile est publique; la clé secrète reste exclusivement côté serveur.
 app.get('/api/public-config', (req, res) => {
-  res.json({ turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || null });
+  res.json({
+    turnstileSiteKey: process.env.TURNSTILE_SITE_KEY || null,
+    googleClientId: GOOGLE_CLIENT_IDS[0] || null,
+    appleClientId: APPLE_CLIENT_IDS[0] || null,
+    appleRedirectUri: process.env.APPLE_WEB_REDIRECT_URI || null
+  });
 });
 
 // Le quota ne vise que l'API: une page web charge plusieurs fichiers et l'épuiserait.

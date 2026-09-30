@@ -2,6 +2,8 @@
   const loginForm = document.getElementById('login-form');
   const registerForm = document.getElementById('register-form');
   const status = document.getElementById('auth-status');
+  const socialStatus = document.getElementById('social-auth-status');
+  let publicConfig = {};
 
   document.querySelectorAll('.password-toggle').forEach((button) => {
     button.addEventListener('click', () => {
@@ -15,20 +17,87 @@
 
   async function configureTurnstile() {
     try {
-      const response = await fetch(`${API_CONFIG.baseURL}/public-config`);
-      const config = response.ok ? await response.json() : {};
-      if (!config.turnstileSiteKey) return;
+      if (!publicConfig.turnstileSiteKey) return;
       const script = document.createElement('script');
       script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
       script.async = true;
       script.defer = true;
       script.onload = () => document.querySelectorAll('.turnstile-slot').forEach((slot) => {
-        window.turnstile.render(slot, { sitekey: config.turnstileSiteKey });
+        window.turnstile.render(slot, { sitekey: publicConfig.turnstileSiteKey });
       });
       document.head.appendChild(script);
     } catch (error) {
       // Le CAPTCHA est une protection optionnelle: aucun message technique n'est montré.
     }
+  }
+
+  async function finishSocialAuthentication(endpoint, body) {
+    socialStatus.textContent = 'Connexion sécurisée en cours...';
+    try {
+      const data = await window.apiCall(endpoint, { method: 'POST', body });
+      localStorage.setItem('accessToken', data.accessToken);
+      localStorage.setItem('refreshToken', data.refreshToken);
+      localStorage.setItem('authUser', JSON.stringify(data.user));
+      await mergeCartOnLogin();
+      const redirect = localStorage.getItem('postLoginRedirect');
+      localStorage.removeItem('postLoginRedirect');
+      window.location.assign(redirect || 'index.html');
+    } catch (error) {
+      socialStatus.textContent = error.message || 'Connexion sociale impossible.';
+    }
+  }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      script.onload = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+  }
+
+  async function configureSocialAuthentication() {
+    const available = [];
+    if (publicConfig.googleClientId) {
+      available.push('Gmail');
+      await loadScript('https://accounts.google.com/gsi/client');
+      window.google.accounts.id.initialize({
+        client_id: publicConfig.googleClientId,
+        callback: ({ credential }) => finishSocialAuthentication('/auth/google', { idToken: credential })
+      });
+      window.google.accounts.id.renderButton(document.getElementById('google-auth-button'), {
+        type: 'standard', theme: 'outline', size: 'large', text: 'continue_with', width: 320, locale: 'fr'
+      });
+    }
+
+    if (publicConfig.appleClientId && publicConfig.appleRedirectUri) {
+      available.push('iCloud');
+      await loadScript('https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/fr_FR/appleid.auth.js');
+      window.AppleID.auth.init({
+        clientId: publicConfig.appleClientId,
+        scope: 'name email',
+        redirectURI: publicConfig.appleRedirectUri,
+        usePopup: true
+      });
+      const appleButton = document.getElementById('apple-auth-button');
+      appleButton.classList.remove('hidden');
+      appleButton.classList.add('flex');
+      appleButton.addEventListener('click', async () => {
+        try {
+          const result = await window.AppleID.auth.signIn();
+          const identityToken = result?.authorization?.id_token;
+          const name = result?.user?.name;
+          const fullName = name ? [name.firstName, name.lastName].filter(Boolean).join(' ') : undefined;
+          if (!identityToken) throw new Error('Jeton iCloud manquant');
+          await finishSocialAuthentication('/auth/apple', { identityToken, ...(fullName ? { fullName } : {}) });
+        } catch (error) {
+          if (error?.error !== 'popup_closed_by_user') socialStatus.textContent = error.message || 'Connexion iCloud impossible.';
+        }
+      });
+    }
+    if (!available.length) socialStatus.textContent = 'Gmail et iCloud seront disponibles après configuration de leurs identifiants de production.';
   }
 
   document.querySelectorAll('[data-auth-view]').forEach((tab) => {
@@ -104,5 +173,12 @@
     authenticate('/auth/register', registerForm);
   });
 
-  configureTurnstile();
+  fetch(`${API_CONFIG.baseURL}/public-config`)
+    .then((response) => response.ok ? response.json() : {})
+    .then(async (config) => {
+      publicConfig = config;
+      await configureTurnstile();
+      await configureSocialAuthentication();
+    })
+    .catch(() => { socialStatus.textContent = 'Connexion par e-mail disponible.'; });
 }());
