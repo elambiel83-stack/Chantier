@@ -24,6 +24,11 @@ ALTER TABLE product ADD COLUMN IF NOT EXISTS vendor_id UUID;
 -- Permet à un partenaire de suspendre une annonce sans la supprimer (ce qui casserait la
 -- référence order_item.product_id des commandes déjà passées).
 ALTER TABLE product ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+-- Tarification marketplace: le partenaire propose un prix de base, puis
+-- l'administrateur applique la commission MonChantier avant publication.
+ALTER TABLE product ADD COLUMN IF NOT EXISTS submitted_price_usd NUMERIC(10,2);
+ALTER TABLE product ADD COLUMN IF NOT EXISTS platform_fee_percent NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK (platform_fee_percent BETWEEN 0 AND 100);
+ALTER TABLE product ADD COLUMN IF NOT EXISTS pricing_status TEXT NOT NULL DEFAULT 'platform' CHECK (pricing_status IN ('platform', 'pending', 'approved', 'rejected'));
 
 CREATE TABLE IF NOT EXISTS currency_rate (
   currency CHAR(3) PRIMARY KEY CHECK (currency IN ('USD', 'CDF', 'EUR')),
