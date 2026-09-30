@@ -2838,7 +2838,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2849,7 +2849,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2860,7 +2860,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2871,7 +2871,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2882,7 +2882,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2893,7 +2893,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2904,7 +2904,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2915,7 +2915,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2926,7 +2926,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2937,7 +2937,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2948,7 +2948,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2959,7 +2959,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "etudes"
   },
   {
@@ -2970,7 +2970,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -2981,7 +2981,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -2992,7 +2992,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3003,7 +3003,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3014,7 +3014,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3025,7 +3025,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3036,7 +3036,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3047,7 +3047,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3058,7 +3058,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3069,7 +3069,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3080,7 +3080,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3091,7 +3091,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3102,7 +3102,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3113,7 +3113,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3124,7 +3124,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3135,7 +3135,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3146,7 +3146,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3157,7 +3157,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3168,7 +3168,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3179,7 +3179,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3190,7 +3190,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3201,7 +3201,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3212,7 +3212,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3223,7 +3223,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3234,7 +3234,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3245,7 +3245,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3256,7 +3256,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3267,7 +3267,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "travaux"
   },
   {
@@ -3278,7 +3278,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3289,7 +3289,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3300,7 +3300,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3311,7 +3311,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3322,7 +3322,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3333,7 +3333,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3344,7 +3344,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3355,7 +3355,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3366,7 +3366,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3377,7 +3377,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3388,7 +3388,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "logistique"
   },
   {
@@ -3399,7 +3399,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3410,7 +3410,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3421,7 +3421,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3432,7 +3432,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3443,7 +3443,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3454,7 +3454,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3465,7 +3465,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3476,7 +3476,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3487,7 +3487,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3498,7 +3498,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3509,7 +3509,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3520,7 +3520,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3531,7 +3531,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "maintenance"
   },
   {
@@ -3542,7 +3542,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "numerique"
   },
   {
@@ -3553,7 +3553,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "numerique"
   },
   {
@@ -3564,7 +3564,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "numerique"
   },
   {
@@ -3575,7 +3575,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "numerique"
   },
   {
@@ -3586,7 +3586,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "numerique"
   },
   {
@@ -3597,7 +3597,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "numerique"
   },
   {
@@ -3608,7 +3608,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "numerique"
   },
   {
@@ -3619,7 +3619,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "numerique"
   },
   {
@@ -3630,7 +3630,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3641,7 +3641,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3652,7 +3652,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3663,7 +3663,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3674,7 +3674,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3685,7 +3685,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3696,7 +3696,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3707,7 +3707,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3718,7 +3718,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3729,7 +3729,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3740,7 +3740,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3751,7 +3751,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3762,7 +3762,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3773,7 +3773,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3784,7 +3784,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3795,7 +3795,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3806,7 +3806,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3817,7 +3817,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3828,7 +3828,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3839,7 +3839,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3850,7 +3850,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   },
   {
@@ -3861,7 +3861,7 @@ const CONSTRUCTION_CATALOG = [
     "price": 0,
     "img": "assets/mesproduits.png",
     "category": "services",
-    "stock": 9999,
+    "stock": 0,
     "catalog_group": "metiers"
   }
 ];
