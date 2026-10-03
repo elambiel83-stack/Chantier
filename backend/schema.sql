@@ -399,3 +399,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS btp_settlement_purpose_idx ON btp_settlement(o
 ALTER TABLE order_item ADD COLUMN IF NOT EXISTS quote_description TEXT;
 ALTER TABLE order_item ADD COLUMN IF NOT EXISTS quote_unit TEXT;
 ALTER TABLE order_item ADD COLUMN IF NOT EXISTS line_total_usd NUMERIC(14,2) CHECK (line_total_usd >= 0);
+
+-- Public directory is opt-in; legal/contact documents remain outside public profiles.
+CREATE TABLE IF NOT EXISTS vendor_public_profile (
+ vendor_id UUID PRIMARY KEY REFERENCES vendor(id) ON DELETE CASCADE,
+ trade_ids TEXT[] NOT NULL,
+ specialties TEXT[] NOT NULL DEFAULT '{}',
+ zones TEXT[] NOT NULL,
+ description TEXT NOT NULL,
+ references_text TEXT NOT NULL DEFAULT '',
+ rate_notes TEXT NOT NULL DEFAULT '',
+ availability TEXT NOT NULL CHECK(availability IN ('available','limited','unavailable')),
+ published BOOLEAN NOT NULL DEFAULT false,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ CHECK(cardinality(trade_ids)>0 AND cardinality(zones)>0)
+);
+CREATE INDEX IF NOT EXISTS vendor_public_profile_trades_idx ON vendor_public_profile USING GIN(trade_ids);
+ALTER TABLE btp_quote ADD COLUMN IF NOT EXISTS target_vendor_id UUID REFERENCES vendor(id);
+ALTER TABLE btp_quote ADD COLUMN IF NOT EXISTS requested_trade_id TEXT;
+CREATE INDEX IF NOT EXISTS btp_quote_target_idx ON btp_quote(target_vendor_id);

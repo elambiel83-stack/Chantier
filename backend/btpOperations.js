@@ -2,6 +2,7 @@
 const { z } = require('zod');
 const { calculateQuote, precision } = require('./btpMoney');
 const { offers } = require('../web/launch-catalog');
+const { tradeIds } = require('./partnerDirectory');
 const uuid = z.string().uuid();
 const text = z.string().trim().min(2).max(2000);
 const amount = z.number().min(0).max(1000000).refine(v => precision(v, 2));
@@ -44,18 +45,23 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
     res.json({ success: true, quotes: req.auth.role==='admin' ? result.rows : result.rows.map(q => ['sent','accepted','rejected'].includes(q.status) ? q : {...q,total_usd:null,valid_until:null}) });
   }));
   app.post('/api/btp/quotes', requireAuthentication, requireRole('admin', 'customer'), wrap(async (req, res) => {
-    const b = parse(z.object({ customerId: uuid.optional(), request: text, destination: text }).strict(), req.body);
+    const b = parse(z.object({ customerId: uuid.optional(), targetVendorId: uuid.optional(), requestedTradeId: z.string().refine(x=>tradeIds.has(x)).optional(), request: text, destination: text }).strict(), req.body);
     const customerId = req.auth.role === 'customer' ? req.auth.customerId : b.customerId;
     if (!customerId) fail(400, 'Client requis');
     const quote = await transaction(async c => {
       await queryOne(c, 'SELECT id FROM customer WHERE id=$1', [customerId], 'Client');
-      const q = (await c.query('INSERT INTO btp_quote(customer_id,request,destination,created_by) VALUES($1,$2,$3,$4) RETURNING *', [customerId,b.request,b.destination,req.auth.userId])).rows[0];
+      if(b.requestedTradeId&&!b.targetVendorId) fail(400,'Partenaire requis pour un métier ciblé');
+      if(b.targetVendorId){
+        const target=await queryOne(c,"SELECT p.trade_ids FROM vendor v JOIN vendor_public_profile p ON p.vendor_id=v.id JOIN user_account u ON u.id=v.user_id WHERE v.id=$1 AND v.is_active=true AND p.published=true AND u.is_active=true AND u.role='vendor' FOR SHARE OF v,p,u",[b.targetVendorId],'Partenaire publié');
+        if(b.requestedTradeId&&!target.trade_ids.includes(b.requestedTradeId)) fail(400,'Métier non proposé par ce partenaire');
+      }
+      const q = (await c.query('INSERT INTO btp_quote(customer_id,request,destination,created_by,target_vendor_id,requested_trade_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING *', [customerId,b.request,b.destination,req.auth.userId,b.targetVendorId||null,b.requestedTradeId||null])).rows[0];
       await event(c,'quote',q.id,req,'requested'); return q;
     }); res.status(201).json({ success: true, quote });
   }));
   app.get('/api/btp/quotes/:id', requireAuthentication, wrap(async (req, res) => {
     const id = parse(uuid,req.params.id), f = scope(req,'quote');
-    const q = await queryOne(database,`SELECT q.* FROM btp_quote q WHERE ${f.sql} AND q.id=$${f.values.length+1}`,[...f.values,id],'Devis');
+    const q = await queryOne(database,`SELECT q.*,v.business_name AS target_vendor_name FROM btp_quote q LEFT JOIN vendor v ON v.id=q.target_vendor_id WHERE ${f.sql} AND q.id=$${f.values.length+1}`,[...f.values,id],'Devis');
     const revisions = (await database.query('SELECT * FROM btp_quote_revision WHERE quote_id=$1 ORDER BY revision',[id])).rows;
     res.json({ success:true, quote:q, revisions:req.auth.role === 'admin' ? revisions : (['sent','accepted','rejected'].includes(q.status) ? revisions.filter(r=>r.revision===q.revision).map(publicRevision) : []) });
   }));

@@ -1,0 +1,13 @@
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ma fiche métier — Chantier.online</title><link rel="stylesheet" href="styles.css"><link rel="stylesheet" href="operations.css"><link rel="icon" href="assets/chantier-icon.svg"><script src="config.js"></script></head><body>
+<header class="ops-header"><a class="site-brand" href="index.html"><img src="assets/chantier-logo.svg" alt="Chantier.online"></a><nav><a href="vendor.html">Mon espace partenaire</a><a href="professionals.html">Annuaire des professionnels</a></nav></header>
+<main class="ops-main"><h1>Ma fiche métier</h1><p id="profile-status" role="status" aria-live="polite">Chargement…</p><form id="profile-form" class="ops-card ops-form" hidden>
+<p>Présentez uniquement des informations destinées au public. Vos tarifs sont indicatifs : le prix final est confirmé dans le devis préparé par Chantier.online. La publication ne constitue pas une certification.</p>
+<fieldset><legend>Métiers proposés — plusieurs choix possibles</legend><div id="trade-options" class="trade-grid"></div></fieldset>
+<label>Spécialités — une par ligne<textarea id="specialties" rows="3" maxlength="2400" placeholder="Portes métalliques&#10;Charpentes"></textarea></label>
+<label>Zones d’intervention — une par ligne<textarea id="zones" rows="3" required maxlength="2400" placeholder="Kolwezi&#10;Lualaba"></textarea></label>
+<label>Présentation<textarea id="description" rows="5" required minlength="20" maxlength="3000"></textarea></label>
+<label>Réalisations et références publiques<textarea id="references" rows="4" maxlength="3000" placeholder="Types de projets réalisés ; ne publiez pas les coordonnées privées de clients"></textarea></label>
+<label>Conditions tarifaires indicatives<textarea id="rate-notes" rows="3" maxlength="2000" placeholder="Tarif sur visite ; déplacement et fournitures à préciser"></textarea></label>
+<label>Disponibilité<select id="availability"><option value="available">Disponible</option><option value="limited">Disponibilité limitée</option><option value="unavailable">Indisponible actuellement</option></select></label>
+<label class="ops-check"><input id="published" type="checkbox"> Publier ma fiche dans l’annuaire</label><button>Enregistrer ma fiche</button></form>
+<section class="ops-card" id="targeted-section" hidden><h2>Demandes adressées à mon entreprise</h2><p>Chantier.online coordonne le chiffrage et l’acceptation. Contactez l’équipe pour préparer votre proposition.</p><div id="targeted-requests"></div><a href="https://wa.me/243840468602">Contacter Chantier.online</a></section></main><script src="partner-profile.js"></script></body></html>

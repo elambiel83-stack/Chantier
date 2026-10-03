@@ -2458,6 +2458,7 @@ if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 
 // Gestionnaire d'erreurs
 require('./btpOperations').installBtpOperations(app, { database, requireAuthentication, requireRole });
+require('./partnerDirectory').installPartnerDirectory(app, { database, requireAuthentication, requireRole });
 
 app.use((err, req, res, next) => {
   const isCorsError = err.message === 'Origine non autorisée par CORS';

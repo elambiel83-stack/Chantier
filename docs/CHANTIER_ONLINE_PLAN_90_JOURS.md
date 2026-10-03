@@ -99,6 +99,12 @@ réservation du stock ; missions avec chauffeur, planning et preuve de réceptio
 registre des règlements partenaires avec référence de paiement et journal d’audit.
 Voir [le guide opérationnel](BTP_OPERATIONS.md) pour les accès et limites.
 
+### Fiches métiers et annuaire ajoutés
+Fiches partenaires multi-métiers, spécialités, zones, références déclarées,
+conditions tarifaires, disponibilité et publication volontaire. Annuaire filtrable
+et demande de devis ciblée, avec accès aux demandes de son entreprise uniquement.
+Voir [le guide des fiches partenaires](PARTNER_DIRECTORY.md).
+
 ### Backlog fonctionnel
 1. Registre administratif : pièces, références, zones, capacité, validation,
    suspension et accès cloisonnés. Pas de publication de pièces personnelles.
