@@ -205,6 +205,7 @@ app.use(express.static(WEB_DIR, { extensions: ['html'] }));
 
 // Base de données simulée pour les produits
 const { CONSTRUCTION_CATALOG } = require('./constructionCatalog');
+const { offers: LAUNCH_OFFERS, purchaseError } = require('../web/launch-catalog');
 const LEGACY_PRODUCTS = [
   { 
     id: "BRQ-001", 
@@ -332,7 +333,7 @@ const LEGACY_PRODUCTS = [
 ];
 
 // Le catalogue complet remplace désormais l'ancien jeu de démonstration.
-const PRODUCTS = [...LEGACY_PRODUCTS, ...CONSTRUCTION_CATALOG];
+const PRODUCTS = [...LAUNCH_OFFERS, ...LEGACY_PRODUCTS, ...CONSTRUCTION_CATALOG];
 
 
 // Panier synchronisé entre appareils: stocké dans cart_item (table), rattaché au compte
@@ -794,6 +795,7 @@ function syncCatalog() {
 
 function mapProductRow(row) {
   return {
+    ...LAUNCH_OFFERS.find(offer => offer.id === row.id),
     id: row.id,
     name_fr: row.name_fr,
     name_en: row.name_en,
@@ -1056,6 +1058,8 @@ app.put('/api/cart', requireAuthentication, async (req, res, next) => {
     if (quantities.size) {
       const catalog = new Map((await listCatalog()).map((product) => [product.id, product]));
       for (const [id, qty] of quantities) {
+        const offerError = purchaseError(id, qty);
+        if (offerError) return res.status(400).json({ success: false, message: offerError });
         const product = catalog.get(id);
         if (!product || qty > product.stock) {
           return res.status(400).json({
@@ -1627,6 +1631,11 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     const products = new Map(productResult.rows.map((row) => [row.id, row]));
 
     for (const [productId, qty] of quantities) {
+      const offerError = purchaseError(productId, qty);
+      if (offerError) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ success: false, message: offerError });
+      }
       const decrement = await client.query(
         'UPDATE product SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1',
         [qty, productId]

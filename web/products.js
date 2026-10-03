@@ -38,7 +38,7 @@ async function loadProducts() {
   }
   
   // Fallback sur les données locales
-  window.PRODUCTS = LOCAL_PRODUCTS;
+  window.PRODUCTS = [...(window.CHANTIER_LAUNCH_OFFERS || []), ...LOCAL_PRODUCTS];
   return false;
 }
 

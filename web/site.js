@@ -9,9 +9,9 @@
   }
   const FR = {
     eyebrow: "MATÉRIAUX · ARTISANS · LIVRAISON",
-    hero1: "Achetez",
-    hero2: "et matériaux de construction, livrés à votre chantier.",
-    subhero: "Briques, moellon, sable concassé, pavés, ciment, carreaux, faïences — paiement flexible, livraison rapide.",
+    hero1: "Connectez votre",
+    hero2: "aux producteurs, grossistes, transporteurs et professionnels du BTP.",
+    subhero: "Matériaux, services et logistique à Kolwezi/Lualaba. Devis confirmé selon la quantité, la disponibilité et la destination.",
     browse: "Parcourir le catalogue",
     locate: "Partager ma localisation",
     catalog: "Catalogue",
@@ -27,7 +27,7 @@
     removedItems: "Des articles indisponibles ont été retirés de votre panier.",
     contact: "Contacts",
     legal: "Mentions",
-    footerAbout: "E‑commerce de matériaux et services de construction basé à Kolwezi (RDC). Livraison chantier, paiement flexible.",
+    footerAbout: "Le pont entre producteurs, grossistes, transporteurs, logisticiens, acheteurs et prestataires du BTP.",
     cartNote: "Partager votre position aide notre équipe à livrer plus vite — votre commande reste possible sans elle.",
     shareLocationBtn: "Partager ma position",
     locationShared: "Position partagée ✓",
@@ -36,9 +36,9 @@
   };
   const EN = {
     eyebrow: "MATERIALS · CRAFTSPEOPLE · DELIVERY",
-    hero1: "Buy",
-    hero2: "and building materials, delivered to your site.",
-    subhero: "Bricks, rubble, crushed sand, pavers, cement, tiles — flexible payment, fast delivery.",
+    hero1: "Connect your",
+    hero2: "with producers, wholesalers, carriers and construction professionals.",
+    subhero: "Materials, services and logistics in Kolwezi/Lualaba. Quotes confirmed according to quantity, availability and destination.",
     browse: "Browse catalog",
     locate: "Share my location",
     catalog: "Catalog",
@@ -54,7 +54,7 @@
     removedItems: "Unavailable items were removed from your cart.",
     contact: "Contacts",
     legal: "Legal",
-    footerAbout: "E‑commerce for construction materials based in Kolwezi (DRC). Site delivery, flexible payment.",
+    footerAbout: "Connecting producers, wholesalers, carriers, logistics providers, buyers and construction professionals.",
     cartNote: "Sharing your position helps our team deliver faster — your order still works without it.",
     shareLocationBtn: "Share my position",
     locationShared: "Position shared ✓",
@@ -92,7 +92,7 @@
   if (langFrButton) langFrButton.onclick = () => { lang="fr"; localStorage.setItem("lang","fr"); applyI18n(); render(); renderCart(); };
   if (langEnButton) langEnButton.onclick = () => { lang="en"; localStorage.setItem("lang","en"); applyI18n(); render(); renderCart(); };
 
-  const waNumber = "+243999972466";
+  const waNumber = "+243840468602";
   const waBase = "https://wa.me/" + waNumber.replace(/\D/g, "");
   const whatsappBtn = document.getElementById("whatsapp");
   const whatsappFloat = document.getElementById("whatsapp-float");
@@ -276,8 +276,10 @@
     if(!grid) return;
     const q = (search?.value || "").toLowerCase();
     const selectedGroup = catalogGroup?.value || "";
+    const launchOnly = document.getElementById("launch-only")?.checked;
     const items = (window.PRODUCTS || []).filter(p =>
       p.category === currentCategory &&
+      (!launchOnly || p.launchOffer) &&
       (!selectedGroup || p.catalog_group === selectedGroup) &&
       ((p.name_fr + " " + p.name_en).toLowerCase().includes(q))
     );
@@ -287,12 +289,13 @@
         <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${escapeHtml(lang === "fr" ? p.name_fr : p.name_en)}</div>
         <div class="text-slate-500 text-xs sm:text-sm">${escapeHtml(p.id)} · ${escapeHtml(p.unit)}${p.stock ? ' · Stock: ' + escapeHtml(p.stock) : ''}</div>
         ${p.vendorName ? `<div class="text-xs text-red-600 mt-0.5">${lang === 'fr' ? 'Vendu par' : 'Sold by'} ${escapeHtml(p.vendorName)}</div>` : ''}
+        ${p.launchOffer ? `<p class="offer-note">${lang === 'fr' ? 'Offre de lancement · disponibilité à confirmer' : 'Launch offer · availability to confirm'}</p><p class="text-sm">${lang === 'fr' ? 'Minimum' : 'Minimum'} : ${escapeHtml(p.minimumQuantity)} ${escapeHtml(p.unit)}</p><p class="text-sm">${lang === 'fr' ? 'Transport confirmé sur devis selon la destination.' : 'Delivery confirmed by destination quote.'}</p>` : ''}
         <div class="mt-2 text-lg sm:text-xl font-bold">${Number(p.price) > 0 ? money(p.price) : (lang === 'fr' ? 'Sur devis' : 'On request')}</div>
         <div class="mt-3 sm:mt-4 flex gap-2">
-          ${Number(p.price) > 0 && Number(p.stock) > 0 ? `
+          ${!p.quoteOnly && Number(p.price) > 0 && Number(p.stock) > 0 ? `
             <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${escapeHtml(p.id)}">
             <button class="dark-button flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
-          ` : `<a class="flex-1 px-3 py-2 rounded-lg bg-red-600 text-white text-center text-xs sm:text-sm" href="https://wa.me/243999972466?text=${encodeURIComponent('Bonjour Chantier.online, je souhaite un devis pour ' + p.name_fr)}">${lang === 'fr' ? 'Demander un devis' : 'Request a quote'}</a>`}
+          ` : `<a class="flex-1 px-3 py-2 rounded-lg bg-red-600 text-white text-center text-xs sm:text-sm" href="https://wa.me/243840468602?text=${encodeURIComponent('Bonjour Chantier.online, je souhaite un devis pour ' + p.name_fr + '. Quantité : ' + (p.minimumQuantity || '') + '. Destination : . Date souhaitée : .' )}">${lang === 'fr' ? 'Demander un devis' : 'Request a quote'}</a>`}
         </div>
       </div>
     `).join("");
@@ -322,12 +325,14 @@
   }
   tabs.forEach(t => t.addEventListener('click', ()=> setCategory(t.dataset.category)));
   catalogGroup?.addEventListener('change', render);
+  document.getElementById('launch-only')?.addEventListener('change', render);
   setCategory(currentCategory);
 
   window.addToCart = function(id){
     const qEl = document.getElementById("qty-"+id);
     const qty = Math.max(1, parseInt(qEl?.value||"1",10));
     const product = window.PRODUCTS.find(x=>x.id===id);
+    if (!product || product.quoteOnly) { alert(lang === 'fr' ? 'Demandez un devis confirmé pour cette offre.' : 'Request a confirmed quote for this offer.'); return; }
     const cart = readCart();
     const idx = cart.findIndex(x=>x.id===id);
     if(idx>=0){ cart[idx].qty += qty; } else { cart.push({id, qty}); }

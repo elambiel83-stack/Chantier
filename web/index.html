@@ -33,7 +33,7 @@
   <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-white focus:px-3 focus:py-2 focus:text-slate-900">Aller au contenu principal</a>
   <header class="bg-white shadow-sm sticky top-0 z-30">
     <div class="site-header-inner max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
-      <a href="index.html" class="site-brand" aria-label="Chantier.online — Accueil"><img src="assets/chantier-logo.svg" alt="Chantier.online — Tout pour bâtir." width="600" height="122"></a>
+      <a href="index.html" class="site-brand" aria-label="Chantier.online — Accueil"><img src="assets/chantier-logo.svg" alt="Chantier.online — Tout pour bâtir." width="1320" height="350"></a>
       <nav class="flex items-center gap-1 md:gap-4">
         <button id="lang-fr" type="button" class="px-2 md:px-3 py-1 rounded border text-sm md:text-base">FR</button>
         <button id="lang-en" type="button" class="px-2 md:px-3 py-1 rounded border text-sm md:text-base">EN</button>
@@ -43,6 +43,7 @@
           <option value="CDF">CDF</option>
           <option value="EUR">EUR</option>
         </select>
+          <a href="partners.html" class="px-2 md:px-3 py-2 rounded-lg border text-sm">Notre réseau</a>
           <a href="import.html" class="px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Importer</a>
           <a href="tickets.html" class="px-2 md:px-3 py-2 rounded-lg border text-sm md:text-base">Support</a>
           <a href="cart.html" class="px-2 md:px-4 py-2 rounded-lg border text-sm md:text-base">Panier <span id="cart-count" class="hidden rounded-full bg-red-600 px-2 py-0.5 text-xs text-white">0</span></a>
@@ -55,7 +56,7 @@
           <a id="auth-link" href="auth.html" class="px-2 md:px-3 py-2 rounded-lg border border-slate-900 text-sm md:text-base">Connexion</a>
           <button id="logout-button" type="button" class="hidden px-2 py-2 text-sm font-medium text-slate-600 hover:text-red-700" title="Se déconnecter">Déconnexion</button>
         </div>
-        <a id="whatsapp" href="https://wa.me/243999972466" target="_blank" rel="noopener noreferrer" class="signal-button px-2 md:px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 text-sm md:text-base">
+        <a id="whatsapp" href="https://wa.me/243840468602" target="_blank" rel="noopener noreferrer" class="signal-button px-2 md:px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 text-sm md:text-base">
           <span class="hidden sm:inline">WhatsApp</span>
           <span class="sm:hidden">💬</span>
         </a>
@@ -69,8 +70,8 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-center hero-layout">
           <div class="flex flex-col justify-center">
             <p class="hero-eyebrow" data-i18n="eyebrow">MATÉRIAUX · ARTISANS · LIVRAISON</p>
-            <h1 class="text-3xl md:text-4xl lg:text-5xl font-extrabold leading-tight"><span data-i18n="hero1">Achetez</span> <span class="text-red-600">agrégats</span> <span data-i18n="hero2">et matériaux de construction, livrés à votre chantier.</span></h1>
-            <p class="mt-4 text-slate-600 text-sm md:text-base" data-i18n="subhero">Briques, moellon, sable concassé, pavés, ciment, carreaux, faïences — paiement flexible, livraison rapide.</p>
+            <h1 class="text-3xl md:text-4xl lg:text-5xl font-extrabold leading-tight"><span data-i18n="hero1">Connectez votre</span> <span class="text-red-600">chantier</span> <span data-i18n="hero2">aux producteurs, grossistes, transporteurs et professionnels du BTP.</span></h1>
+            <p class="mt-4 text-slate-600 text-sm md:text-base" data-i18n="subhero">Matériaux, services et logistique à Kolwezi/Lualaba. Devis confirmé selon la quantité, la disponibilité et la destination.</p>
             <div class="mt-6 flex flex-col sm:flex-row gap-3">
               <a href="#catalog" class="dark-button px-4 md:px-5 py-3 rounded-xl bg-slate-900 text-white hover:bg-black text-center text-sm md:text-base" data-i18n="browse">Parcourir le catalogue</a>
               <button id="shareLocation" type="button" class="outline-button px-4 md:px-5 py-3 rounded-xl border text-center text-sm md:text-base hover:bg-slate-50" data-i18n="locate">Partager ma localisation</button>
@@ -83,6 +84,12 @@
       </div>
     </section>
 
+    <section class="network-intro max-w-6xl mx-auto px-4 mt-12">
+      <h2>Le pont entre les acteurs du BTP</h2>
+      <p>Producteurs, grossistes, transporteurs, logisticiens, acheteurs et prestataires : un interlocuteur pour coordonner vos besoins.</p>
+      <div class="network-steps"><div><strong>1. Décrivez votre besoin</strong><p>Produit ou service, quantité, destination et date.</p></div><div><strong>2. Recevez un devis confirmé</strong><p>Offre, disponibilité, transport et conditions détaillés.</p></div><div><strong>3. Suivez l’exécution</strong><p>Coordination des partenaires et confirmation de réception.</p></div></div>
+      <a href="partners.html" class="dark-button network-cta">Découvrir le réseau / Proposer un partenariat</a>
+    </section>
     <section id="catalog" class="mt-12 max-w-6xl mx-auto px-4">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-6">
         <div class="flex-1">
@@ -104,6 +111,8 @@
           <input id="search" type="search" class="border rounded-xl px-4 py-2 w-full md:w-64" placeholder="Rechercher...">
         </div>
       </div>
+      <label class="launch-filter"><input type="checkbox" id="launch-only" checked> Afficher uniquement les offres de lancement</label>
+      <p class="catalog-disclaimer">Autres références : catalogue de recherche à confirmer auprès des partenaires. Visuels illustratifs ; photos réelles à compléter.</p>
       <div id="grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6"></div>
     </section>
   </main>
@@ -112,12 +121,12 @@
     <div class="max-w-6xl mx-auto px-4 grid sm:grid-cols-2 md:grid-cols-3 gap-6">
       <div>
         <div class="font-bold">CHANTIER<span class="brand-domain">.online</span></div><p class="brand-tagline">Tout pour bâtir.</p>
-        <p class="text-slate-600 mt-2 text-sm" data-i18n="footerAbout">E‑commerce de matériaux et services de construction. Livraison sur chantier, paiement flexible.</p>
+        <p class="text-slate-600 mt-2 text-sm" data-i18n="footerAbout">Le pont entre les acteurs du BTP. Matériaux, services et logistique à Kolwezi/Lualaba.</p>
       </div>
       <div>
         <div class="font-semibold" data-i18n="contact">Contacts</div>
         <ul class="text-slate-600 mt-2 space-y-1 text-sm">
-          <li>WhatsApp: <a class="text-red-600" href="#" id="waLink">+243 999 972 466</a></li>
+          <li>WhatsApp: <a class="text-red-600" href="#" id="waLink">+243 840 468 602</a></li>
           <li>Email: <a class="text-red-600 break-all" href="mailto:contact@monchantier.com">contact@monchantier.com</a></li>
           <li><a href="https://chantier.online" target="_blank">Visiter le site</a></li>
           <li>République Démocratique du Congo</li>
@@ -143,6 +152,7 @@
     </svg>
   </a>
 
+  <script src="launch-catalog.js"></script>
   <script src="products.js"></script>
   <script src="site.js"></script>
 

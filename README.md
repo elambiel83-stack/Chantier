@@ -1,3 +1,11 @@
+# Chantier.online — Tout pour bâtir.
+
+Plateforme de coordination BTP à Kolwezi/Lualaba : producteurs, grossistes, transporteurs, logisticiens, acheteurs et prestataires.
+
+[Plan opérationnel et technique sur 90 jours](docs/CHANTIER_ONLINE_PLAN_90_JOURS.md) · [Page réseau](web/partners.html)
+
+Offres de lancement et prix des blocs intégrés. Disponibilité et transport à confirmer sur devis. WhatsApp : +243 840 468 602.
+
 # Chantier
 vente en ligne des matériaux et services de construction
 

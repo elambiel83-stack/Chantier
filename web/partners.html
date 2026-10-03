@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Réseau BTP et partenariats — Chantier.online</title><script src="https://cdn.tailwindcss.com"></script><link rel="stylesheet" href="styles.css"><link rel="icon" href="assets/chantier-icon.svg"></head>
+<body><header><div class="max-w-6xl mx-auto px-4 py-4 flex flex-wrap gap-4 items-center justify-between"><a href="index.html" class="site-brand"><img src="assets/chantier-logo.svg" alt="Chantier.online — Tout pour bâtir."></a><a href="index.html#catalog">Catalogue</a></div></header>
+<main class="max-w-6xl mx-auto px-4 py-10"><h1 class="text-3xl font-bold">Un réseau pour approvisionner et réaliser vos chantiers</h1><p class="mt-4">Notre lancement se concentre sur Kolwezi/Lualaba. Chaque offre dépend de la disponibilité du partenaire, du transport et des conditions convenues.</p>
+<div class="network-steps">
+<div><h2 class="font-bold">Producteurs</h2><p>Proposez vos matériaux, tarifs, capacité de production et délais.</p></div>
+<div><h2 class="font-bold">Grossistes</h2><p>Présentez votre gamme, votre stock et vos conditions commerciales.</p></div>
+<div><h2 class="font-bold">Transporteurs</h2><p>Indiquez vos véhicules, capacités utiles, trajets et tarifs.</p></div>
+<div><h2 class="font-bold">Logisticiens</h2><p>Coordonnez chargement, déchargement, stockage et livraisons.</p></div>
+<div><h2 class="font-bold">Prestataires BTP</h2><p>Présentez vos métiers, réalisations, références et disponibilités.</p></div>
+<div><h2 class="font-bold">Acheteurs</h2><p>Décrivez vos besoins pour obtenir un devis adapté au chantier.</p></div>
+</div>
+<section class="max-w-3xl page-surface p-6"><h2 class="text-2xl font-bold">Proposer un partenariat ou un besoin</h2><p class="my-4">Ce formulaire prépare un message WhatsApp à vérifier et envoyer par vous. Il ne crée pas de compte ni de statut « partenaire vérifié ». La validation intervient après examen par Chantier.online.</p>
+<form id="partner-form" class="partner-form">
+<label>Votre rôle<select id="partner-role" required><option value="">Choisir</option><option>Producteur</option><option>Grossiste</option><option>Transporteur</option><option>Logisticien</option><option>Prestataire BTP</option><option>Acheteur</option></select></label>
+<label>Nom ou entreprise<input id="partner-name" maxlength="120" required autocomplete="organization"></label>
+<label>Téléphone<input id="partner-phone" type="tel" maxlength="30" required autocomplete="tel"></label>
+<label>Ville et zones couvertes<input id="partner-zone" maxlength="200" required></label>
+<label>Produits, services ou besoins<textarea id="partner-details" rows="5" maxlength="2000" required placeholder="Quantités ou capacités, tarifs, unités, délai, destination, date souhaitée…"></textarea></label>
+<p class="text-sm">Ces informations seront transmises dans une conversation WhatsApp. N’ajoutez pas de document d’identité ni de coordonnées bancaires à cette première demande.</p>
+<button type="submit" class="dark-button text-white px-5 py-3">Préparer ma demande sur WhatsApp</button><p id="partner-status" role="status"></p>
+</form></section>
+<p class="mt-8">Partenaire déjà inscrit ? <a class="text-red-600" href="vendor.html">Ouvrir mon espace partenaire</a></p>
+</main><footer class="py-8"><div class="max-w-6xl mx-auto px-4">Chantier.online · Tout pour bâtir. · <a href="https://wa.me/243840468602">+243 840 468 602</a></div></footer><script src="partners.js"></script></body></html>

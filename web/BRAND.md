@@ -1,6 +1,6 @@
 # Chantier.online
 
-Identité : « Tout pour bâtir. », symbole C composé de blocs, bleu nuit #14283F,
+Identité : « Tout pour bâtir. », casque au-dessus de trois bâtiments, bleu nuit #14283F,
 orange #F47B20 et blanc. Le logo principal est `assets/chantier-logo.svg` ;
 la variante claire est `assets/chantier-logo-light.svg` et le symbole est
 `assets/chantier-mark.svg`. Icônes PWA PNG 192/512 et icône Apple 180.
@@ -21,3 +21,5 @@ Chromium indisponible dans l'environnement de travail.
 Les adresses de contact, URLs d'API, clés de stockage, paiements et protections
 d'accès restent ceux de l'application existante. Configurer séparément le DNS,
 l'hébergement et les origines autorisées pour chantier.online.
+
+Le logo casque/bâtiments remplace le C. Texte converti en tracés ; typographie reconstruite à partir du visuel choisi.

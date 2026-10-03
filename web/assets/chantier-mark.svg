@@ -1,1 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 122" role="img"><title>Chantier.online — Tout pour bâtir.</title><path fill="#14283F" d="M48 4 88 27v22L67 37 48 26 27 38v44l21 12v24L6 94V34z"/><path fill="#F47B20" d="m6 28 21-12 21 12-21 12zM48 48l21-12v24zM48 70l21-12 21 12-21 12v24L48 118V94l-21-12z"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 350"><title>Chantier.online</title><ns0:g xmlns:ns0="http://www.w3.org/2000/svg" transform="translate(20 10)">
+<ns0:path fill="#F47B20" d="M128 14Q150 8 172 14Q178 16 178 27L175 119L191 124L195 32C246 58 272 98 274 143Q300 155 300 188L150 124L0 188Q0 157 25 142C27 98 53 57 105 32L109 124L125 119L122 27Q122 17 128 14Z" />
+<ns0:path fill="#14283F" d="M109 162L150 136L190 162V319Q150 325 109 319ZM31 215L92 186V314L31 296ZM208 187L269 215V296L208 314Z" />
+</ns0:g></svg>

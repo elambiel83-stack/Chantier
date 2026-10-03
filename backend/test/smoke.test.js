@@ -188,3 +188,23 @@ test('POST /api/auth/verification/confirm sans base de données répond 503', as
   });
   assert.equal(response.status, 503);
 });
+
+test('launch API exposes confirmed block prices and quote terms', async () => {
+  for (const [id, price] of [['CH-BLC-15', 1.3], ['CH-BLC-20', 1.5]]) {
+    const response = await fetch(`${BASE_URL}/api/products/${id}`);
+    assert.equal(response.status, 200);
+    const { product } = await response.json();
+    assert.equal(product.price, price);
+    assert.equal(product.minimumQuantity, 100);
+    assert.equal(product.quoteOnly, true);
+    assert.equal(product.deliveryTerms, 'destination_quote');
+  }
+});
+test('partner page and shared catalogue are served by backend', async () => {
+  const response = await fetch(`${BASE_URL}/partners.html`);
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /243840468602/);
+  const catalog = await fetch(`${BASE_URL}/launch-catalog.js`);
+  assert.equal(catalog.status, 200);
+  assert.match(await catalog.text(), /CH-BLC-20/);
+});

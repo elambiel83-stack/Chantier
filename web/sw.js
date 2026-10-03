@@ -1,7 +1,7 @@
 // Service Worker MonChantier
 // Règle de base: le code de l'application passe par le réseau en premier (sinon une
 // correction ne parvient jamais au navigateur), les fichiers immuables par le cache.
-const VERSION = 'v3-chantier-brand';
+const VERSION = 'v4-chantier-network';
 const SHELL_CACHE = `monchantier-shell-${VERSION}`;
 const ASSET_CACHE = `monchantier-assets-${VERSION}`;
 const API_CACHE = `monchantier-api-${VERSION}`;
@@ -15,7 +15,10 @@ const SHELL_URLS = [
   '/privacy.html',
   '/terms.html',
   '/config.js',
+  '/launch-catalog.js',
   '/products.js',
+  '/partners.html',
+  '/partners.js',
   '/site.js',
   '/auth.js',
   '/styles.css',
