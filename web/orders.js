@@ -125,7 +125,7 @@
           content.innerHTML = detail.items.map((item) => `
             <div class="flex justify-between">
               <span>${escapeHtml(item.name_fr)} × ${item.qty} ${escapeHtml(item.unit)}${item.vendor_name ? ` <span class="text-slate-400">(${escapeHtml(item.vendor_name)} · ${escapeHtml(item.vendor_status)})</span>` : ''}</span>
-              <span>${(item.qty * item.unit_price_usd).toFixed(2)} USD</span>
+              <span>${Number(item.line_total_usd ?? (item.qty * item.unit_price_usd)).toFixed(2)} USD</span>
             </div>
           `).join('') || '<p class="text-slate-500">Aucun article.</p>';
           loaded = true;

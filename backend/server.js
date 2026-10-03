@@ -1545,14 +1545,14 @@ app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor'), requ
   try {
     const result = await database.query(
       `SELECT order_item.id, order_item.qty, order_item.unit_price_usd, order_item.vendor_status,
-              product.name_fr, product.name_en, product.unit,
+              COALESCE(order_item.quote_description, product.name_fr) AS name_fr, COALESCE(order_item.quote_description, product.name_en) AS name_en, COALESCE(order_item.quote_unit, product.unit) AS unit, order_item.line_total_usd,
               orders.id AS order_id, orders.status AS order_status, orders.currency, orders.created_at,
               orders.delivery_latitude, orders.delivery_longitude,
               customer.full_name, customer.phone
        FROM order_item
        JOIN orders ON orders.id = order_item.order_id
        JOIN customer ON customer.id = orders.customer_id
-       JOIN product ON product.id = order_item.product_id
+       LEFT JOIN product ON product.id = order_item.product_id
        WHERE order_item.vendor_id = $1
        ORDER BY orders.created_at DESC`,
       [req.auth.vendorId]
@@ -1957,10 +1957,10 @@ app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) =>
     if (!orderResult.rowCount) return res.status(404).json({ success: false, message: 'Commande introuvable' });
     const itemsResult = await database.query(
       `SELECT order_item.product_id AS id, order_item.qty, order_item.unit_price_usd, order_item.vendor_status,
-              product.name_fr, product.name_en, product.unit,
+              COALESCE(order_item.quote_description, product.name_fr) AS name_fr, COALESCE(order_item.quote_description, product.name_en) AS name_en, COALESCE(order_item.quote_unit, product.unit) AS unit, order_item.line_total_usd,
               vendor.business_name AS vendor_name
        FROM order_item
-       JOIN product ON product.id = order_item.product_id
+       LEFT JOIN product ON product.id = order_item.product_id
        LEFT JOIN vendor ON vendor.id = order_item.vendor_id
        WHERE order_item.order_id = $1 ORDER BY product.name_fr`,
       [req.params.orderId]
@@ -2032,8 +2032,9 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
     if (parsed.data.status === 'cancelled') {
       // Les quantités réservées à la création de la commande retournent au stock.
       await client.query(
-        `UPDATE product SET stock_qty = product.stock_qty + order_item.qty
-         FROM order_item WHERE order_item.order_id = $1 AND product.id = order_item.product_id`,
+        `UPDATE product SET stock_qty = product.stock_qty + reserved.qty
+         FROM (SELECT product_id, SUM(qty) AS qty FROM order_item WHERE order_id = $1 GROUP BY product_id) reserved
+         WHERE product.id = reserved.product_id`,
         [req.params.orderId]
       );
     }
@@ -2456,6 +2457,8 @@ app.patch('/api/tickets/:id/assign', requireAuthentication, requireRole('admin')
 if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 
 // Gestionnaire d'erreurs
+require('./btpOperations').installBtpOperations(app, { database, requireAuthentication, requireRole });
+
 app.use((err, req, res, next) => {
   const isCorsError = err.message === 'Origine non autorisée par CORS';
   // Une origine rejetée est un refus attendu, pas un bug: on la journalise sans

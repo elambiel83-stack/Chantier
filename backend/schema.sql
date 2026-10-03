@@ -321,3 +321,81 @@ CREATE INDEX IF NOT EXISTS payment_order_id_idx ON payment(order_id);
 CREATE INDEX IF NOT EXISTS refresh_token_user_id_idx ON refresh_token(user_id);
 CREATE INDEX IF NOT EXISTS verification_code_user_id_idx ON verification_code(user_id);
 CREATE INDEX IF NOT EXISTS cart_item_user_id_idx ON cart_item(user_id);
+
+-- Opérations BTP : devis versionnés, missions et règlements traçables.
+CREATE TABLE IF NOT EXISTS btp_quote (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id UUID NOT NULL REFERENCES customer(id),
+  order_id UUID UNIQUE REFERENCES orders(id),
+  request TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested','draft','sent','accepted','rejected','cancelled')),
+  revision INTEGER NOT NULL DEFAULT 0,
+  created_by UUID NOT NULL REFERENCES user_account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS btp_quote_customer_idx ON btp_quote(customer_id);
+CREATE TABLE IF NOT EXISTS btp_quote_revision (
+  quote_id UUID NOT NULL REFERENCES btp_quote(id),
+  revision INTEGER NOT NULL CHECK (revision > 0),
+  lines JSONB NOT NULL,
+  subtotal_usd NUMERIC(14,2) NOT NULL CHECK (subtotal_usd >= 0),
+  commission_percent NUMERIC(5,2) NOT NULL CHECK (commission_percent BETWEEN 0 AND 100),
+  commission_usd NUMERIC(14,2) NOT NULL CHECK (commission_usd >= 0),
+  transport_usd NUMERIC(14,2) NOT NULL CHECK (transport_usd >= 0),
+  total_usd NUMERIC(14,2) NOT NULL CHECK (total_usd >= 0),
+  terms TEXT NOT NULL,
+  valid_until TIMESTAMPTZ NOT NULL,
+  created_by UUID NOT NULL REFERENCES user_account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (quote_id, revision)
+);
+CREATE TABLE IF NOT EXISTS btp_mission (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  carrier_vendor_id UUID NOT NULL REFERENCES vendor(id),
+  driver_user_id UUID REFERENCES user_account(id),
+  vehicle TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  load_description TEXT NOT NULL,
+  planned_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL DEFAULT 'assigned' CHECK (status IN ('assigned','in_transit','delivered','completed','cancelled')),
+  delivery_proof TEXT,
+  created_by UUID NOT NULL REFERENCES user_account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS btp_mission_order_idx ON btp_mission(order_id);
+CREATE INDEX IF NOT EXISTS btp_mission_driver_idx ON btp_mission(driver_user_id);
+CREATE TABLE IF NOT EXISTS btp_settlement (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID NOT NULL REFERENCES orders(id),
+  vendor_id UUID NOT NULL REFERENCES vendor(id),
+  purpose TEXT NOT NULL,
+  amount_usd NUMERIC(14,2) NOT NULL CHECK (amount_usd > 0),
+  status TEXT NOT NULL DEFAULT 'due' CHECK (status IN ('due','paid','cancelled')),
+  payment_reference TEXT UNIQUE,
+  paid_at TIMESTAMPTZ,
+  created_by UUID NOT NULL REFERENCES user_account(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (status <> 'paid' OR (payment_reference IS NOT NULL AND paid_at IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS btp_settlement_vendor_idx ON btp_settlement(vendor_id);
+CREATE TABLE IF NOT EXISTS btp_operation_event (
+  id BIGSERIAL PRIMARY KEY,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('quote','mission','settlement')),
+  entity_id UUID NOT NULL,
+  actor_id UUID NOT NULL REFERENCES user_account(id),
+  action TEXT NOT NULL,
+  details JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS btp_event_entity_idx ON btp_operation_event(entity_type, entity_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS btp_settlement_purpose_idx ON btp_settlement(order_id,vendor_id,purpose);
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS quote_description TEXT;
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS quote_unit TEXT;
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS line_total_usd NUMERIC(14,2) CHECK (line_total_usd >= 0);

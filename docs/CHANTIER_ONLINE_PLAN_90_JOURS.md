@@ -89,16 +89,22 @@ acquisition. Accès individuels, MFA, journal des changements et validations.
 
 Le formulaire WhatsApp ne crée pas de compte, ne transmet rien sans action de
 l'utilisateur et ne constitue pas une validation ou un registre en base.
-Le stock des offres de lancement reste à 0 pour empêcher la réservation avant
-confirmation. Leur disponibilité annoncée est celle du promoteur, à vérifier.
+Le stock des offres de lancement démarre à 0. Un administrateur renseigne le stock
+physique confirmé avant de convertir un devis accepté en commande. Leur disponibilité
+annoncée est celle du promoteur, à vérifier.
+
+### Modules BTP ajoutés
+Devis persistants et versionnés, acceptation client, conversion en commande avec
+réservation du stock ; missions avec chauffeur, planning et preuve de réception ;
+registre des règlements partenaires avec référence de paiement et journal d’audit.
+Voir [le guide opérationnel](BTP_OPERATIONS.md) pour les accès et limites.
 
 ### Backlog fonctionnel
 1. Registre administratif : pièces, références, zones, capacité, validation,
    suspension et accès cloisonnés. Pas de publication de pièces personnelles.
-2. Devis persistants/versionnés : lignes, transport, commission, validité,
-   acceptation et preuve. Validation obligatoire des modifications.
-3. Missions transport : véhicule, chauffeur, planning, attribution et réception.
-4. Règlements partenaires/rapprochement et journal d'audit.
+2. Étendre les devis et missions livrés : documents PDF et notifications.
+3. Optimisation des tournées et suivi GPS.
+4. Rapprochement automatisé des virements partenaires (registre manuel livré).
 5. Réclamations, annulation/remboursement et suivi qualité.
 6. Dashboards acheteur, producteur/grossiste, prestataire, transporteur/logisticien,
    chauffeur et administrateur. Vérifier les accès serveur, pas seulement les menus.

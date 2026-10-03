@@ -1,0 +1,18 @@
+[hidden] { display: none !important; }
+.ops-header { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; padding: 18px 5%; background: white; }
+.ops-header nav,.ops-tabs { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.ops-main { max-width: 1100px; padding: 24px; margin: auto; }
+h1 { font-size: 30px; } h2 { font-size: 24px; } h3 { margin-top: 0; }
+.ops-card { background: white; border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin: 18px 0; overflow-wrap: anywhere; }
+.ops-form { display: grid; gap: 14px; max-width: 850px; }
+.ops-form label { display: grid; gap: 6px; font-weight: 600; }
+.ops-form input,.ops-form select,.ops-form textarea { width: 100%; padding: 10px; border: 1px solid var(--line); font: inherit; }
+.ops-form textarea { min-height: 90px; }
+.ops-form .ops-check { display: flex; align-items: center; }.ops-check input { width: auto; }
+.ops-tabs { margin: 24px 0; }.ops-tabs button[aria-pressed="true"] { background: var(--brand-orange); color: var(--brand-navy); }
+button { padding: 10px 16px; border: 1px solid var(--line); cursor: pointer; background: var(--brand-navy); color: white; font: inherit; }
+button:disabled { opacity: .6; cursor: wait; }
+.ops-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+.quote-line { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; border-bottom: 1px solid var(--line); padding: 16px 0; }
+#status { padding: 12px 0; font-weight: 600; }.ops-error { color: #B91C1C; }
+@media(max-width:640px) { .ops-main { padding: 16px; }.quote-line { grid-template-columns: 1fr; }.ops-header nav { font-size: 14px; } }

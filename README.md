@@ -2,7 +2,7 @@
 
 Plateforme de coordination BTP à Kolwezi/Lualaba : producteurs, grossistes, transporteurs, logisticiens, acheteurs et prestataires.
 
-[Plan opérationnel et technique sur 90 jours](docs/CHANTIER_ONLINE_PLAN_90_JOURS.md) · [Page réseau](web/partners.html)
+[Plan opérationnel et technique sur 90 jours](docs/CHANTIER_ONLINE_PLAN_90_JOURS.md) · [Page réseau](web/partners.html) · [Suivi des opérations](web/operations.html) · [Guide des modules BTP](docs/BTP_OPERATIONS.md)
 
 Offres de lancement et prix des blocs intégrés. Disponibilité et transport à confirmer sur devis. WhatsApp : +243 840 468 602.
 
