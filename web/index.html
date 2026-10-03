@@ -3,20 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="description" content="MonChantier - E-commerce de matériaux et services de construction. Livraison chantier, paiement flexible.">
-  <meta name="theme-color" content="#dc2626">
+  <meta name="description" content="Chantier.online - E-commerce de matériaux et services de construction. Livraison chantier, paiement flexible.">
+  <meta name="theme-color" content="#14283F">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="MonChantier">
-  <meta name="application-name" content="MonChantier">
-  <meta name="msapplication-TileColor" content="#dc2626">
+  <meta name="apple-mobile-web-app-title" content="Chantier.online">
+  <meta name="application-name" content="Chantier.online">
+  <meta name="msapplication-TileColor" content="#14283F">
   <meta name="msapplication-config" content="/browserconfig.xml">
-  <title>MonChantier &mdash; Agrégats &amp; Matériaux</title>
+  <title>Chantier.online &mdash; Agrégats &amp; Matériaux</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="stylesheet" href="styles.css">
-  <link rel="icon" href="assets/monchantier_logo.svg" type="image/svg+xml">
+  <link rel="icon" href="assets/chantier-icon.svg" type="image/svg+xml">
   <link rel="manifest" href="/site.webmanifest">
-  <meta name="theme-color" content="#dc2626">
+  <meta name="theme-color" content="#14283F">
   <script src="config.js"></script>
   <!-- Google tag (gtag.js) -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18453977660"></script>
@@ -27,15 +27,13 @@
 
     gtag('config', 'AW-18453977660');
   </script>
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 </head>
 <body class="bg-slate-50 text-slate-800">
   <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:bg-white focus:px-3 focus:py-2 focus:text-slate-900">Aller au contenu principal</a>
   <header class="bg-white shadow-sm sticky top-0 z-30">
-    <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
-      <div class="flex items-center gap-2 md:gap-3">
-        <img src="assets/monchantier_logo.svg" alt="MonChantier Logo" class="h-10 w-auto">
-        <div class="brand-name font-bold text-xl">MonChantier</div>
-      </div>
+    <div class="site-header-inner max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+      <a href="index.html" class="site-brand" aria-label="Chantier.online — Accueil"><img src="assets/chantier-logo.svg" alt="Chantier.online — Tout pour bâtir." width="600" height="122"></a>
       <nav class="flex items-center gap-1 md:gap-4">
         <button id="lang-fr" type="button" class="px-2 md:px-3 py-1 rounded border text-sm md:text-base">FR</button>
         <button id="lang-en" type="button" class="px-2 md:px-3 py-1 rounded border text-sm md:text-base">EN</button>
@@ -66,19 +64,20 @@
   </header>
 
   <main id="main-content" class="w-full" tabindex="-1">
-    <section class="hero-panel min-h-screen w-full bg-white pt-8 md:pt-16">
+    <section class="hero-panel w-full bg-white pt-8 md:pt-16">
       <div class="max-w-6xl mx-auto px-4">
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-center min-h-[calc(100vh-100px)]">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-center hero-layout">
           <div class="flex flex-col justify-center">
+            <p class="hero-eyebrow" data-i18n="eyebrow">MATÉRIAUX · ARTISANS · LIVRAISON</p>
             <h1 class="text-3xl md:text-4xl lg:text-5xl font-extrabold leading-tight"><span data-i18n="hero1">Achetez</span> <span class="text-red-600">agrégats</span> <span data-i18n="hero2">et matériaux de construction, livrés à votre chantier.</span></h1>
-            <p class="mt-4 text-slate-600 text-sm md:text-base" data-i18n="subhero">Briques, moellon, sable concassé, pavés, ciment, carreaux, faïences — paiement fléxible, livraison rapide;</p>
+            <p class="mt-4 text-slate-600 text-sm md:text-base" data-i18n="subhero">Briques, moellon, sable concassé, pavés, ciment, carreaux, faïences — paiement flexible, livraison rapide.</p>
             <div class="mt-6 flex flex-col sm:flex-row gap-3">
               <a href="#catalog" class="dark-button px-4 md:px-5 py-3 rounded-xl bg-slate-900 text-white hover:bg-black text-center text-sm md:text-base" data-i18n="browse">Parcourir le catalogue</a>
               <button id="shareLocation" type="button" class="outline-button px-4 md:px-5 py-3 rounded-xl border text-center text-sm md:text-base hover:bg-slate-50" data-i18n="locate">Partager ma localisation</button>
             </div>
           </div>
           <div class="hero-image overflow-hidden h-64 md:h-96">
-            <img src="assets/heromonchantier.png" alt="Construction" class="w-full h-full object-cover">
+            <img src="assets/chantier-hero.webp" alt="Deux professionnels de la construction devant des matériaux prêts à être livrés" width="1536" height="1024" fetchpriority="high" class="w-full h-full object-cover">
           </div>
         </div>
       </div>
@@ -112,7 +111,7 @@
   <footer class="mt-16 py-10 border-t">
     <div class="max-w-6xl mx-auto px-4 grid sm:grid-cols-2 md:grid-cols-3 gap-6">
       <div>
-        <div class="font-bold">MonChantier</div>
+        <div class="font-bold">CHANTIER<span class="brand-domain">.online</span></div><p class="brand-tagline">Tout pour bâtir.</p>
         <p class="text-slate-600 mt-2 text-sm" data-i18n="footerAbout">E‑commerce de matériaux et services de construction. Livraison sur chantier, paiement flexible.</p>
       </div>
       <div>
@@ -120,7 +119,7 @@
         <ul class="text-slate-600 mt-2 space-y-1 text-sm">
           <li>WhatsApp: <a class="text-red-600" href="#" id="waLink">+243 999 972 466</a></li>
           <li>Email: <a class="text-red-600 break-all" href="mailto:contact@monchantier.com">contact@monchantier.com</a></li>
-          <li><a href="https://www.monchantier.com" target="_blank">Visiter le site</a></li>
+          <li><a href="https://chantier.online" target="_blank">Visiter le site</a></li>
           <li>République Démocratique du Congo</li>
         </ul>
       </div>
@@ -129,14 +128,14 @@
         <div class="text-slate-600 mt-2 space-y-1 text-sm">
           <a class="block text-red-600" href="privacy.html">Politique de confidentialité</a>
           <a class="block text-red-600" href="terms.html">Conditions de vente</a>
-          <p>&copy; <span id="year"></span> MonChantier. Tous droits réservés.</p>
+          <p>&copy; <span id="year"></span> Chantier.online. Tous droits réservés.</p>
         </div>
       </div>
     </div>
   </footer>
 
   <!-- Bouton WhatsApp flottant -->
-  <a id="whatsapp-float" href="#" target="_blank" rel="noopener noreferrer" aria-label="Contacter MonChantier via WhatsApp"
+  <a id="whatsapp-float" href="#" target="_blank" rel="noopener noreferrer" aria-label="Contacter Chantier.online via WhatsApp"
      class="fixed bottom-6 right-6 bg-green-500 hover:bg-green-600 text-white rounded-full p-4 shadow-lg z-50 transition-transform hover:scale-110"
      title="Contacter via WhatsApp">
     <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">

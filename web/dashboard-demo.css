@@ -1,12 +1,12 @@
 :root {
-  --demo-ink: #0b1724;
-  --demo-navy: #081421;
+  --demo-ink: #14283F;
+  --demo-navy: #14283F;
   --demo-navy-2: #17314a;
-  --demo-canvas: #f4f6f2;
+  --demo-canvas: #F7F6F2;
   --demo-card: #ffffff;
   --demo-muted: #667484;
   --demo-line: #dfe5e7;
-  --demo-orange: #ff6333;
+  --demo-orange: #F47B20;
   --demo-green: #0c9a6b;
   --demo-yellow: #e4a11b;
 }
@@ -376,3 +376,5 @@
 @media (prefers-reduced-motion: reduce) {
   .demo-spinner { animation: none; }
 }
+
+.demo-primary { color: #14283F; }

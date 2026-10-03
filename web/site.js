@@ -8,6 +8,7 @@
     return String(value).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
   }
   const FR = {
+    eyebrow: "MATÉRIAUX · ARTISANS · LIVRAISON",
     hero1: "Achetez",
     hero2: "et matériaux de construction, livrés à votre chantier.",
     subhero: "Briques, moellon, sable concassé, pavés, ciment, carreaux, faïences — paiement flexible, livraison rapide.",
@@ -34,6 +35,7 @@
     locationNeedsConsent: "Acceptez les conditions de vente et la politique de confidentialité ci-dessus pour activer."
   };
   const EN = {
+    eyebrow: "MATERIALS · CRAFTSPEOPLE · DELIVERY",
     hero1: "Buy",
     hero2: "and building materials, delivered to your site.",
     subhero: "Bricks, rubble, crushed sand, pavers, cement, tiles — flexible payment, fast delivery.",
@@ -290,7 +292,7 @@
           ${Number(p.price) > 0 && Number(p.stock) > 0 ? `
             <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${escapeHtml(p.id)}">
             <button class="dark-button flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
-          ` : `<a class="flex-1 px-3 py-2 rounded-lg bg-red-600 text-white text-center text-xs sm:text-sm" href="https://wa.me/243999972466?text=${encodeURIComponent('Bonjour MonChantier, je souhaite un devis pour ' + p.name_fr)}">${lang === 'fr' ? 'Demander un devis' : 'Request a quote'}</a>`}
+          ` : `<a class="flex-1 px-3 py-2 rounded-lg bg-red-600 text-white text-center text-xs sm:text-sm" href="https://wa.me/243999972466?text=${encodeURIComponent('Bonjour Chantier.online, je souhaite un devis pour ' + p.name_fr)}">${lang === 'fr' ? 'Demander un devis' : 'Request a quote'}</a>`}
         </div>
       </div>
     `).join("");

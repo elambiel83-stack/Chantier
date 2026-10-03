@@ -1,23 +1,22 @@
 :root {
-  --ink: #17212b;
+  --ink: #14283F;
   --muted: #64717c;
   --line: #d9e0e5;
   --surface: #ffffff;
-  --canvas: #f4f6f5;
-  --signal: #d6492f;
-  --signal-dark: #ad3522;
-  --accent: #e6b84b;
-  --radius: 8px;
+  --canvas: #F7F6F2;
+  --signal: #F47B20;
+  --signal-dark: #B54B06;
+  --accent: #F47B20;
+  --radius: 12px;
 }
 
 * { box-sizing: border-box; }
 
 body {
   background-color: var(--canvas) !important;
-  background-image: linear-gradient(135deg, rgba(23, 33, 43, .025) 25%, transparent 25%, transparent 50%, rgba(23, 33, 43, .025) 50%, rgba(23, 33, 43, .025) 75%, transparent 75%);
-  background-size: 18px 18px;
+  margin: 0;
   color: var(--ink) !important;
-  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 header {
@@ -50,3 +49,39 @@ input:focus, select:focus { outline: 3px solid rgba(214, 73, 47, .18); border-co
 @media (max-width: 640px) {
   .hero-image { box-shadow: 8px 8px 0 var(--accent) !important; }
 }
+/* Chantier.online brand system. Semantic error/status colors stay distinct. */
+:root { --brand-navy: #14283F; --brand-orange: #F47B20; --brand-orange-ink: #B54B06; }
+.site-brand { display: inline-flex; flex: 0 0 auto; width: 235px; max-width: 70vw; }
+.site-brand img { display: block; width: 100%; height: auto; }
+.brand-domain { color: var(--brand-orange); }
+.brand-tagline { margin-top: 8px; font-size: 14px; letter-spacing: .12em; }
+.brand-name { color: var(--brand-navy); }
+.hero-panel { padding-bottom: 64px; background: linear-gradient(120deg, #F7F6F2, #FFFFFF); }
+.hero-layout { min-height: 560px; }
+.hero-eyebrow { color: var(--brand-orange-ink); font-size: 12px; font-weight: 800; letter-spacing: .16em; margin-bottom: 20px; }
+.hero-panel h1 { color: var(--brand-navy); letter-spacing: -.035em; }
+.hero-panel h1 .text-red-600 { color: var(--brand-orange-ink) !important; }
+.hero-image { height: 440px; box-shadow: 12px 12px 0 var(--brand-orange) !important; }
+.hero-image img { object-position: center; }
+.signal-button, a.bg-red-600, #cart-count { background: var(--brand-orange) !important; color: var(--brand-navy) !important; font-weight: 700; }
+a.bg-red-600:hover { background: #FF953F !important; }
+a.text-red-600 { color: var(--brand-orange-ink) !important; }
+.dark-button { font-weight: 700; }
+:focus-visible { outline: 3px solid var(--brand-orange); outline-offset: 3px; }
+footer { background: var(--brand-navy); color: white; }
+footer .text-slate-600 { color: #D0D9E1 !important; }
+footer a.text-red-600 { color: #FFAD6B !important; }
+@media (max-width: 1100px) {
+  .site-header-inner { flex-wrap: wrap; }
+  .site-header-inner nav { flex-wrap: wrap; justify-content: flex-start; width: 100%; gap: 8px; }
+}
+@media (max-width: 767px) {
+  .hero-layout { min-height: 0; }
+  .hero-panel { padding: 32px 0 40px; }
+  .hero-image { height: 300px; margin-right: 8px; }
+  .hero-eyebrow { font-size: 10px; }
+  .site-brand { width: 210px; }
+}
+@media (prefers-reduced-motion: reduce) { button, a, input, select { transition: none; } }
+
+.signal-button:hover { background: #FF953F !important; }
