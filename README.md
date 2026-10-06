@@ -349,3 +349,9 @@ manuellement un paiement Airtel/Orange Money avant de confirmer.
 La gestion des rôles (`PATCH /api/admin/users/:userId/role`) n’a pas d’interface : l’API ne propose
 aucune route pour lister les utilisateurs, donc l’attribution de rôles reste à faire via un accès
 direct à la base (voir ci-dessus) ou un appel API avec l’identifiant utilisateur déjà connu.
+
+## Logos à fond transparent
+
+Le site utilise les SVG vectoriels avec texte converti en tracés. Les exports PNG transparents sont disponibles dans `web/assets/chantier-logo.png` (fond clair), `chantier-logo-light.png` (fond sombre) et `chantier-mark.png` (symbole). Les espaces vides conservent un canal alpha ; aucun fond ni halo n’est ajouté. Les icônes PWA restent sur leur support bleu nuit.
+
+Reproduction des exports : `node scripts/export-brand.cjs` avec le module `sharp` disponible. Ces exports proviennent des SVG du projet, pas de la planche raster générée.

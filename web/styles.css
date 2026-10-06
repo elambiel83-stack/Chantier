@@ -52,7 +52,7 @@ input:focus, select:focus { outline: 3px solid rgba(214, 73, 47, .18); border-co
 /* Chantier.online brand system. Semantic error/status colors stay distinct. */
 :root { --brand-navy: #14283F; --brand-orange: #F47B20; --brand-orange-ink: #B54B06; }
 .site-brand { display: inline-flex; flex: 0 0 auto; width: 235px; max-width: 70vw; }
-.site-brand img { display: block; width: 100%; height: auto; }
+.site-brand img { display: block; width: 100%; height: auto; background: transparent; }
 .brand-domain { color: var(--brand-orange); }
 .brand-tagline { margin-top: 8px; font-size: 14px; letter-spacing: .12em; }
 .brand-name { color: var(--brand-navy); }
