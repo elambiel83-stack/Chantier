@@ -753,25 +753,8 @@ async function finalizeCinetpayPayment(transactionId) {
   return { orderId: payment.order_id, status: accepted ? 'confirmed' : 'failed' };
 }
 
-async function ensureCatalog(client) {
-  for (const product of PRODUCTS) {
-    // stock_qty n'est renseigné qu'à la création: le stock vit ensuite en base.
-    await client.query(
-      `INSERT INTO product (id, name_fr, name_en, unit, price_usd, image_url, category, stock_qty, catalog_group)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (id) DO UPDATE SET
-         name_fr = EXCLUDED.name_fr,
-         name_en = EXCLUDED.name_en,
-         unit = EXCLUDED.unit,
-         price_usd = EXCLUDED.price_usd,
-         image_url = EXCLUDED.image_url,
-         category = EXCLUDED.category,
-         catalog_group = EXCLUDED.catalog_group,
-         stock_qty = COALESCE(product.stock_qty, EXCLUDED.stock_qty)`,
-      [product.id, product.name_fr, product.name_en, product.unit, product.price, product.img, product.category, product.stock, product.catalog_group || null]
-    );
-  }
-}
+const { seedCatalog } = require('./catalogStore');
+const ensureCatalog = client => seedCatalog(client, PRODUCTS);
 
 // Le catalogue n'est synchronisé qu'une fois, pas à chaque commande.
 let catalogSync = null;
@@ -1061,6 +1044,7 @@ app.put('/api/cart', requireAuthentication, async (req, res, next) => {
         const offerError = purchaseError(id, qty);
         if (offerError) return res.status(400).json({ success: false, message: offerError });
         const product = catalog.get(id);
+        if(product && !(Number(product.price)>0))return res.status(400).json({success:false,message:'Prix à confirmer sur devis'});
         if (!product || qty > product.stock) {
           return res.status(400).json({
             success: false,
@@ -1635,6 +1619,10 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       if (offerError) {
         await client.query('ROLLBACK');
         return res.status(400).json({ success: false, message: offerError });
+      }
+      if(!(Number(products.get(productId).price_usd)>0)){
+        await client.query('ROLLBACK');
+        return res.status(400).json({success:false,message:'Prix à confirmer sur devis'});
       }
       const decrement = await client.query(
         'UPDATE product SET stock_qty = stock_qty - $1 WHERE id = $2 AND stock_qty >= $1',

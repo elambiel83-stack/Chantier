@@ -6,7 +6,7 @@ const TRADES=[...CONSTRUCTION_CATALOG.filter(x=>x.catalog_group==='metiers').map
 ].map(([id,label])=>({id,label}))];
 const tradeIds=new Set(TRADES.map(x=>x.id));
 const short=z.string().trim().min(2).max(120);
-const profileSchema=z.object({tradeIds:z.array(z.string().refine(x=>tradeIds.has(x))).min(1).max(36).refine(x=>new Set(x).size===x.length),specialties:z.array(short).max(20),zones:z.array(short).min(1).max(20),description:z.string().trim().min(20).max(3000),references:z.string().trim().max(3000),rateNotes:z.string().trim().max(2000),availability:z.enum(['available','limited','unavailable']),published:z.boolean()}).strict();
+const profileSchema=z.object({tradeIds:z.array(z.string().refine(x=>tradeIds.has(x))).min(1).max(TRADES.length).refine(x=>new Set(x).size===x.length),specialties:z.array(short).max(20),zones:z.array(short).min(1).max(20),description:z.string().trim().min(20).max(3000),references:z.string().trim().max(3000),rateNotes:z.string().trim().max(2000),availability:z.enum(['available','limited','unavailable']),published:z.boolean()}).strict();
 function installPartnerDirectory(app,{database,requireAuthentication,requireRole}){
  const wrap=fn=>async(req,res,next)=>{try{if(!database)return res.status(503).json({message:'Base de données indisponible'});await fn(req,res);}catch(e){next(e);}};
  const publicColumns='v.id,v.business_name,v.category,p.trade_ids,p.specialties,p.zones,p.description,p.references_text,p.rate_notes,p.availability,p.updated_at';

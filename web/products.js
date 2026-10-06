@@ -38,7 +38,7 @@ async function loadProducts() {
   }
   
   // Fallback sur les données locales
-  window.PRODUCTS = [...(window.CHANTIER_LAUNCH_OFFERS || []), ...LOCAL_PRODUCTS];
+  window.PRODUCTS = [...(window.CHANTIER_LAUNCH_OFFERS || []), ...LOCAL_PRODUCTS, ...(window.CHANTIER_CONSTRUCTION_CATALOG || [])];
   return false;
 }
 
