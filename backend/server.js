@@ -677,28 +677,34 @@ async function gateOrderByCompliance(client, { userId, customerId, subtotalUsd, 
   const hasOpenCase = hasOpenCaseResult.rows[0].total > 0;
   const needsApprovedKyc = highValueOrder || manualHighRisk;
   if (needsApprovedKyc && kyc.verification_status !== 'kyc_approuve') {
-    await auditKycAction(client, {
-      userId,
-      actorUserId: userId,
-      action: 'order_gated',
-      fromStatus: kyc.verification_status,
-      toStatus: kyc.verification_status,
-      justification: 'Commande bloquée: KYC requis avant une transaction à risque',
-      metadata: { subtotalUsd, paymentProvider, ip: req.ip }
-    });
-    return { allowed: false, status: 403, message: 'Un KYC approuvé est requis pour cette opération', code: 'kyc_required' };
+    return {
+      allowed: false,
+      status: 403,
+      message: 'Un KYC approuvé est requis pour cette opération',
+      code: 'kyc_required',
+      audit: {
+        action: 'order_gated',
+        fromStatus: kyc.verification_status,
+        toStatus: kyc.verification_status,
+        justification: 'Commande bloquée: KYC requis avant une transaction à risque',
+        metadata: { subtotalUsd, paymentProvider, ip: req.ip }
+      }
+    };
   }
   if (hasOpenCase) {
-    await auditKycAction(client, {
-      userId,
-      actorUserId: userId,
-      action: 'order_gated',
-      fromStatus: kyc.verification_status,
-      toStatus: kyc.verification_status,
-      justification: 'Commande bloquée: dossier AML ouvert',
-      metadata: { subtotalUsd, paymentProvider, ip: req.ip }
-    });
-    return { allowed: false, status: 403, message: 'Votre compte est temporairement en revue conformité', code: 'aml_blocked' };
+    return {
+      allowed: false,
+      status: 403,
+      message: 'Votre compte est temporairement en revue conformité',
+      code: 'aml_blocked',
+      audit: {
+        action: 'order_gated',
+        fromStatus: kyc.verification_status,
+        toStatus: kyc.verification_status,
+        justification: 'Commande bloquée: dossier AML ouvert',
+        metadata: { subtotalUsd, paymentProvider, ip: req.ip }
+      }
+    };
   }
   return { allowed: true, program, kyc };
 }
@@ -1899,7 +1905,7 @@ app.patch('/api/admin/kyc/:userId/review', requireAuthentication, requireRole('c
            reviewed_at = now(),
            reviewed_by = $10,
            approved_at = CASE WHEN $2 = 'kyc_approuve' THEN now() ELSE approved_at END,
-           next_review_at = CASE WHEN $11 IS NOT NULL THEN $11 ELSE next_review_at END,
+           next_review_at = COALESCE($11::timestamptz, next_review_at),
            expired_at = CASE WHEN $2 = 'kyc_expire' THEN now() ELSE NULL END,
            updated_at = now()
        WHERE user_id = $1`,
@@ -2065,6 +2071,14 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
     });
     if (!complianceGate.allowed) {
       await client.query('ROLLBACK');
+      const refreshedKyc = await getKycSummary(database, req.auth.userId);
+      await auditKycAction(database, {
+        userId: req.auth.userId,
+        actorUserId: req.auth.userId,
+        ...complianceGate.audit,
+        fromStatus: refreshedKyc?.verification_status || complianceGate.audit.fromStatus,
+        toStatus: refreshedKyc?.verification_status || complianceGate.audit.toStatus
+      });
       return res.status(complianceGate.status).json({ success: false, message: complianceGate.message, code: complianceGate.code });
     }
     const orderResult = await client.query(
@@ -2508,15 +2522,16 @@ app.post('/api/import-requests', requireAuthentication, requireRole('customer'),
     await client.query('BEGIN');
     const kyc = await getKycSummary(client, req.auth.userId);
     if (kyc.verification_status !== 'kyc_approuve') {
-      await auditKycAction(client, {
+      await client.query('ROLLBACK');
+      const refreshedKyc = await getKycSummary(database, req.auth.userId);
+      await auditKycAction(database, {
         userId: req.auth.userId,
         actorUserId: req.auth.userId,
         action: 'import_request_gated',
-        fromStatus: kyc.verification_status,
-        toStatus: kyc.verification_status,
+        fromStatus: refreshedKyc?.verification_status || kyc.verification_status,
+        toStatus: refreshedKyc?.verification_status || kyc.verification_status,
         justification: 'Demande d’importation bloquée: KYC approuvé requis'
       });
-      await client.query('ROLLBACK');
       return res.status(403).json({ success: false, message: 'Un KYC approuvé est requis pour les demandes d’importation', code: 'kyc_required' });
     }
     const result = await client.query(

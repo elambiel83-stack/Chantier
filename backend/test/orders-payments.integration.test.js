@@ -205,8 +205,14 @@ let mockState;
 
   beforeEach(async () => {
     resetMockState();
-    await pool.query('TRUNCATE TABLE payment, order_item, orders, refresh_token, verification_code, user_account, customer RESTART IDENTITY CASCADE');
+    await pool.query('TRUNCATE TABLE aml_alert, aml_case, kyc_document, kyc_audit_log, kyc_profile, payment, order_item, orders, refresh_token, verification_code, import_request, user_account, customer RESTART IDENTITY CASCADE');
     await pool.query('UPDATE product SET stock_qty = 1000');
+    await pool.query(`UPDATE compliance_program
+      SET order_kyc_threshold_usd = 1000000,
+          manual_payment_review_threshold_usd = 1000000,
+          aml_alert_threshold_usd = 1000000,
+          updated_at = now()
+      WHERE id = true`);
   });
 
   after(async () => {

@@ -161,7 +161,7 @@ test('staff ne peut pas prendre de décision KYC', async () => {
   const review = await apiFetch(`/api/admin/kyc/${customer.user.id}/review`, {
     method: 'PATCH',
     token: staff.accessToken,
-    body: { status: 'kyc_approuve', justification: 'Validation interdite pour le staff' }
+    body: { status: 'kyc_approuve', justification: 'Validation interdite pour le staff non conformité' }
   });
 
   assert.equal(review.response.status, 403);
@@ -216,7 +216,7 @@ test('un dossier KYC expiré rebloque les transactions à seuil', async () => {
   await apiFetch(`/api/admin/kyc/${customer.user.id}/review`, {
     method: 'PATCH',
     token: reviewer.accessToken,
-    body: { status: 'kyc_approuve', justification: 'Validation initiale', nextReviewAt: '2030-01-01' }
+    body: { status: 'kyc_approuve', justification: 'Validation initiale conforme', nextReviewAt: '2030-01-01' }
   });
   await pool.query("UPDATE kyc_profile SET next_review_at = now() - interval '1 day' WHERE user_id = $1", [customer.user.id]);
 
@@ -248,7 +248,7 @@ test('une demande d’importation exige un KYC approuvé', async () => {
   await apiFetch(`/api/admin/kyc/${customer.user.id}/review`, {
     method: 'PATCH',
     token: reviewer.accessToken,
-    body: { status: 'kyc_approuve', justification: 'Import autorisé' }
+    body: { status: 'kyc_approuve', justification: 'Import autorisé après revue conformité' }
   });
 
   const accepted = await apiFetch('/api/import-requests', {
