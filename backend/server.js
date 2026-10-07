@@ -371,7 +371,78 @@ const appleAuthSchema = z.object({
 });
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
-const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin']) });
+const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'compliance', 'admin']) });
+const complianceProgramSchema = z.object({
+  countries: z.array(z.string().trim().min(2).max(3)).min(1).max(20),
+  activityScope: z.array(z.enum(['marketplace', 'import', 'payments'])).min(1).max(3),
+  customerTypes: z.array(z.enum(['individual', 'business'])).min(1).max(2),
+  kycMode: z.enum(['delegated', 'internal', 'hybrid']),
+  providerName: z.string().trim().max(120).optional().nullable(),
+  orderKycThresholdUsd: z.number().nonnegative().max(1000000),
+  manualPaymentReviewThresholdUsd: z.number().nonnegative().max(1000000),
+  amlAlertThresholdUsd: z.number().nonnegative().max(1000000),
+  adverseMediaRequired: z.boolean(),
+  notes: z.string().trim().max(2000).optional().nullable()
+});
+const representativeSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  role: z.string().trim().min(2).max(120)
+});
+const beneficialOwnerSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  ownershipPercent: z.number().min(0).max(100)
+});
+const kycProfileSchema = z.object({
+  customerType: z.enum(['individual', 'business']),
+  legalFullName: z.string().trim().min(2).max(160),
+  dateOfBirth: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date de naissance invalide'),
+  nationality: z.string().trim().min(2).max(80),
+  residentialAddress: z.string().trim().min(10).max(300),
+  documentType: z.string().trim().min(2).max(80),
+  documentNumber: z.string().trim().min(4).max(120),
+  documentIssuingCountry: z.string().trim().min(2).max(80),
+  documentExpiresAt: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date d’expiration invalide'),
+  businessName: z.string().trim().max(160).optional(),
+  registrationNumber: z.string().trim().max(120).optional(),
+  incorporationCountry: z.string().trim().max(80).optional(),
+  registeredAddress: z.string().trim().max(300).optional(),
+  authorizedRepresentatives: z.array(representativeSchema).max(10).optional().default([]),
+  beneficialOwners: z.array(beneficialOwnerSchema).max(10).optional().default([]),
+  providerMode: z.enum(['delegated', 'internal', 'hybrid']).optional().default('internal'),
+  providerCaseReference: z.string().trim().max(160).optional(),
+  dataRetentionExpiresAt: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date de conservation invalide').optional()
+}).superRefine((data, ctx) => {
+  if (data.customerType === 'business') {
+    if (!data.businessName) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['businessName'], message: 'La raison sociale est requise' });
+    if (!data.registrationNumber) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['registrationNumber'], message: 'Le numéro d’enregistrement est requis' });
+    if (!data.incorporationCountry) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['incorporationCountry'], message: 'Le pays d’incorporation est requis' });
+    if (!data.registeredAddress) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['registeredAddress'], message: 'L’adresse légale est requise' });
+  }
+});
+const kycDocumentSchema = z.object({
+  documentKind: z.enum(['identity_front', 'identity_back', 'selfie', 'proof_of_address', 'business_registration', 'beneficial_owner_register', 'other']),
+  fileName: z.string().trim().min(3).max(200),
+  storageKey: z.string().trim().min(6).max(500),
+  mimeType: z.string().trim().min(3).max(120).optional(),
+  retentionExpiresAt: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date de conservation invalide').optional()
+});
+const kycReviewSchema = z.object({
+  status: z.enum(['kyc_en_revue', 'kyc_approuve', 'kyc_refuse', 'kyc_expire']),
+  justification: z.string().trim().min(10).max(2000),
+  nextReviewAt: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, 'Date de revalidation invalide').optional(),
+  customerRiskScore: z.number().int().min(0).max(100).optional(),
+  transactionRiskScore: z.number().int().min(0).max(100).optional(),
+  sanctionsScreeningStatus: z.enum(['pending', 'clear', 'match', 'needs_review']).optional(),
+  pepScreeningStatus: z.enum(['pending', 'clear', 'match', 'needs_review']).optional(),
+  adverseMediaStatus: z.enum(['not_required', 'pending', 'clear', 'match', 'needs_review']).optional(),
+  requestedAdditionalDocuments: z.boolean().optional()
+});
+const amlCaseUpdateSchema = z.object({
+  status: z.enum(['ouvert', 'en_revue', 'escalade', 'clos_sans_suite', 'clos_avec_action', 'signale_aux_autorites']),
+  severity: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+  assignedTo: z.string().uuid().optional().nullable(),
+  resolutionNotes: z.string().trim().min(5).max(2000).optional()
+});
 
 const importRequestSchema = z.object({
   sourceUrl: z.string().trim().url().max(2048).optional(),
@@ -484,6 +555,256 @@ async function expirePendingOrders(orderIds) {
   } finally {
     client.release();
   }
+}
+
+function dateOnlyToTimestamp(value) {
+  return value ? new Date(`${value}T00:00:00.000Z`) : null;
+}
+
+function jsonChangedFields(before, after) {
+  const changed = {};
+  for (const [key, value] of Object.entries(after)) {
+    const previous = before?.[key] ?? null;
+    if (JSON.stringify(previous) !== JSON.stringify(value ?? null)) {
+      changed[key] = { before: previous, after: value ?? null };
+    }
+  }
+  return changed;
+}
+
+async function getComplianceProgram(client = database) {
+  const result = await client.query('SELECT * FROM compliance_program WHERE id = true');
+  return result.rows[0];
+}
+
+async function ensureKycProfile(client, userId) {
+  await client.query(
+    `INSERT INTO kyc_profile (user_id)
+     VALUES ($1)
+     ON CONFLICT (user_id) DO NOTHING`,
+    [userId]
+  );
+}
+
+async function getKycSummary(client, userId) {
+  await ensureKycProfile(client, userId);
+  await client.query(
+    `UPDATE kyc_profile
+     SET verification_status = 'kyc_expire', expired_at = COALESCE(expired_at, now()), updated_at = now()
+     WHERE user_id = $1
+       AND verification_status = 'kyc_approuve'
+       AND (
+         (next_review_at IS NOT NULL AND next_review_at <= now())
+         OR (document_expires_at IS NOT NULL AND document_expires_at <= CURRENT_DATE)
+       )`,
+    [userId]
+  );
+  const result = await client.query(
+    `SELECT kyc_profile.*, user_account.email
+     FROM kyc_profile
+     JOIN user_account ON user_account.id = kyc_profile.user_id
+     WHERE kyc_profile.user_id = $1`,
+    [userId]
+  );
+  return result.rows[0];
+}
+
+async function auditKycAction(client, { userId, actorUserId, action, fromStatus = null, toStatus = null, justification = null, changedFields = {}, metadata = {} }) {
+  await client.query(
+    `INSERT INTO kyc_audit_log (user_id, actor_user_id, action, from_status, to_status, justification, changed_fields, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)`,
+    [userId, actorUserId || null, action, fromStatus, toStatus, justification, JSON.stringify(changedFields || {}), JSON.stringify(metadata || {})]
+  );
+}
+
+function maskStorageKey(value) {
+  if (!value) return '';
+  return value.length <= 8 ? '********' : `${value.slice(0, 4)}…${value.slice(-4)}`;
+}
+
+async function listKycDocuments(client, userId) {
+  const result = await client.query(
+    `SELECT id, document_kind, file_name, storage_key_encrypted, storage_provider, mime_type, review_status, rejection_reason,
+            retention_expires_at, deleted_at, created_at, updated_at
+     FROM kyc_document
+     WHERE user_id = $1
+     ORDER BY created_at DESC`,
+    [userId]
+  );
+  return result.rows;
+}
+
+async function createAmlAlert(client, { userId, orderId = null, paymentId = null, alertType, severity, riskScore, reason, providerReference = null, status = 'ouvert', dedupeKey, metadata = {} }) {
+  const caseResult = await client.query(
+    `INSERT INTO aml_case (user_id, order_id, payment_id, status, severity, alert_type, reason, dedupe_key)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (dedupe_key) DO UPDATE
+       SET status = EXCLUDED.status,
+           severity = EXCLUDED.severity,
+           reason = EXCLUDED.reason,
+           updated_at = now()
+     RETURNING id`,
+    [userId, orderId, paymentId, status, severity, alertType, reason, `${dedupeKey}:case`]
+  );
+  const amlCaseId = caseResult.rows[0].id;
+  const alertResult = await client.query(
+    `INSERT INTO aml_alert (aml_case_id, user_id, order_id, payment_id, alert_type, severity, status, risk_score, provider_reference, reason, metadata, dedupe_key)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+     ON CONFLICT (dedupe_key) DO UPDATE
+       SET status = EXCLUDED.status,
+           risk_score = EXCLUDED.risk_score,
+           reason = EXCLUDED.reason,
+           metadata = EXCLUDED.metadata,
+           updated_at = now()
+     RETURNING id, aml_case_id`,
+    [amlCaseId, userId, orderId, paymentId, alertType, severity, status, riskScore, providerReference, reason, JSON.stringify(metadata || {}), dedupeKey]
+  );
+  return { alertId: alertResult.rows[0].id, amlCaseId: alertResult.rows[0].aml_case_id };
+}
+
+async function gateOrderByCompliance(client, { userId, customerId, subtotalUsd, paymentProvider, req }) {
+  const program = await getComplianceProgram(client);
+  const kyc = await getKycSummary(client, userId);
+  const highValueOrder = subtotalUsd >= Number(program.order_kyc_threshold_usd);
+  const manualPayment = ['airtel_money', 'orange_money'].includes(paymentProvider);
+  const manualHighRisk = manualPayment && subtotalUsd >= Number(program.manual_payment_review_threshold_usd);
+  const hasOpenCaseResult = await client.query(
+    `SELECT COUNT(*)::int AS total
+     FROM aml_case
+     WHERE user_id = $1 AND status IN ('ouvert','en_revue','escalade')`,
+    [userId]
+  );
+  const hasOpenCase = hasOpenCaseResult.rows[0].total > 0;
+  const needsApprovedKyc = highValueOrder || manualHighRisk;
+  if (needsApprovedKyc && kyc.verification_status !== 'kyc_approuve') {
+    await auditKycAction(client, {
+      userId,
+      actorUserId: userId,
+      action: 'order_gated',
+      fromStatus: kyc.verification_status,
+      toStatus: kyc.verification_status,
+      justification: 'Commande bloquée: KYC requis avant une transaction à risque',
+      metadata: { subtotalUsd, paymentProvider, ip: req.ip }
+    });
+    return { allowed: false, status: 403, message: 'Un KYC approuvé est requis pour cette opération', code: 'kyc_required' };
+  }
+  if (hasOpenCase) {
+    await auditKycAction(client, {
+      userId,
+      actorUserId: userId,
+      action: 'order_gated',
+      fromStatus: kyc.verification_status,
+      toStatus: kyc.verification_status,
+      justification: 'Commande bloquée: dossier AML ouvert',
+      metadata: { subtotalUsd, paymentProvider, ip: req.ip }
+    });
+    return { allowed: false, status: 403, message: 'Votre compte est temporairement en revue conformité', code: 'aml_blocked' };
+  }
+  return { allowed: true, program, kyc };
+}
+
+async function maybeCreateOrderAmlAlerts(client, { userId, customerId, orderId, paymentId, paymentProvider, providerReference = null, subtotalUsd, orderCurrency, totalAmount }) {
+  const program = await getComplianceProgram(client);
+  const kyc = await getKycSummary(client, userId);
+  const alerts = [];
+  if (subtotalUsd >= Number(program.aml_alert_threshold_usd)) {
+    alerts.push(createAmlAlert(client, {
+      userId,
+      orderId,
+      paymentId,
+      alertType: 'amount_threshold',
+      severity: subtotalUsd >= Number(program.order_kyc_threshold_usd) * 2 ? 'high' : 'medium',
+      riskScore: Math.min(100, Math.round(subtotalUsd / Math.max(Number(program.aml_alert_threshold_usd), 1) * 40)),
+      reason: 'Montant de commande supérieur au seuil AML configuré',
+      providerReference,
+      dedupeKey: `amount-threshold:${orderId}`,
+      metadata: { subtotalUsd, orderCurrency, totalAmount, paymentProvider }
+    }));
+  }
+  if (['airtel_money', 'orange_money'].includes(paymentProvider) && subtotalUsd >= Number(program.manual_payment_review_threshold_usd)) {
+    alerts.push(createAmlAlert(client, {
+      userId,
+      orderId,
+      paymentId,
+      alertType: 'manual_payment_review',
+      severity: 'high',
+      riskScore: Math.max(kyc.transaction_risk_score || 0, 60),
+      reason: 'Paiement manuel au-dessus du seuil de revue renforcée',
+      providerReference,
+      dedupeKey: `manual-payment:${orderId}`,
+      metadata: { subtotalUsd, paymentProvider }
+    }));
+  }
+  const velocityResult = await client.query(
+    `SELECT COUNT(*)::int AS total
+     FROM orders
+     WHERE customer_id = $1 AND created_at > now() - interval '24 hours'`,
+    [customerId]
+  );
+  if (velocityResult.rows[0].total >= 3) {
+    alerts.push(createAmlAlert(client, {
+      userId,
+      orderId,
+      paymentId,
+      alertType: 'high_velocity',
+      severity: 'medium',
+      riskScore: Math.max(kyc.transaction_risk_score || 0, 55),
+      reason: 'Fréquence inhabituelle de commandes sur 24 heures',
+      providerReference,
+      dedupeKey: `high-velocity:${orderId}`,
+      metadata: { ordersLast24Hours: velocityResult.rows[0].total }
+    }));
+  }
+  await Promise.all(alerts);
+}
+
+function sanitizeKycProfile(profile) {
+  if (!profile) return null;
+  return {
+    customerType: profile.customer_type,
+    verificationStatus: profile.verification_status,
+    legalFullName: profile.legal_full_name,
+    dateOfBirth: profile.date_of_birth,
+    nationality: profile.nationality,
+    residentialAddress: profile.residential_address,
+    documentType: profile.document_type,
+    documentNumberMasked: profile.document_number ? `${String(profile.document_number).slice(0, 2)}***${String(profile.document_number).slice(-2)}` : null,
+    documentIssuingCountry: profile.document_issuing_country,
+    documentExpiresAt: profile.document_expires_at,
+    businessName: profile.business_name,
+    registrationNumber: profile.registration_number,
+    incorporationCountry: profile.incorporation_country,
+    registeredAddress: profile.registered_address,
+    authorizedRepresentatives: profile.authorized_representatives || [],
+    beneficialOwners: profile.beneficial_owners || [],
+    providerMode: profile.provider_mode,
+    providerCaseReference: profile.provider_case_reference,
+    reviewNotes: profile.review_notes,
+    rejectionReason: profile.rejection_reason,
+    requestedAdditionalDocuments: profile.requested_additional_documents,
+    submittedAt: profile.submitted_at,
+    reviewedAt: profile.reviewed_at,
+    approvedAt: profile.approved_at,
+    nextReviewAt: profile.next_review_at,
+    expiredAt: profile.expired_at,
+    dataRetentionExpiresAt: profile.data_retention_expires_at,
+    sanctionsScreeningStatus: profile.sanctions_screening_status,
+    pepScreeningStatus: profile.pep_screening_status,
+    adverseMediaStatus: profile.adverse_media_status,
+    customerRiskScore: profile.customer_risk_score,
+    transactionRiskScore: profile.transaction_risk_score
+  };
+}
+
+async function getKycAuditLog(client, userId) {
+  const result = await client.query(
+    `SELECT id, actor_user_id, action, from_status, to_status, justification, changed_fields, metadata, created_at
+     FROM kyc_audit_log
+     WHERE user_id = $1
+     ORDER BY created_at DESC`,
+    [userId]
+  );
+  return result.rows;
 }
 
 // column: 'google_sub' ou 'apple_sub'. Retrouve le compte par cet identifiant stable;
@@ -1099,14 +1420,288 @@ app.post('/api/auth/refresh', async (req, res, next) => {
 app.get('/api/auth/me', requireAuthentication, async (req, res, next) => {
   if (!requireDatabase(res)) return;
   try {
-    const result = await database.query('SELECT email, verified_at FROM user_account WHERE id = $1', [req.auth.userId]);
+    const result = await database.query(
+      `SELECT user_account.email, user_account.verified_at, kyc_profile.verification_status, kyc_profile.next_review_at,
+              kyc_profile.reviewed_at, kyc_profile.customer_risk_score, kyc_profile.transaction_risk_score
+       FROM user_account
+       LEFT JOIN kyc_profile ON kyc_profile.user_id = user_account.id
+       WHERE user_account.id = $1`,
+      [req.auth.userId]
+    );
     const account = result.rows[0];
     res.json({
       success: true,
-      user: { id: req.auth.userId, role: req.auth.role, email: account?.email, verified: Boolean(account?.verified_at) }
+      user: {
+        id: req.auth.userId,
+        role: req.auth.role,
+        email: account?.email,
+        verified: Boolean(account?.verified_at),
+        kycStatus: account?.verification_status || 'non_verifie',
+        nextKycReviewAt: account?.next_review_at || null,
+        kycReviewedAt: account?.reviewed_at || null,
+        customerRiskScore: account?.customer_risk_score ?? 0,
+        transactionRiskScore: account?.transaction_risk_score ?? 0
+      }
     });
   } catch (error) {
     next(error);
+  }
+});
+
+app.get('/api/compliance/program', requireAuthentication, requireRole('compliance', 'admin'), async (req, res, next) => {
+  try {
+    const program = await getComplianceProgram(database);
+    res.json({
+      success: true,
+      program: {
+        countries: program.countries || [],
+        activityScope: program.activity_scope || [],
+        customerTypes: program.customer_types || [],
+        kycMode: program.kyc_mode,
+        providerName: program.provider_name,
+        orderKycThresholdUsd: Number(program.order_kyc_threshold_usd),
+        manualPaymentReviewThresholdUsd: Number(program.manual_payment_review_threshold_usd),
+        amlAlertThresholdUsd: Number(program.aml_alert_threshold_usd),
+        adverseMediaRequired: Boolean(program.adverse_media_required),
+        notes: program.notes
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/compliance/program', requireAuthentication, requireRole('admin'), async (req, res, next) => {
+  const parsed = complianceProgramSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Programme conformité invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    const data = parsed.data;
+    const result = await database.query(
+      `UPDATE compliance_program
+       SET countries = $1::jsonb,
+           activity_scope = $2::jsonb,
+           customer_types = $3::jsonb,
+           kyc_mode = $4,
+           provider_name = $5,
+           order_kyc_threshold_usd = $6,
+           manual_payment_review_threshold_usd = $7,
+           aml_alert_threshold_usd = $8,
+           adverse_media_required = $9,
+           notes = $10,
+           updated_at = now()
+       WHERE id = true
+       RETURNING *`,
+      [
+        JSON.stringify(data.countries),
+        JSON.stringify(data.activityScope),
+        JSON.stringify(data.customerTypes),
+        data.kycMode,
+        data.providerName || null,
+        data.orderKycThresholdUsd,
+        data.manualPaymentReviewThresholdUsd,
+        data.amlAlertThresholdUsd,
+        data.adverseMediaRequired,
+        data.notes || null
+      ]
+    );
+    res.json({ success: true, program: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/kyc/profile', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const profile = await getKycSummary(client, req.auth.userId);
+    const documents = await listKycDocuments(client, req.auth.userId);
+    const auditLog = await getKycAuditLog(client, req.auth.userId);
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      profile: sanitizeKycProfile(profile),
+      documents: documents.map((document) => ({ ...document, storageKeyMasked: maskStorageKey(document.storage_key_encrypted) })),
+      auditLog
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.put('/api/kyc/profile', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  const parsed = kycProfileSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Profil KYC invalide', errors: parsed.error.flatten().fieldErrors });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const existing = await getKycSummary(client, req.auth.userId);
+    const payload = parsed.data;
+    const updateValues = {
+      customer_type: payload.customerType,
+      legal_full_name: payload.legalFullName,
+      date_of_birth: payload.dateOfBirth,
+      nationality: payload.nationality,
+      residential_address: payload.residentialAddress,
+      document_type: payload.documentType,
+      document_number: hashToken(payload.documentNumber),
+      document_issuing_country: payload.documentIssuingCountry,
+      document_expires_at: payload.documentExpiresAt,
+      business_name: payload.businessName || null,
+      registration_number: payload.registrationNumber || null,
+      incorporation_country: payload.incorporationCountry || null,
+      registered_address: payload.registeredAddress || null,
+      authorized_representatives: payload.authorizedRepresentatives,
+      beneficial_owners: payload.beneficialOwners,
+      provider_mode: payload.providerMode,
+      provider_case_reference: payload.providerCaseReference || null,
+      data_retention_expires_at: payload.dataRetentionExpiresAt ? dateOnlyToTimestamp(payload.dataRetentionExpiresAt) : null
+    };
+    await client.query(
+      `UPDATE kyc_profile
+       SET customer_type = $2,
+           legal_full_name = $3,
+           date_of_birth = $4,
+           nationality = $5,
+           residential_address = $6,
+           document_type = $7,
+           document_number = $8,
+           document_issuing_country = $9,
+           document_expires_at = $10,
+           business_name = $11,
+           registration_number = $12,
+           incorporation_country = $13,
+           registered_address = $14,
+           authorized_representatives = $15::jsonb,
+           beneficial_owners = $16::jsonb,
+           provider_mode = $17,
+           provider_case_reference = $18,
+           verification_status = CASE WHEN verification_status = 'kyc_approuve' THEN verification_status ELSE 'non_verifie' END,
+           data_retention_expires_at = $19,
+           updated_at = now()
+       WHERE user_id = $1`,
+      [
+        req.auth.userId,
+        updateValues.customer_type,
+        updateValues.legal_full_name,
+        updateValues.date_of_birth,
+        updateValues.nationality,
+        updateValues.residential_address,
+        updateValues.document_type,
+        updateValues.document_number,
+        updateValues.document_issuing_country,
+        updateValues.document_expires_at,
+        updateValues.business_name,
+        updateValues.registration_number,
+        updateValues.incorporation_country,
+        updateValues.registered_address,
+        JSON.stringify(updateValues.authorized_representatives),
+        JSON.stringify(updateValues.beneficial_owners),
+        updateValues.provider_mode,
+        updateValues.provider_case_reference,
+        updateValues.data_retention_expires_at
+      ]
+    );
+    await auditKycAction(client, {
+      userId: req.auth.userId,
+      actorUserId: req.auth.userId,
+      action: 'kyc_profile_updated',
+      fromStatus: existing.verification_status,
+      toStatus: existing.verification_status,
+      changedFields: jsonChangedFields(existing, updateValues),
+      metadata: { source: 'customer_portal' }
+    });
+    const profile = await getKycSummary(client, req.auth.userId);
+    await client.query('COMMIT');
+    res.json({ success: true, profile: sanitizeKycProfile(profile) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/kyc/documents', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  const parsed = kycDocumentSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Document KYC invalide', errors: parsed.error.flatten().fieldErrors });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    await ensureKycProfile(client, req.auth.userId);
+    const result = await client.query(
+      `INSERT INTO kyc_document (user_id, document_kind, file_name, storage_key_encrypted, mime_type, uploaded_by, retention_expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, document_kind, file_name, storage_provider, mime_type, review_status, retention_expires_at, created_at`,
+      [
+        req.auth.userId,
+        parsed.data.documentKind,
+        parsed.data.fileName,
+        parsed.data.storageKey,
+        parsed.data.mimeType || null,
+        req.auth.userId,
+        parsed.data.retentionExpiresAt ? dateOnlyToTimestamp(parsed.data.retentionExpiresAt) : null
+      ]
+    );
+    await auditKycAction(client, {
+      userId: req.auth.userId,
+      actorUserId: req.auth.userId,
+      action: 'kyc_document_uploaded',
+      metadata: { documentKind: parsed.data.documentKind, fileName: parsed.data.fileName }
+    });
+    await client.query('COMMIT');
+    res.status(201).json({ success: true, document: { ...result.rows[0], storageKeyMasked: maskStorageKey(parsed.data.storageKey) } });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.post('/api/kyc/submit', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const profile = await getKycSummary(client, req.auth.userId);
+    const documents = await listKycDocuments(client, req.auth.userId);
+    if (!profile.legal_full_name || !profile.date_of_birth || !profile.document_type || !profile.document_issuing_country || !profile.document_expires_at) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Complétez d’abord votre profil KYC' });
+    }
+    if (!documents.some((document) => document.document_kind === 'identity_front' && !document.deleted_at)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ success: false, message: 'Au moins une pièce d’identité doit être déclarée' });
+    }
+    const nextStatus = profile.verification_status === 'kyc_refuse' ? 'kyc_en_revue' : 'kyc_en_attente';
+    await client.query(
+      `UPDATE kyc_profile
+       SET verification_status = $2,
+           submitted_at = now(),
+           rejection_reason = NULL,
+           review_notes = NULL,
+           updated_at = now()
+       WHERE user_id = $1`,
+      [req.auth.userId, nextStatus]
+    );
+    await auditKycAction(client, {
+      userId: req.auth.userId,
+      actorUserId: req.auth.userId,
+      action: 'kyc_submitted',
+      fromStatus: profile.verification_status,
+      toStatus: nextStatus,
+      justification: 'Soumission du dossier KYC'
+    });
+    await client.query('COMMIT');
+    res.json({ success: true, status: nextStatus });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -1217,6 +1812,175 @@ app.patch('/api/admin/users/:userId/role', requireAuthentication, requireRole('a
   }
 });
 
+app.get('/api/admin/kyc/queue', requireAuthentication, requireRole('compliance', 'admin'), async (req, res, next) => {
+  try {
+    const result = await database.query(
+      `SELECT user_account.id AS user_id, user_account.email, user_account.role, customer.full_name, customer.phone,
+              kyc_profile.customer_type, kyc_profile.verification_status, kyc_profile.submitted_at,
+              kyc_profile.reviewed_at, kyc_profile.customer_risk_score, kyc_profile.transaction_risk_score,
+              COUNT(*) FILTER (WHERE kyc_document.deleted_at IS NULL) AS document_count
+       FROM kyc_profile
+       JOIN user_account ON user_account.id = kyc_profile.user_id
+       LEFT JOIN customer ON customer.id = user_account.customer_id
+       LEFT JOIN kyc_document ON kyc_document.user_id = kyc_profile.user_id
+       WHERE kyc_profile.verification_status IN ('kyc_en_attente','kyc_en_revue','kyc_refuse','kyc_expire')
+       GROUP BY user_account.id, customer.full_name, customer.phone, kyc_profile.customer_type, kyc_profile.verification_status,
+                kyc_profile.submitted_at, kyc_profile.reviewed_at, kyc_profile.customer_risk_score, kyc_profile.transaction_risk_score
+       ORDER BY COALESCE(kyc_profile.submitted_at, kyc_profile.updated_at) DESC`
+    );
+    res.json({ success: true, profiles: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/kyc/:userId', requireAuthentication, requireRole('compliance', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.userId).success) return res.status(400).json({ success: false, message: 'Identifiant utilisateur invalide' });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const profileResult = await client.query(
+      `SELECT user_account.id AS user_id, user_account.email, user_account.role, customer.full_name, customer.phone,
+              kyc_profile.*
+       FROM kyc_profile
+       JOIN user_account ON user_account.id = kyc_profile.user_id
+       LEFT JOIN customer ON customer.id = user_account.customer_id
+       WHERE kyc_profile.user_id = $1`,
+      [req.params.userId]
+    );
+    if (!profileResult.rowCount) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Dossier KYC introuvable' });
+    }
+    const documents = await listKycDocuments(client, req.params.userId);
+    const auditLog = await getKycAuditLog(client, req.params.userId);
+    await client.query('COMMIT');
+    res.json({
+      success: true,
+      profile: { ...sanitizeKycProfile(profileResult.rows[0]), userId: profileResult.rows[0].user_id, email: profileResult.rows[0].email, role: profileResult.rows[0].role, customerName: profileResult.rows[0].full_name, phone: profileResult.rows[0].phone },
+      documents: documents.map((document) => ({ ...document, storageKeyMasked: maskStorageKey(document.storage_key_encrypted) })),
+      auditLog
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.patch('/api/admin/kyc/:userId/review', requireAuthentication, requireRole('compliance', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.userId).success) return res.status(400).json({ success: false, message: 'Identifiant utilisateur invalide' });
+  const parsed = kycReviewSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Décision KYC invalide', errors: parsed.error.flatten().fieldErrors });
+  const client = await database.connect();
+  try {
+    await client.query('BEGIN');
+    const profile = await getKycSummary(client, req.params.userId);
+    if (!profile) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: 'Dossier KYC introuvable' });
+    }
+    if (!['kyc_en_attente', 'kyc_en_revue', 'kyc_refuse', 'kyc_expire'].includes(profile.verification_status) && parsed.data.status !== 'kyc_expire') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ success: false, message: 'Ce dossier ne peut pas être revu dans son état actuel' });
+    }
+    await client.query(
+      `UPDATE kyc_profile
+       SET verification_status = $2,
+           review_notes = $3,
+           rejection_reason = CASE WHEN $2 = 'kyc_refuse' THEN $3 ELSE NULL END,
+           requested_additional_documents = COALESCE($4, requested_additional_documents),
+           customer_risk_score = COALESCE($5, customer_risk_score),
+           transaction_risk_score = COALESCE($6, transaction_risk_score),
+           sanctions_screening_status = COALESCE($7, sanctions_screening_status),
+           pep_screening_status = COALESCE($8, pep_screening_status),
+           adverse_media_status = COALESCE($9, adverse_media_status),
+           reviewed_at = now(),
+           reviewed_by = $10,
+           approved_at = CASE WHEN $2 = 'kyc_approuve' THEN now() ELSE approved_at END,
+           next_review_at = CASE WHEN $11 IS NOT NULL THEN $11 ELSE next_review_at END,
+           expired_at = CASE WHEN $2 = 'kyc_expire' THEN now() ELSE NULL END,
+           updated_at = now()
+       WHERE user_id = $1`,
+      [
+        req.params.userId,
+        parsed.data.status,
+        parsed.data.justification,
+        parsed.data.requestedAdditionalDocuments,
+        parsed.data.customerRiskScore,
+        parsed.data.transactionRiskScore,
+        parsed.data.sanctionsScreeningStatus,
+        parsed.data.pepScreeningStatus,
+        parsed.data.adverseMediaStatus,
+        req.auth.userId,
+        parsed.data.nextReviewAt ? dateOnlyToTimestamp(parsed.data.nextReviewAt) : null
+      ]
+    );
+    await auditKycAction(client, {
+      userId: req.params.userId,
+      actorUserId: req.auth.userId,
+      action: 'kyc_reviewed',
+      fromStatus: profile.verification_status,
+      toStatus: parsed.data.status,
+      justification: parsed.data.justification,
+      changedFields: parsed.data
+    });
+    const updatedProfile = await getKycSummary(client, req.params.userId);
+    await client.query('COMMIT');
+    res.json({ success: true, profile: sanitizeKycProfile(updatedProfile) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+app.get('/api/admin/aml/alerts', requireAuthentication, requireRole('compliance', 'admin'), async (req, res, next) => {
+  try {
+    const result = await database.query(
+      `SELECT aml_alert.id, aml_alert.alert_type, aml_alert.severity, aml_alert.status, aml_alert.risk_score,
+              aml_alert.provider_reference, aml_alert.reason, aml_alert.metadata, aml_alert.created_at,
+              aml_case.id AS aml_case_id, aml_case.assigned_to, aml_case.resolution_notes,
+              user_account.email, customer.full_name, orders.currency, orders.total_amount
+       FROM aml_alert
+       LEFT JOIN aml_case ON aml_case.id = aml_alert.aml_case_id
+       LEFT JOIN user_account ON user_account.id = aml_alert.user_id
+       LEFT JOIN customer ON customer.id = user_account.customer_id
+       LEFT JOIN orders ON orders.id = aml_alert.order_id
+       ORDER BY aml_alert.created_at DESC`
+    );
+    res.json({ success: true, alerts: result.rows });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/admin/aml/cases/:caseId', requireAuthentication, requireRole('compliance', 'admin'), async (req, res, next) => {
+  if (!z.string().uuid().safeParse(req.params.caseId).success) return res.status(400).json({ success: false, message: 'Identifiant de dossier invalide' });
+  const parsed = amlCaseUpdateSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ success: false, message: 'Mise à jour AML invalide', errors: parsed.error.flatten().fieldErrors });
+  try {
+    const result = await database.query(
+      `UPDATE aml_case
+       SET status = $2,
+           severity = COALESCE($3, severity),
+           assigned_to = COALESCE($4, assigned_to),
+           resolution_notes = COALESCE($5, resolution_notes),
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.caseId, parsed.data.status, parsed.data.severity || null, parsed.data.assignedTo || null, parsed.data.resolutionNotes || null]
+    );
+    if (!result.rowCount) return res.status(404).json({ success: false, message: 'Dossier AML introuvable' });
+    await database.query('UPDATE aml_alert SET status = $2, updated_at = now() WHERE aml_case_id = $1', [req.params.caseId, parsed.data.status]);
+    res.json({ success: true, amlCase: result.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/orders', requireAuthentication, requireRole('customer'), async (req, res, next) => {
   if (!requireDatabase(res)) return;
   const parsedOrder = orderSchema.safeParse(req.body);
@@ -1292,6 +2056,17 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       subtotalUsd += Number(products.get(productId).price_usd) * qty;
     }
     const subtotal = Number((subtotalUsd * rate).toFixed(2));
+    const complianceGate = await gateOrderByCompliance(client, {
+      userId: req.auth.userId,
+      customerId: req.auth.customerId,
+      subtotalUsd,
+      paymentProvider,
+      req
+    });
+    if (!complianceGate.allowed) {
+      await client.query('ROLLBACK');
+      return res.status(complianceGate.status).json({ success: false, message: complianceGate.message, code: complianceGate.code });
+    }
     const orderResult = await client.query(
       `INSERT INTO orders (customer_id, currency, subtotal_amount, total_amount, reservation_expires_at)
        VALUES ($1, $2, $3, $3, $4)
@@ -1309,6 +2084,21 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       'INSERT INTO payment (order_id, provider, amount, currency) VALUES ($1, $2, $3, $4)',
       [order.id, paymentProvider, order.total_amount, order.currency]
     );
+    const paymentResult = await client.query(
+      'SELECT id, provider_reference FROM payment WHERE order_id = $1',
+      [order.id]
+    );
+    await maybeCreateOrderAmlAlerts(client, {
+      userId: req.auth.userId,
+      customerId: req.auth.customerId,
+      orderId: order.id,
+      paymentId: paymentResult.rows[0].id,
+      paymentProvider,
+      providerReference: paymentResult.rows[0].provider_reference || null,
+      subtotalUsd,
+      orderCurrency: order.currency,
+      totalAmount: order.total_amount
+    });
     await client.query('COMMIT');
     // Airtel/Orange Money: pas de redirection ni d'appel externe, on renvoie directement
     // les instructions de paiement (le client PayPal, lui, appelle /orders/:id/paypal ensuite).
@@ -1713,14 +2503,33 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
 app.post('/api/import-requests', requireAuthentication, requireRole('customer'), async (req, res, next) => {
   const parsed = importRequestSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Demande d’importation invalide', errors: parsed.error.flatten().fieldErrors });
+  const client = await database.connect();
   try {
-    const result = await database.query(
+    await client.query('BEGIN');
+    const kyc = await getKycSummary(client, req.auth.userId);
+    if (kyc.verification_status !== 'kyc_approuve') {
+      await auditKycAction(client, {
+        userId: req.auth.userId,
+        actorUserId: req.auth.userId,
+        action: 'import_request_gated',
+        fromStatus: kyc.verification_status,
+        toStatus: kyc.verification_status,
+        justification: 'Demande d’importation bloquée: KYC approuvé requis'
+      });
+      await client.query('ROLLBACK');
+      return res.status(403).json({ success: false, message: 'Un KYC approuvé est requis pour les demandes d’importation', code: 'kyc_required' });
+    }
+    const result = await client.query(
       'INSERT INTO import_request (customer_id, source_url, description, target_qty) VALUES ($1, $2, $3, $4) RETURNING id, status, created_at',
       [req.auth.customerId, parsed.data.sourceUrl || null, parsed.data.description, parsed.data.targetQty]
     );
+    await client.query('COMMIT');
     res.status(201).json({ success: true, request: result.rows[0] });
   } catch (error) {
+    await client.query('ROLLBACK');
     next(error);
+  } finally {
+    client.release();
   }
 });
 

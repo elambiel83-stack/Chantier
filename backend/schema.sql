@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS user_account (
   customer_id UUID UNIQUE REFERENCES customer(id) ON DELETE SET NULL,
   email TEXT NOT NULL UNIQUE CHECK (email = lower(email)),
   password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('customer', 'staff', 'admin')) DEFAULT 'customer',
+  role TEXT NOT NULL CHECK (role IN ('customer', 'staff', 'compliance', 'admin')) DEFAULT 'customer',
   is_active BOOLEAN NOT NULL DEFAULT true,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -54,6 +54,101 @@ ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
 -- NULL = jamais vérifié. Un compte Google/Apple n'a pas besoin de ce parcours (le
 -- fournisseur a déjà vérifié l'e-mail) mais rien ne l'y force ici.
 ALTER TABLE user_account ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS compliance_program (
+  id BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),
+  countries JSONB NOT NULL DEFAULT '["CD"]'::jsonb,
+  activity_scope JSONB NOT NULL DEFAULT '["marketplace","import","payments"]'::jsonb,
+  customer_types JSONB NOT NULL DEFAULT '["individual","business"]'::jsonb,
+  kyc_mode TEXT NOT NULL DEFAULT 'hybrid' CHECK (kyc_mode IN ('delegated','internal','hybrid')),
+  provider_name TEXT,
+  order_kyc_threshold_usd NUMERIC(14,2) NOT NULL DEFAULT 1000 CHECK (order_kyc_threshold_usd >= 0),
+  manual_payment_review_threshold_usd NUMERIC(14,2) NOT NULL DEFAULT 500 CHECK (manual_payment_review_threshold_usd >= 0),
+  aml_alert_threshold_usd NUMERIC(14,2) NOT NULL DEFAULT 750 CHECK (aml_alert_threshold_usd >= 0),
+  adverse_media_required BOOLEAN NOT NULL DEFAULT false,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO compliance_program (id)
+VALUES (true)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS kyc_profile (
+  user_id UUID PRIMARY KEY REFERENCES user_account(id) ON DELETE CASCADE,
+  customer_type TEXT NOT NULL DEFAULT 'individual' CHECK (customer_type IN ('individual','business')),
+  verification_status TEXT NOT NULL DEFAULT 'non_verifie'
+    CHECK (verification_status IN ('non_verifie','kyc_en_attente','kyc_en_revue','kyc_approuve','kyc_refuse','kyc_expire')),
+  legal_full_name TEXT,
+  date_of_birth DATE,
+  nationality TEXT,
+  residential_address TEXT,
+  document_type TEXT,
+  document_number TEXT,
+  document_issuing_country TEXT,
+  document_expires_at DATE,
+  business_name TEXT,
+  registration_number TEXT,
+  incorporation_country TEXT,
+  registered_address TEXT,
+  authorized_representatives JSONB NOT NULL DEFAULT '[]'::jsonb,
+  beneficial_owners JSONB NOT NULL DEFAULT '[]'::jsonb,
+  provider_mode TEXT NOT NULL DEFAULT 'internal' CHECK (provider_mode IN ('delegated','internal','hybrid')),
+  provider_case_reference TEXT,
+  review_notes TEXT,
+  rejection_reason TEXT,
+  requested_additional_documents BOOLEAN NOT NULL DEFAULT false,
+  submitted_at TIMESTAMPTZ,
+  reviewed_at TIMESTAMPTZ,
+  reviewed_by UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  approved_at TIMESTAMPTZ,
+  next_review_at TIMESTAMPTZ,
+  expired_at TIMESTAMPTZ,
+  data_retention_expires_at TIMESTAMPTZ,
+  sanctions_screening_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (sanctions_screening_status IN ('pending','clear','match','needs_review')),
+  pep_screening_status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (pep_screening_status IN ('pending','clear','match','needs_review')),
+  adverse_media_status TEXT NOT NULL DEFAULT 'not_required'
+    CHECK (adverse_media_status IN ('not_required','pending','clear','match','needs_review')),
+  customer_risk_score INTEGER NOT NULL DEFAULT 0 CHECK (customer_risk_score BETWEEN 0 AND 100),
+  transaction_risk_score INTEGER NOT NULL DEFAULT 0 CHECK (transaction_risk_score BETWEEN 0 AND 100),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS kyc_document (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+  document_kind TEXT NOT NULL CHECK (document_kind IN ('identity_front','identity_back','selfie','proof_of_address','business_registration','beneficial_owner_register','other')),
+  file_name TEXT NOT NULL,
+  storage_key_encrypted TEXT NOT NULL,
+  storage_provider TEXT NOT NULL DEFAULT 'manual-vault',
+  mime_type TEXT,
+  uploaded_by UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  reviewed_by UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  review_status TEXT NOT NULL DEFAULT 'uploaded' CHECK (review_status IN ('uploaded','accepted','rejected','expired')),
+  rejection_reason TEXT,
+  retention_expires_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS kyc_audit_log (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES user_account(id) ON DELETE CASCADE,
+  actor_user_id UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  from_status TEXT,
+  to_status TEXT,
+  justification TEXT,
+  changed_fields JSONB NOT NULL DEFAULT '{}'::jsonb,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 
 CREATE TABLE IF NOT EXISTS refresh_token (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -137,6 +232,42 @@ ALTER TABLE payment ADD COLUMN IF NOT EXISTS confirmation_token_hash TEXT;
 ALTER TABLE payment DROP CONSTRAINT IF EXISTS payment_provider_check;
 ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('paypal', 'cinetpay', 'airtel_money', 'orange_money'));
 
+CREATE TABLE IF NOT EXISTS aml_case (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+  payment_id UUID REFERENCES payment(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'ouvert'
+    CHECK (status IN ('ouvert','en_revue','escalade','clos_sans_suite','clos_avec_action','signale_aux_autorites')),
+  severity TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN ('low','medium','high','critical')),
+  alert_type TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  resolution_notes TEXT,
+  assigned_to UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  dedupe_key TEXT UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS aml_alert (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  aml_case_id UUID REFERENCES aml_case(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES user_account(id) ON DELETE SET NULL,
+  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+  payment_id UUID REFERENCES payment(id) ON DELETE SET NULL,
+  alert_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN ('low','medium','high','critical')),
+  status TEXT NOT NULL DEFAULT 'ouvert'
+    CHECK (status IN ('ouvert','en_revue','escalade','clos_sans_suite','clos_avec_action','signale_aux_autorites')),
+  risk_score INTEGER NOT NULL DEFAULT 0 CHECK (risk_score BETWEEN 0 AND 100),
+  provider_reference TEXT,
+  reason TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  dedupe_key TEXT UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Code de vérification (e-mail, SMS ou WhatsApp, au choix du client). Stocké haché comme
 -- refresh_token; expire et se limite en tentatives pour résister au brute-force.
 CREATE TABLE IF NOT EXISTS verification_code (
@@ -174,11 +305,17 @@ CREATE INDEX IF NOT EXISTS product_category_idx ON product(category);
 CREATE INDEX IF NOT EXISTS import_request_customer_id_idx ON import_request(customer_id);
 CREATE INDEX IF NOT EXISTS import_request_assigned_to_idx ON import_request(assigned_to);
 CREATE INDEX IF NOT EXISTS import_request_status_idx ON import_request(status);
+CREATE INDEX IF NOT EXISTS kyc_profile_verification_status_idx ON kyc_profile(verification_status);
+CREATE INDEX IF NOT EXISTS kyc_document_user_id_idx ON kyc_document(user_id);
+CREATE INDEX IF NOT EXISTS kyc_document_review_status_idx ON kyc_document(review_status);
+CREATE INDEX IF NOT EXISTS kyc_audit_log_user_id_created_at_idx ON kyc_audit_log(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS orders_customer_id_idx ON orders(customer_id);
 CREATE INDEX IF NOT EXISTS orders_assigned_to_idx ON orders(assigned_to);
 CREATE INDEX IF NOT EXISTS orders_pending_reservation_expires_at_idx
   ON orders(reservation_expires_at)
   WHERE status = 'pending' AND reservation_expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS payment_order_id_idx ON payment(order_id);
+CREATE INDEX IF NOT EXISTS aml_case_user_id_status_idx ON aml_case(user_id, status);
+CREATE INDEX IF NOT EXISTS aml_alert_user_id_status_idx ON aml_alert(user_id, status);
 CREATE INDEX IF NOT EXISTS refresh_token_user_id_idx ON refresh_token(user_id);
 CREATE INDEX IF NOT EXISTS verification_code_user_id_idx ON verification_code(user_id);
