@@ -272,6 +272,14 @@
   const year = document.getElementById("year");
   if (year) year.textContent = new Date().getFullYear();
 
+  // If an external licensed photo is unavailable, use the product-specific local illustration.
+  if (grid) grid.addEventListener('error', (event) => {
+    const img = event.target;
+    if (img.tagName !== 'IMG') return;
+    const fallback = img.dataset.imageFallback;
+    if (fallback && img.getAttribute('src') !== fallback) img.src = fallback;
+  }, true);
+
   function render(){
     if(!grid) return;
     const q = (search?.value || "").toLowerCase();
@@ -285,7 +293,7 @@
     );
     grid.innerHTML = items.map(p => `
       <div class="catalog-card bg-white rounded-2xl shadow p-4 flex flex-col">
-        <img loading="lazy" src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name_fr)}" class="h-32 sm:h-40 w-full object-cover rounded-xl">
+        <img loading="lazy" src="${escapeHtml(p.img)}" data-image-fallback="${escapeHtml(p.imageFallback || '')}" alt="${escapeHtml(p.name_fr)} — visuel illustratif" class="h-32 sm:h-40 w-full object-cover rounded-xl">
         <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${escapeHtml(lang === "fr" ? p.name_fr : p.name_en)}</div>
         <div class="text-slate-500 text-xs sm:text-sm">${escapeHtml(p.id)} · ${escapeHtml(p.unit)}${p.stock ? ' · Stock: ' + escapeHtml(p.stock) : ''}</div>
         ${p.vendorName ? `<div class="text-xs text-red-600 mt-0.5">${lang === 'fr' ? 'Vendu par' : 'Sold by'} ${escapeHtml(p.vendorName)}</div>` : ''}
