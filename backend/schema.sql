@@ -466,3 +466,35 @@ CREATE TABLE IF NOT EXISTS accounting_credit_note (
  created_by UUID REFERENCES user_account(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), refunded_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS accounting_credit_note_order_idx ON accounting_credit_note(order_id);
+
+
+-- Centre de conformité MonChantier: registre interne de préparation légale.
+-- Aucun numéro officiel n'est prérempli: ils seront saisis après délivrance et validation.
+CREATE TABLE IF NOT EXISTS compliance_item (
+  key TEXT PRIMARY KEY,
+  domain TEXT NOT NULL CHECK(domain IN ('corporate','tax','accounting','privacy','commerce','partners','transport','insurance','security','ip')),
+  label TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','received','verified','expired','not_applicable')),
+  value_text TEXT,
+  document_reference TEXT,
+  issued_at DATE,
+  expires_at DATE,
+  verified_at TIMESTAMPTZ,
+  verified_by UUID REFERENCES user_account(id),
+  notes TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO compliance_item(key,domain,label) VALUES
+ ('legal_name','corporate','Dénomination légale exacte'),('legal_form','corporate','Forme juridique'),
+ ('rccm','corporate','RCCM'),('id_nat','corporate','ID.NAT'),('nif','tax','NIF'),('registered_office','corporate','Siège social'),
+ ('normalized_invoicing','tax','Facturation normalisée / dispositif fiscal applicable'),('syscohada','accounting','Paramétrage comptable SYSCOHADA validé'),
+ ('privacy_formalities','privacy','Formalités de protection des données applicables'),('terms_review','commerce','CGV/CGU validées'),
+ ('vendor_contract','partners','Convention partenaire validée'),('vendor_due_diligence','partners','Procédure de vérification partenaires'),
+ ('carrier_contract','transport','Convention transport/livraison'),('insurance','insurance','Assurances requises'),
+ ('security_review','security','Revue sécurité et traçabilité'),('brand','ip','Protection de la marque MonChantier')
+ON CONFLICT(key) DO NOTHING;
+CREATE TABLE IF NOT EXISTS compliance_event (
+ id BIGSERIAL PRIMARY KEY, item_key TEXT NOT NULL REFERENCES compliance_item(key), actor_id UUID REFERENCES user_account(id),
+ action TEXT NOT NULL, previous_status TEXT, new_status TEXT, details JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS compliance_event_item_idx ON compliance_event(item_key,created_at DESC);
