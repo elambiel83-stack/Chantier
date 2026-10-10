@@ -46,6 +46,8 @@ jobs:
         run: |
           node --check dashboard-demo.js
           node --check accounting.js
+          node --check privacy-consent.js
+          node privacy-consent.test.js
         working-directory: web
 
   mobile:
