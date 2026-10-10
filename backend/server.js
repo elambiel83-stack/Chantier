@@ -394,7 +394,7 @@ const appleAuthSchema = z.object({
   fullName: z.string().trim().min(1).max(120).optional()
 });
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
-const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
+const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']), reason: z.string().trim().min(5).max(500).optional() }).refine(x => x.status !== 'cancelled' || Boolean(x.reason), { message: 'Motif d’annulation requis', path: ['reason'] });
 const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor', 'accountant']) });
 const driverLocationSchema = z.object({
   latitude: z.number().min(-90).max(90),
@@ -2014,19 +2014,26 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
   const client = await database.connect();
   try {
     await client.query('BEGIN');
-    const result = await client.query(`UPDATE orders SET status = $2, updated_at = now() WHERE id = $1 AND status = ANY($3::text[])${ownership} RETURNING id, status, assigned_to`, values);
+    if (parsed.data.status === 'cancelled' && req.auth.role !== 'admin') { await client.query('ROLLBACK'); return res.status(403).json({ success:false, message:'Annulation réservée à l’administrateur' }); }
+    const result = await client.query(`UPDATE orders SET status = $2, updated_at = now(), cancelled_at=CASE WHEN $2='cancelled' THEN now() ELSE cancelled_at END, cancellation_reason=CASE WHEN $2='cancelled' THEN ${values.length+1} ELSE cancellation_reason END WHERE id = $1 AND status = ANY($3::text[])${ownership} RETURNING id, status, assigned_to`, [...values, parsed.data.reason || null]);
     if (!result.rowCount) {
       await client.query('ROLLBACK');
       return res.status(409).json({ success: false, message: 'Transition de statut non autorisée' });
     }
     if (parsed.data.status === 'cancelled') {
-      // Les quantités réservées à la création de la commande retournent au stock.
-      await client.query(
-        `UPDATE product SET stock_qty = product.stock_qty + reserved.qty
-         FROM (SELECT product_id, SUM(qty) AS qty FROM order_item WHERE order_id = $1 GROUP BY product_id) reserved
-         WHERE product.id = reserved.product_id`,
-        [req.params.orderId]
-      );
+      const release=await client.query('UPDATE orders SET stock_released_at=now() WHERE id=$1 AND stock_released_at IS NULL RETURNING id',[req.params.orderId]);
+      if(release.rowCount) await client.query(`UPDATE product SET stock_qty = product.stock_qty + reserved.qty FROM (SELECT product_id,SUM(qty) qty FROM order_item WHERE order_id=$1 AND product_id IS NOT NULL GROUP BY product_id) reserved WHERE product.id=reserved.product_id`,[req.params.orderId]);
+      await client.query("UPDATE payment SET status='cancelled',updated_at=now() WHERE order_id=$1 AND status IN ('pending','authorized')",[req.params.orderId]);
+      await client.query("UPDATE btp_settlement SET status='cancelled',updated_at=now() WHERE order_id=$1 AND status='due'",[req.params.orderId]);
+      const paid=(await client.query("SELECT COALESCE(SUM(amount),0) amount,MIN(currency) currency FROM payment WHERE order_id=$1 AND status='paid' GROUP BY order_id",[req.params.orderId])).rows[0];
+      if(paid&&Number(paid.amount)>0){
+        const order=(await client.query('SELECT total_amount,tax_amount,currency FROM orders WHERE id=$1',[req.params.orderId])).rows[0];
+        const amount=Math.min(Number(paid.amount),Number(order.total_amount));
+        const tax=Number(order.tax_amount||0)*amount/Number(order.total_amount||1);
+        let note=(await client.query("SELECT * FROM accounting_credit_note WHERE order_id=$1 AND status<>'cancelled'",[req.params.orderId])).rows[0];
+        if(!note) note=(await client.query("INSERT INTO accounting_credit_note(order_id,amount,currency,reason,created_by) VALUES($1,$2,$3,$4,$5) RETURNING *",[req.params.orderId,amount,order.currency,parsed.data.reason,req.auth.userId])).rows[0];
+        await accounting.postCreditNote(client,{creditNoteId:note.id,amount:Number(note.amount),taxAmount:Number(tax.toFixed(2)),currency:order.currency.trim(),createdBy:req.auth.userId});
+      }
     }
     if (parsed.data.status === 'confirmed') {
       // Airtel/Orange Money n'ont pas de capture automatique: confirmer la commande vaut
