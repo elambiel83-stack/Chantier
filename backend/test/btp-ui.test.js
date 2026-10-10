@@ -16,6 +16,7 @@ async function page(role){
  if(url==='/btp/quotes')return {quotes:[quote]};
  if(url==='/btp/missions')return {missions:[]};if(url==='/btp/settlements')return {settlements:[]};
  if(url==='/btp/quotes/quote-1/decision'){accepted=true;return {};}
+ if(url==='/btp/quotes/quote-1/send-document')return {success:true,number:'DEV-2026-QUOTE1-V2'};
  if(url==='/btp/quotes/quote-1')return {quote:{...quote,status:accepted?'accepted':'sent'},revisions:[{revision:2,lines:[{description:'Blocs',quantity:100,unit:'pcs',basePriceUsd:1.3}],terms:'Livraison incluse',subtotal_usd:130,commission_percent:10,commission_usd:13,total_usd:163,transport_usd:20,valid_until:'2030-01-01'}]};
  throw Error('Unexpected '+url);
  };
@@ -60,5 +61,14 @@ test('printable quote exposes A4 print/PDF action and invoice stays gated by ord
   assert.equal(doc.querySelector('[data-action="printInvoice"]'),null);
   const source=fs.readFileSync(path.join(web,'operations.js'),'utf8');
   assert.match(source,/window\.print\(\)/);assert.match(source,/@page\{size:A4/);assert.match(source,/FAC-/);assert.match(source,/DEV-/);
+ }finally{dom.window.close();}
+});
+
+test('admin quote exposes email and WhatsApp send actions',async()=>{
+ const {dom,doc}=await page('admin');try{
+  doc.querySelector('[data-action="quote"]').click();await new Promise(r=>setTimeout(r,20));
+  assert.ok(doc.querySelector('[data-action="sendQuoteEmail"]'));
+  assert.ok(doc.querySelector('[data-action="sendQuoteWhatsapp"]'));
+  assert.equal(doc.querySelector('[data-action="sendInvoiceEmail"]'),null);
  }finally{dom.window.close();}
 });
