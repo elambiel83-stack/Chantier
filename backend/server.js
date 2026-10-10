@@ -742,7 +742,7 @@ async function finalizeCinetpayPayment(transactionId) {
   try {
     await client.query('BEGIN');
     await client.query('UPDATE payment SET status = $1, updated_at = now() WHERE id = $2', [accepted ? 'paid' : 'failed', payment.id]);
-    if (accepted) await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [payment.order_id]);
+    if (accepted) { await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [payment.order_id]); const {postPayment}=require('./accounting').installAccounting?{}:{}; }
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -2445,8 +2445,8 @@ app.patch('/api/tickets/:id/assign', requireAuthentication, requireRole('admin')
 if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 
 // Gestionnaire d'erreurs
-require('./btpOperations').installBtpOperations(app, { database, requireAuthentication, requireRole });
-require('./accounting').installAccounting({ app, database, requireAuthentication, requireRole, wrap: (fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next), fail: (status,message)=>{const e=new Error(message);e.status=status;throw e;} });
+const accounting=require('./accounting').installAccounting({ app, database, requireAuthentication, requireRole, wrap: (fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next), fail: (status,message)=>{const e=new Error(message);e.status=status;throw e;} });
+require('./btpOperations').installBtpOperations(app, { database, requireAuthentication, requireRole, accounting });
 require('./partnerDirectory').installPartnerDirectory(app, { database, requireAuthentication, requireRole });
 
 app.use((err, req, res, next) => {
