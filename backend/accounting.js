@@ -1,0 +1,20 @@
+const { z }=require('zod');
+function installAccounting({app,database,requireAuthentication,requireRole,wrap,fail}){
+ const allowed=requireRole('admin','accountant');
+ async function postEntry(client,{reference,description,sourceType,sourceId,currency='USD',createdBy,lines}){
+  const debit=lines.reduce((s,l)=>s+Number(l.debit||0),0),credit=lines.reduce((s,l)=>s+Number(l.credit||0),0);
+  if(Math.abs(debit-credit)>0.005||debit<=0) fail(400,'Ecriture comptable non équilibrée');
+  const e=(await client.query('INSERT INTO accounting_entry(reference,description,source_type,source_id,currency,created_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(source_type,source_id,reference) DO UPDATE SET description=EXCLUDED.description RETURNING *',[reference,description,sourceType,sourceId,currency,createdBy])).rows[0];
+  const existing=await client.query('SELECT 1 FROM accounting_line WHERE entry_id=$1 LIMIT 1',[e.id]);
+  if(!existing.rowCount) for(const l of lines) await client.query('INSERT INTO accounting_line(entry_id,account_code,description,debit,credit) VALUES($1,$2,$3,$4,$5)',[e.id,l.accountCode,l.description||null,l.debit||0,l.credit||0]);
+  return e;
+ }
+ app.get('/api/accounting/accounts',requireAuthentication,allowed,wrap(async(req,res)=>res.json({success:true,accounts:(await database.query('SELECT * FROM accounting_account WHERE active=true ORDER BY code')).rows})));
+ app.get('/api/accounting/journal',requireAuthentication,allowed,wrap(async(req,res)=>{const rows=(await database.query(`SELECT e.*,json_agg(json_build_object('accountCode',l.account_code,'description',l.description,'debit',l.debit,'credit',l.credit) ORDER BY l.id) lines FROM accounting_entry e JOIN accounting_line l ON l.entry_id=e.id GROUP BY e.id ORDER BY e.entry_date DESC,e.created_at DESC LIMIT 500`)).rows;res.json({success:true,entries:rows});}));
+ app.get('/api/accounting/trial-balance',requireAuthentication,allowed,wrap(async(req,res)=>{const rows=(await database.query(`SELECT a.code,a.name,a.type,COALESCE(SUM(CASE WHEN e.status='posted' THEN l.debit ELSE 0 END),0) debit,COALESCE(SUM(CASE WHEN e.status='posted' THEN l.credit ELSE 0 END),0) credit FROM accounting_account a LEFT JOIN accounting_line l ON l.account_code=a.code LEFT JOIN accounting_entry e ON e.id=l.entry_id GROUP BY a.code,a.name,a.type ORDER BY a.code`)).rows;res.json({success:true,accounts:rows});}));
+ app.get('/api/accounting/summary',requireAuthentication,allowed,wrap(async(req,res)=>{const q=await database.query(`SELECT a.type,COALESCE(SUM(l.debit-l.credit),0) balance FROM accounting_account a LEFT JOIN accounting_line l ON l.account_code=a.code LEFT JOIN accounting_entry e ON e.id=l.entry_id AND e.status='posted' GROUP BY a.type`);const x=Object.fromEntries(q.rows.map(r=>[r.type,Number(r.balance)]));res.json({success:true,assets:x.asset||0,liabilities:-(x.liability||0),equity:-(x.equity||0),revenue:-(x.revenue||0),expenses:x.expense||0,profit:-(x.revenue||0)-(x.expense||0)});}));
+ const expense=z.object({description:z.string().trim().min(2).max(500),accountCode:z.string().regex(/^5\d{3}$/),amount:z.number().positive().max(1e9),currency:z.enum(['USD','CDF','EUR']).default('USD'),paymentReference:z.string().trim().max(120).optional()}).strict();
+ app.post('/api/accounting/expenses',requireAuthentication,allowed,wrap(async(req,res)=>{const b=expense.parse(req.body);const c=await database.connect();try{await c.query('BEGIN');const ex=(await c.query('INSERT INTO accounting_expense(account_code,description,amount,currency,payment_reference,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING *',[b.accountCode,b.description,b.amount,b.currency,b.paymentReference||null,req.auth.userId])).rows[0];await postEntry(c,{reference:'DEP-'+ex.id.toString().slice(0,8),description:b.description,sourceType:'expense',sourceId:ex.id,currency:b.currency,createdBy:req.auth.userId,lines:[{accountCode:b.accountCode,debit:b.amount},{accountCode:'1000',credit:b.amount}]});await c.query('COMMIT');res.status(201).json({success:true,expense:ex});}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}));
+ return {postEntry};
+}
+module.exports={installAccounting};
