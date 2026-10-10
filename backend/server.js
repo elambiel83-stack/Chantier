@@ -395,7 +395,7 @@ const appleAuthSchema = z.object({
 });
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']) });
-const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor']) });
+const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor', 'accountant']) });
 const driverLocationSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180)
@@ -2446,6 +2446,7 @@ if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 
 // Gestionnaire d'erreurs
 require('./btpOperations').installBtpOperations(app, { database, requireAuthentication, requireRole });
+require('./accounting').installAccounting({ app, database, requireAuthentication, requireRole, wrap: (fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next), fail: (status,message)=>{const e=new Error(message);e.status=status;throw e;} });
 require('./partnerDirectory').installPartnerDirectory(app, { database, requireAuthentication, requireRole });
 
 app.use((err, req, res, next) => {
