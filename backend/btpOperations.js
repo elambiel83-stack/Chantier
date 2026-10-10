@@ -106,7 +106,7 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
     res.set('Cache-Control','no-store, private');res.type('html').send(doc.html);
   });
   app.post('/api/btp/quotes/:id/send-document', requireAuthentication, requireRole('admin'), wrap(async(req,res)=>{
-    const id=parse(uuid,req.params.id), b=parse(z.object({channel:z.enum(['email','whatsapp']),kind:z.enum(['quote','invoice']),pdfBase64:z.string().max(12_000_000).optional()}).strict(),req.body);
+    const id=parse(uuid,req.params.id), b=parse(z.object({channel:z.enum(['email','whatsapp']),kind:z.enum(['quote','invoice']),pdfBase64:z.string().max(12_000_000).optional(),documentUrl:z.string().url().max(2000).optional()}).strict(),req.body);
     const q=await queryOne(database,'SELECT q.*,c.full_name,c.email,c.whatsapp,c.phone FROM btp_quote q JOIN customer c ON c.id=q.customer_id WHERE q.id=$1',[id],'Devis');
     if(!q.revision) fail(409,'Aucune version chiffrée à envoyer');
     if(b.kind==='invoice'&&!q.order_id) fail(409,'Commande requise avant envoi de la facture');
@@ -119,7 +119,7 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
     if(b.channel==='email'){
       destination=q.email;if(!destination) fail(409,'Adresse e-mail client manquante');
       const attachments=b.pdfBase64?[{filename:number+'.pdf',content:b.pdfBase64}]:[];
-      await sendEmail(destination,'Chantier.online - '+label+' '+number,message,attachments);
+      await sendEmail(destination,'Chantier.online - '+label+' '+number,message+(b.documentUrl?'\nDocument sécurisé (15 min) : '+b.documentUrl:''),attachments);
     }else{
       destination=q.whatsapp||q.phone;if(!destination) fail(409,'Numero WhatsApp client manquant');
       await sendWhatsApp(destination,message+'\\nLe document PDF est disponible dans votre espace Chantier.');
