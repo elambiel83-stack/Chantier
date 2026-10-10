@@ -1669,6 +1669,7 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       'INSERT INTO payment (order_id, provider, amount, currency) VALUES ($1, $2, $3, $4)',
       [order.id, paymentProvider, order.total_amount, order.currency]
     );
+    await accounting.postInvoice(client,{orderId:order.id,amount:Number(order.total_amount),taxAmount:0,currency:order.currency.trim(),createdBy:req.auth.userId});
     await client.query('COMMIT');
     // Airtel/Orange Money: pas de redirection ni d'appel externe, on renvoie directement
     // les instructions de paiement (le client PayPal, lui, appelle /orders/:id/paypal ensuite).
@@ -2457,9 +2458,10 @@ app.use((err, req, res, next) => {
   // encombrer le suivi d'erreurs.
   if (isCorsError) console.error(err.stack);
   else captureError(err);
-  res.status(isCorsError ? 403 : 500).json({
+  const status=isCorsError?403:(Number.isInteger(err.status)&&err.status>=400&&err.status<600?err.status:500);
+  res.status(status).json({
     success: false,
-    message: isCorsError ? 'Origine non autorisée' : 'Erreur interne du serveur'
+    message: isCorsError ? 'Origine non autorisée' : (status<500 ? err.message : 'Erreur interne du serveur')
   });
 });
 
