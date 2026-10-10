@@ -69,7 +69,7 @@ ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
 -- matériaux...) — voir table vendor ci-dessous. Retirer/ajouter la contrainte avant de la
 -- recréer, sans quoi le second déploiement échouerait ("constraint already exists").
 ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_role_check;
-ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor'));
+ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor', 'accountant'));
 
 -- Profil partenaire (marketplace multi-vendeurs): un compte 'vendor' publie son propre
 -- catalogue (product.vendor_id) et gère la préparation de ses articles sur les commandes
@@ -166,6 +166,8 @@ CREATE TABLE IF NOT EXISTS orders (
   subtotal_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
   delivery_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
   total_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  tax_rate NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK(tax_rate BETWEEN 0 AND 100),
+  tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK(tax_amount >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -418,3 +420,108 @@ CREATE INDEX IF NOT EXISTS vendor_public_profile_trades_idx ON vendor_public_pro
 ALTER TABLE btp_quote ADD COLUMN IF NOT EXISTS target_vendor_id UUID REFERENCES vendor(id);
 ALTER TABLE btp_quote ADD COLUMN IF NOT EXISTS requested_trade_id TEXT;
 CREATE INDEX IF NOT EXISTS btp_quote_target_idx ON btp_quote(target_vendor_id);
+
+
+-- Comptabilité générale: journal immuable en partie double.
+CREATE TABLE IF NOT EXISTS accounting_account (
+  code TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('asset','liability','equity','revenue','expense')),
+  active BOOLEAN NOT NULL DEFAULT true
+);
+INSERT INTO accounting_account(code,name,type) VALUES
+ ('1000','Caisse et banques','asset'),('1100','Créances clients','asset'),('2000','Dettes fournisseurs','liability'),
+ ('2100','TVA et taxes à payer','liability'),('3000','Capitaux propres','equity'),('4000','Ventes et commissions','revenue'),
+ ('4100','Transport facturé','revenue'),('5000','Achats et prestations partenaires','expense'),('5100','Frais de transport','expense'),
+ ('5200','Frais de paiement et bancaires','expense'),('5300','Autres charges','expense') ON CONFLICT(code) DO NOTHING;
+CREATE TABLE IF NOT EXISTS accounting_entry (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+ reference TEXT NOT NULL, description TEXT NOT NULL, source_type TEXT, source_id UUID,
+ currency CHAR(3) NOT NULL DEFAULT 'USD' CHECK(currency IN ('USD','CDF','EUR')),
+ status TEXT NOT NULL DEFAULT 'posted' CHECK(status IN ('draft','posted','reversed')),
+ created_by UUID REFERENCES user_account(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ UNIQUE(source_type,source_id,reference)
+);
+CREATE TABLE IF NOT EXISTS accounting_line (
+ id BIGSERIAL PRIMARY KEY, entry_id UUID NOT NULL REFERENCES accounting_entry(id) ON DELETE RESTRICT,
+ account_code TEXT NOT NULL REFERENCES accounting_account(code), description TEXT,
+ debit NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK(debit>=0), credit NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK(credit>=0),
+ CHECK((debit>0 AND credit=0) OR (credit>0 AND debit=0))
+);
+CREATE INDEX IF NOT EXISTS accounting_line_entry_idx ON accounting_line(entry_id);
+CREATE INDEX IF NOT EXISTS accounting_entry_date_idx ON accounting_entry(entry_date);
+CREATE TABLE IF NOT EXISTS accounting_expense (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
+ account_code TEXT NOT NULL REFERENCES accounting_account(code), description TEXT NOT NULL,
+ amount NUMERIC(16,2) NOT NULL CHECK(amount>0), currency CHAR(3) NOT NULL DEFAULT 'USD' CHECK(currency IN ('USD','CDF','EUR')),
+ payment_reference TEXT, created_by UUID NOT NULL REFERENCES user_account(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_rate NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK(tax_rate BETWEEN 0 AND 100);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK(tax_amount >= 0);
+CREATE TABLE IF NOT EXISTS accounting_credit_note (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_id UUID NOT NULL REFERENCES orders(id), payment_id UUID REFERENCES payment(id),
+ amount NUMERIC(16,2) NOT NULL CHECK(amount>0), currency CHAR(3) NOT NULL CHECK(currency IN ('USD','CDF','EUR')),
+ reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'issued' CHECK(status IN ('issued','refunded','cancelled')),
+ created_by UUID REFERENCES user_account(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), refunded_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS accounting_credit_note_order_idx ON accounting_credit_note(order_id);
+
+
+-- Centre de conformité MonChantier: registre interne de préparation légale.
+-- Aucun numéro officiel n'est prérempli: ils seront saisis après délivrance et validation.
+CREATE TABLE IF NOT EXISTS compliance_item (
+  key TEXT PRIMARY KEY,
+  domain TEXT NOT NULL CHECK(domain IN ('corporate','tax','accounting','privacy','commerce','partners','transport','insurance','security','ip')),
+  label TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','received','verified','expired','not_applicable')),
+  value_text TEXT,
+  document_reference TEXT,
+  issued_at DATE,
+  expires_at DATE,
+  verified_at TIMESTAMPTZ,
+  verified_by UUID REFERENCES user_account(id),
+  notes TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO compliance_item(key,domain,label) VALUES
+ ('legal_name','corporate','Dénomination légale exacte'),('legal_form','corporate','Forme juridique'),
+ ('rccm','corporate','RCCM'),('id_nat','corporate','ID.NAT'),('nif','tax','NIF'),('registered_office','corporate','Siège social'),
+ ('normalized_invoicing','tax','Facturation normalisée / dispositif fiscal applicable'),('syscohada','accounting','Paramétrage comptable SYSCOHADA validé'),
+ ('privacy_formalities','privacy','Formalités de protection des données applicables'),('terms_review','commerce','CGV/CGU validées'),
+ ('vendor_contract','partners','Convention partenaire validée'),('vendor_due_diligence','partners','Procédure de vérification partenaires'),
+ ('carrier_contract','transport','Convention transport/livraison'),('insurance','insurance','Assurances requises'),
+ ('security_review','security','Revue sécurité et traçabilité'),('brand','ip','Protection de la marque MonChantier')
+ON CONFLICT(key) DO NOTHING;
+CREATE TABLE IF NOT EXISTS compliance_event (
+ id BIGSERIAL PRIMARY KEY, item_key TEXT NOT NULL REFERENCES compliance_item(key), actor_id UUID REFERENCES user_account(id),
+ action TEXT NOT NULL, previous_status TEXT, new_status TEXT, details JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS compliance_event_item_idx ON compliance_event(item_key,created_at DESC);
+
+
+-- Coffre documentaire: la base ne contient jamais les octets du document ni une URL publique.
+-- storage_key désigne un objet dans un stockage privé; sha256 permet d'en vérifier l'intégrité.
+CREATE TABLE IF NOT EXISTS compliance_document (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), item_key TEXT NOT NULL REFERENCES compliance_item(key),
+ original_name TEXT NOT NULL, mime_type TEXT NOT NULL CHECK(mime_type IN ('application/pdf','image/jpeg','image/png')),
+ size_bytes BIGINT NOT NULL CHECK(size_bytes>0 AND size_bytes<=10485760), sha256 CHAR(64) NOT NULL CHECK(sha256 ~ '^[0-9a-f]{64}$'),
+ storage_provider TEXT NOT NULL CHECK(storage_provider IN ('private_object_store','external_secure_vault')),
+ storage_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','superseded','deleted')),
+ issued_at DATE, expires_at DATE, uploaded_by UUID NOT NULL REFERENCES user_account(id), uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS compliance_document_item_idx ON compliance_document(item_key,status,uploaded_at DESC);
+
+
+-- Snapshot du coût fournisseur au moment où la commande est créée depuis le devis.
+-- Le prix client reste séparé; cette valeur sert de plafond immuable aux règlements partenaires.
+ALTER TABLE order_item ADD COLUMN IF NOT EXISTS vendor_base_amount_usd NUMERIC(14,2) CHECK(vendor_base_amount_usd >= 0);
+CREATE INDEX IF NOT EXISTS order_item_vendor_order_idx ON order_item(order_id,vendor_id);
+
+
+-- Annulations/remboursements: garde-fous idempotents et auditables.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_released_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS accounting_credit_note_order_unique ON accounting_credit_note(order_id) WHERE status <> 'cancelled';

@@ -18,15 +18,6 @@
   <link rel="manifest" href="/site.webmanifest">
   <meta name="theme-color" content="#14283F">
   <script src="config.js"></script>
-  <!-- Google tag (gtag.js) -->
-  <script async src="https://www.googletagmanager.com/gtag/js?id=AW-18453977660"></script>
-  <script>
-    window.dataLayer = window.dataLayer || [];
-    function gtag(){dataLayer.push(arguments);}
-    gtag('js', new Date());
-
-    gtag('config', 'AW-18453977660');
-  </script>
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 </head>
 <body class="bg-slate-50 text-slate-800">
@@ -169,5 +160,12 @@
       });
     }
   </script>
+<div id="privacy-choice" class="fixed bottom-0 inset-x-0 z-50 bg-white border-t shadow-lg p-4" role="dialog" aria-label="Préférences de confidentialité">
+  <div class="max-w-6xl mx-auto flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
+    <p class="text-sm">Nous utilisons les fonctions nécessaires au site. Google Ads reste désactivé sauf si vous acceptez les traceurs publicitaires.</p>
+    <div class="flex gap-2"><button id="privacy-reject" class="px-4 py-2 border rounded">Refuser</button><button id="privacy-accept-ads" class="px-4 py-2 bg-slate-900 text-white rounded">Accepter la publicité</button></div>
+  </div>
+</div>
+<script src="privacy-consent.js"></script>
 </body>
 </html>
