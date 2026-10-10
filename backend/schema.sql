@@ -166,6 +166,8 @@ CREATE TABLE IF NOT EXISTS orders (
   subtotal_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
   delivery_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
   total_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  tax_rate NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK(tax_rate BETWEEN 0 AND 100),
+  tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK(tax_amount >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -454,3 +456,13 @@ CREATE TABLE IF NOT EXISTS accounting_expense (
  amount NUMERIC(16,2) NOT NULL CHECK(amount>0), currency CHAR(3) NOT NULL DEFAULT 'USD' CHECK(currency IN ('USD','CDF','EUR')),
  payment_reference TEXT, created_by UUID NOT NULL REFERENCES user_account(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_rate NUMERIC(5,2) NOT NULL DEFAULT 0 CHECK(tax_rate BETWEEN 0 AND 100);
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK(tax_amount >= 0);
+CREATE TABLE IF NOT EXISTS accounting_credit_note (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), order_id UUID NOT NULL REFERENCES orders(id), payment_id UUID REFERENCES payment(id),
+ amount NUMERIC(16,2) NOT NULL CHECK(amount>0), currency CHAR(3) NOT NULL CHECK(currency IN ('USD','CDF','EUR')),
+ reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'issued' CHECK(status IN ('issued','refunded','cancelled')),
+ created_by UUID REFERENCES user_account(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now(), refunded_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS accounting_credit_note_order_idx ON accounting_credit_note(order_id);
