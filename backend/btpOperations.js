@@ -4,6 +4,8 @@ const { calculateQuote, precision } = require('./btpMoney');
 const { offers } = require('../web/launch-catalog');
 const { tradeIds } = require('./partnerDirectory');
 const { sendEmail, sendWhatsApp, channelAvailability } = require('./notifications');
+const crypto = require('crypto');
+const documentLinks = new Map();
 const uuid = z.string().uuid();
 const text = z.string().trim().min(2).max(2000);
 const amount = z.number().min(0).max(1000000).refine(v => precision(v, 2));
@@ -91,6 +93,18 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
     }); res.status(201).json({success:true,quote});
   }));
   app.get('/api/btp/document-channels', requireAuthentication, (req,res)=>res.json({success:true,channels:channelAvailability()}));
+  app.post('/api/btp/quotes/:id/document-link', requireAuthentication, wrap(async(req,res)=>{
+    const id=parse(uuid,req.params.id), b=parse(z.object({kind:z.enum(['quote','invoice']),html:z.string().min(100).max(1_000_000)}).strict(),req.body);
+    const f=scope(req,'quote');const q=await queryOne(database,`SELECT q.* FROM btp_quote q WHERE ${f.sql} AND q.id=${f.values.length+1}`,[...f.values,id],'Devis');
+    if(b.kind==='invoice'&&!q.order_id) fail(409,'Commande requise avant publication de la facture');
+    const token=crypto.randomBytes(24).toString('hex'), expires=Date.now()+15*60*1000;
+    documentLinks.set(token,{html:b.html,expires,quoteId:id});
+    res.json({success:true,url:'/api/btp/documents/'+token,expiresAt:new Date(expires).toISOString()});
+  }));
+  app.get('/api/btp/documents/:token',(req,res)=>{
+    const doc=documentLinks.get(req.params.token);if(!doc||doc.expires<Date.now()){documentLinks.delete(req.params.token);return res.status(404).send('Document expiré ou introuvable');}
+    res.set('Cache-Control','no-store, private');res.type('html').send(doc.html);
+  });
   app.post('/api/btp/quotes/:id/send-document', requireAuthentication, requireRole('admin'), wrap(async(req,res)=>{
     const id=parse(uuid,req.params.id), b=parse(z.object({channel:z.enum(['email','whatsapp']),kind:z.enum(['quote','invoice']),pdfBase64:z.string().max(12_000_000).optional()}).strict(),req.body);
     const q=await queryOne(database,'SELECT q.*,c.full_name,c.email,c.whatsapp,c.phone FROM btp_quote q JOIN customer c ON c.id=q.customer_id WHERE q.id=$1',[id],'Devis');
