@@ -120,3 +120,33 @@ footer a.text-red-600 { color: #FFAD6B !important; }
 .product-technical p { font-size: 11px; color: #596960; }
 .product-actions { margin-top: auto; padding-top: 16px; }
 @media (prefers-reduced-motion: reduce) { .catalog-card { transition: none; } .catalog-card:hover { transform: none; } }
+
+/* Motion visible on touch screens without requiring hover. */
+@keyframes catalog-arrival {
+  from { opacity: .2; translate: 0 18px; }
+  to { opacity: 1; translate: 0 0; }
+}
+@keyframes product-orbit {
+  0% { transform: rotate(35deg) translate(0, 0); }
+  50% { transform: rotate(55deg) translate(-12px, 12px); }
+  100% { transform: rotate(35deg) translate(0, 0); }
+}
+@keyframes technical-arrival {
+  from { opacity: .2; translate: 0 -6px; }
+  to { opacity: 1; translate: 0 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .catalog-card { animation: catalog-arrival .55s ease-out backwards; }
+  .catalog-card:nth-child(3n+2) { animation-delay: .08s; }
+  .catalog-card:nth-child(3n) { animation-delay: .16s; }
+  .product-art-placeholder::after { animation: product-orbit 4s ease-in-out; }
+  .product-technical[open] dl { animation: technical-arrival .25s ease-out; }
+  .product-art img { transition: transform .45s ease; }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .catalog-card:hover .product-art img { transform: scale(1.035); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .catalog-card, .product-art-placeholder::after, .product-technical[open] dl { animation: none !important; }
+  .product-art img { transition: none; }
+}
