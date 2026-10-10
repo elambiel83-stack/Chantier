@@ -2451,6 +2451,7 @@ if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 const accounting=require('./accounting').installAccounting({ app, database, requireAuthentication, requireRole, wrap: (fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next), fail: (status,message)=>{const e=new Error(message);e.status=status;throw e;} });
 require('./btpOperations').installBtpOperations(app, { database, requireAuthentication, requireRole, accounting });
 require('./partnerDirectory').installPartnerDirectory(app, { database, requireAuthentication, requireRole });
+require('./compliance').installCompliance(app, { database, requireAuthentication, requireRole });
 
 app.use((err, req, res, next) => {
   const isCorsError = err.message === 'Origine non autorisée par CORS';
