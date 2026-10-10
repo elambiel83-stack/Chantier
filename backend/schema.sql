@@ -518,3 +518,10 @@ CREATE INDEX IF NOT EXISTS compliance_document_item_idx ON compliance_document(i
 -- Le prix client reste séparé; cette valeur sert de plafond immuable aux règlements partenaires.
 ALTER TABLE order_item ADD COLUMN IF NOT EXISTS vendor_base_amount_usd NUMERIC(14,2) CHECK(vendor_base_amount_usd >= 0);
 CREATE INDEX IF NOT EXISTS order_item_vendor_order_idx ON order_item(order_id,vendor_id);
+
+
+-- Annulations/remboursements: garde-fous idempotents et auditables.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_released_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS accounting_credit_note_order_unique ON accounting_credit_note(order_id) WHERE status <> 'cancelled';
