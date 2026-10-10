@@ -742,7 +742,7 @@ async function finalizeCinetpayPayment(transactionId) {
   try {
     await client.query('BEGIN');
     await client.query('UPDATE payment SET status = $1, updated_at = now() WHERE id = $2', [accepted ? 'paid' : 'failed', payment.id]);
-    if (accepted) { await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [payment.order_id]); const {postPayment}=require('./accounting').installAccounting?{}:{}; }
+    if (accepted) { await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [payment.order_id]); await accounting.postPayment(client,{paymentId:payment.id,orderId:payment.order_id,amount:Number(payment.amount),currency:payment.currency.trim(),createdBy:null}); }
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1774,6 +1774,7 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
       await client.query('BEGIN');
       await client.query("UPDATE payment SET status = 'paid', confirmation_token_hash = NULL, updated_at = now() WHERE id = $1", [pendingPayment.id]);
       await client.query("UPDATE orders SET status = 'confirmed', updated_at = now() WHERE id = $1", [req.params.orderId]);
+      await accounting.postPayment(client,{paymentId:pendingPayment.id,orderId:req.params.orderId,amount:Number(pendingPayment.amount),currency:pendingPayment.currency.trim(),createdBy:null});
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -2029,10 +2030,11 @@ app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('sta
     if (parsed.data.status === 'confirmed') {
       // Airtel/Orange Money n'ont pas de capture automatique: confirmer la commande vaut
       // déclaration par le staff que le paiement a été vérifié (SMS, relevé marchand...).
-      await client.query(
-        "UPDATE payment SET status = 'paid', updated_at = now() WHERE order_id = $1 AND provider IN ('airtel_money', 'orange_money') AND status = 'pending'",
+      const paidMobile=await client.query(
+        "UPDATE payment SET status = 'paid', updated_at = now() WHERE order_id = $1 AND provider IN ('airtel_money', 'orange_money') AND status = 'pending' RETURNING id,amount,currency",
         [req.params.orderId]
       );
+      for(const p of paidMobile.rows) await accounting.postPayment(client,{paymentId:p.id,orderId:req.params.orderId,amount:Number(p.amount),currency:p.currency.trim(),createdBy:req.auth.userId});
     }
     await client.query('COMMIT');
     res.json({ success: true, order: result.rows[0] });
