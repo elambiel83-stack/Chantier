@@ -498,3 +498,17 @@ CREATE TABLE IF NOT EXISTS compliance_event (
  action TEXT NOT NULL, previous_status TEXT, new_status TEXT, details JSONB NOT NULL DEFAULT '{}', created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS compliance_event_item_idx ON compliance_event(item_key,created_at DESC);
+
+
+-- Coffre documentaire: la base ne contient jamais les octets du document ni une URL publique.
+-- storage_key désigne un objet dans un stockage privé; sha256 permet d'en vérifier l'intégrité.
+CREATE TABLE IF NOT EXISTS compliance_document (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), item_key TEXT NOT NULL REFERENCES compliance_item(key),
+ original_name TEXT NOT NULL, mime_type TEXT NOT NULL CHECK(mime_type IN ('application/pdf','image/jpeg','image/png')),
+ size_bytes BIGINT NOT NULL CHECK(size_bytes>0 AND size_bytes<=10485760), sha256 CHAR(64) NOT NULL CHECK(sha256 ~ '^[0-9a-f]{64}$'),
+ storage_provider TEXT NOT NULL CHECK(storage_provider IN ('private_object_store','external_secure_vault')),
+ storage_key TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','superseded','deleted')),
+ issued_at DATE, expires_at DATE, uploaded_by UUID NOT NULL REFERENCES user_account(id), uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS compliance_document_item_idx ON compliance_document(item_key,status,uploaded_at DESC);
