@@ -137,7 +137,7 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
         remainingCommission-=allocated;
         const lineTotal=(baseCents+allocated)/100;
         const unitPrice=Math.round(lineTotal/l.quantity*100)/100;
-        await c.query('INSERT INTO order_item(order_id,product_id,qty,unit_price_usd,vendor_id,quote_description,quote_unit,line_total_usd) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[o.id,l.productId||null,l.quantity,unitPrice,l.vendorId||null,l.description,l.unit,lineTotal]);
+        await c.query('INSERT INTO order_item(order_id,product_id,qty,unit_price_usd,vendor_id,quote_description,quote_unit,line_total_usd,vendor_base_amount_usd) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[o.id,l.productId||null,l.quantity,unitPrice,l.vendorId||null,l.description,l.unit,lineTotal,l.vendorId?baseCents/100:null]);
       }
       await c.query('INSERT INTO payment(order_id,provider,amount,currency) VALUES($1,$2,$3,$4)',[o.id,b.paymentProvider,o.total_amount,'USD']);
       await c.query('UPDATE btp_quote SET order_id=$2,updated_at=now() WHERE id=$1',[id,o.id]);if(accounting) await accounting.postInvoice(c,{orderId:o.id,amount:Number(o.total_amount),currency:o.currency,createdBy:req.auth.userId});await event(c,'quote',id,req,'order_created',{orderId:o.id});return o;
@@ -193,8 +193,11 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
       await activeVendor(c,b.vendorId);
       const associated=await c.query('SELECT 1 FROM order_item WHERE order_id=$1 AND vendor_id=$2 UNION SELECT 1 FROM btp_mission WHERE order_id=$1 AND carrier_vendor_id=$2 AND status=\'completed\'',[b.orderId,b.vendorId]);
       if(!associated.rowCount) fail(400,'Partenaire sans prestation sur cette commande');
-      const committed=await c.query("SELECT COALESCE(SUM(amount_usd),0) AS amount FROM btp_settlement WHERE order_id=$1 AND status <> 'cancelled'",[b.orderId]);
-      if(Number(committed.rows[0].amount)+b.amountUsd>Number(o.total_amount)) fail(409,'Règlements supérieurs au montant de la commande');
+      const entitlement=await c.query("SELECT COALESCE(SUM(vendor_base_amount_usd),0) AS amount FROM order_item WHERE order_id=$1 AND vendor_id=$2 AND vendor_status <> 'cancelled'",[b.orderId,b.vendorId]);
+      const committed=await c.query("SELECT COALESCE(SUM(amount_usd),0) AS amount FROM btp_settlement WHERE order_id=$1 AND vendor_id=$2 AND status <> 'cancelled'",[b.orderId,b.vendorId]);
+      const ceiling=Number(entitlement.rows[0].amount);
+      if(ceiling<=0) fail(409,'Aucun coût fournisseur figé pour ce partenaire');
+      if(Number(committed.rows[0].amount)+b.amountUsd>ceiling+0.005) fail(409,'Règlement supérieur au coût fournisseur validé');
       const s=(await c.query('INSERT INTO btp_settlement(order_id,vendor_id,purpose,amount_usd,created_by) VALUES($1,$2,$3,$4,$5) RETURNING *',[b.orderId,b.vendorId,b.purpose,b.amountUsd,req.auth.userId])).rows[0];if(accounting) await accounting.postVendorDue(c,{settlementId:s.id,amount:Number(s.amount_usd),createdBy:req.auth.userId});await event(c,'settlement',s.id,req,'due',{amountUsd:b.amountUsd});return s;
     });res.status(201).json({success:true,settlement});
   }));
