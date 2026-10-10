@@ -14,13 +14,13 @@ function requireEnv(name) {
   return value;
 }
 
-async function sendEmail(to, subject, text) {
+async function sendEmail(to, subject, text, attachments = []) {
   const apiKey = requireEnv('RESEND_API_KEY');
   const from = process.env.RESEND_FROM_EMAIL || 'MonChantier <onboarding@resend.dev>';
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from, to, subject, text }),
+    body: JSON.stringify({ from, to, subject, text, ...(attachments.length ? { attachments } : {}) }),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
   });
   if (!response.ok) throw new Error(`Envoi e-mail refusé (${response.status})`);
