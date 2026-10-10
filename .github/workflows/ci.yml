@@ -22,8 +22,11 @@ jobs:
       - name: Vérifier la syntaxe
         run: node --check server.js
         working-directory: backend
-      - name: Tests de fumée
+      - name: Tests backend et comptables
         run: npm test
+        working-directory: backend
+      - name: Vérifier la syntaxe du moteur comptable
+        run: node --check accounting.js
         working-directory: backend
 
   web:
@@ -39,8 +42,10 @@ jobs:
       - name: Installer les dépendances
         run: npm ci
         working-directory: web
-      - name: Vérifier le JavaScript du dashboard multi-rôle
-        run: node --check dashboard-demo.js
+      - name: Vérifier le JavaScript des dashboards
+        run: |
+          node --check dashboard-demo.js
+          node --check accounting.js
         working-directory: web
 
   mobile:
