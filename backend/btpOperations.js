@@ -3,6 +3,7 @@ const { z } = require('zod');
 const { calculateQuote, precision } = require('./btpMoney');
 const { offers } = require('../web/launch-catalog');
 const { tradeIds } = require('./partnerDirectory');
+const { sendEmail, sendWhatsApp, channelAvailability } = require('./notifications');
 const uuid = z.string().uuid();
 const text = z.string().trim().min(2).max(2000);
 const amount = z.number().min(0).max(1000000).refine(v => precision(v, 2));
@@ -89,6 +90,30 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
       await event(c,'quote',id,req,b.publish?'sent':'draft',{revision:rev,totalUsd:totals.totalUsd});return updated;
     }); res.status(201).json({success:true,quote});
   }));
+  app.get('/api/btp/document-channels', requireAuthentication, (req,res)=>res.json({success:true,channels:channelAvailability()}));
+  app.post('/api/btp/quotes/:id/send-document', requireAuthentication, requireRole('admin'), wrap(async(req,res)=>{
+    const id=parse(uuid,req.params.id), b=parse(z.object({channel:z.enum(['email','whatsapp']),kind:z.enum(['quote','invoice']),pdfBase64:z.string().max(12_000_000).optional()}).strict(),req.body);
+    const q=await queryOne(database,'SELECT q.*,c.full_name,c.email,c.whatsapp,c.phone FROM btp_quote q JOIN customer c ON c.id=q.customer_id WHERE q.id=$1',[id],'Devis');
+    if(!q.revision) fail(409,'Aucune version chiffrée à envoyer');
+    if(b.kind==='invoice'&&!q.order_id) fail(409,'Commande requise avant envoi de la facture');
+    const r=await queryOne(database,'SELECT * FROM btp_quote_revision WHERE quote_id=$1 AND revision=$2',[id,q.revision],'Version');
+    const prefix=b.kind==='invoice'?'FAC':'DEV';
+    const number=prefix+'-'+new Date(q.created_at).getFullYear()+'-'+String(q.id).replace(/-/g,'').slice(0,8).toUpperCase()+'-V'+r.revision;
+    const label=b.kind==='invoice'?'facture':'devis';
+    const message='Chantier.online - '+label+' '+number+'\\nObjet : '+q.request+'\\nDestination : '+q.destination+'\\nTotal : '+Number(r.total_usd).toFixed(2)+' USD'+(b.kind==='quote'?'\\nValable jusqu au : '+new Date(r.valid_until).toLocaleDateString('fr-FR'):'');
+    let destination;
+    if(b.channel==='email'){
+      destination=q.email;if(!destination) fail(409,'Adresse e-mail client manquante');
+      const attachments=b.pdfBase64?[{filename:number+'.pdf',content:b.pdfBase64}]:[];
+      await sendEmail(destination,'Chantier.online - '+label+' '+number,message,attachments);
+    }else{
+      destination=q.whatsapp||q.phone;if(!destination) fail(409,'Numero WhatsApp client manquant');
+      await sendWhatsApp(destination,message+'\\nLe document PDF est disponible dans votre espace Chantier.');
+    }
+    await event(database,'quote',id,req,'document_sent',{channel:b.channel,kind:b.kind,number,destination});
+    res.json({success:true,channel:b.channel,kind:b.kind,number});
+  }));
+
   app.post('/api/btp/quotes/:id/decision', requireAuthentication, requireRole('customer'), wrap(async(req,res)=>{
     const id=parse(uuid,req.params.id), b=parse(z.object({expectedRevision:z.number().int().positive(),decision:z.enum(['accepted','rejected'])}).strict(),req.body);
     const quote=await transaction(async c=>{
