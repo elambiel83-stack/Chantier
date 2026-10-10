@@ -1,0 +1,9 @@
+id,actif,emplacement,auteur_declare,titulaire_droits_verifie,preuve_origine,licence_cession,statut
+IP-001,Concept de plateforme,docs/PROPRIETE_INTELLECTUELLE_DECLARATION_FONDATEUR.md,LWAMBA LAMBI ERICK,non,documents dates a joindre,non applicable a idee abstraite,attente de signature
+IP-002,Code backend,backend/,a determiner,non,historique Git et contrats a examiner,ISC indique dans package.json,a verifier
+IP-003,Code web,web/,a determiner,non,historique Git et contrats a examiner,ISC indique dans package.json,a verifier
+IP-004,Application mobile,mobile/,a determiner,non,historique Git et contrats a examiner,dependances tierces,a verifier
+IP-005,Logo principal,web/assets/chantier-logo.svg,a determiner,non,source originale et auteur a produire,cession ou licence a produire,a verifier
+IP-006,Photos et illustrations,web/assets/,a determiner,non,source ou factures a produire,licences a produire,a verifier
+IP-007,Nom CHANTIER.ONLINE,usage commercial,a determiner,non,preuves d'usage et recherche anterieure,depot de marque a examiner,a verifier
+IP-008,Domaine chantier.online,registrar,a determiner,non,facture et identite titulaire a produire,contrat domaine,a verifier
