@@ -98,3 +98,25 @@ footer a.text-red-600 { color: #FFAD6B !important; }
 .partner-form label { display: grid; gap: 6px; font-weight: 600; }
 .partner-form input, .partner-form select, .partner-form textarea { padding: 12px; width: 100%; border: 1px solid var(--line); border-radius: 8px; }
 @media(max-width:767px) { .network-steps { grid-template-columns: 1fr; } }
+
+/* Editorial product display */
+.catalog-card { overflow: hidden; transition: box-shadow .2s, transform .2s; }
+.catalog-card:hover { box-shadow: 0 16px 32px rgba(23,33,43,.12) !important; transform: translateY(-3px); }
+.product-art { position: relative; min-height: 160px; border-radius: 8px; overflow: hidden; background: #edf0ed; }
+.product-art img { display: block; height: 190px; }
+.product-art-placeholder { min-height: 210px; padding: 24px 20px 42px; color: #fff; background: radial-gradient(ellipse at top right, #54645e, transparent 70%), linear-gradient(145deg,#152b28,#263b35); }
+.product-art-placeholder::after { content: ''; position: absolute; width: 140px; height: 140px; border: 1px solid #ffffff22; transform: rotate(35deg); right: -45px; top: 12px; pointer-events: none; }
+.product-art-monogram { display: block; font-size: 48px; font-weight: 900; line-height: 1; color: #ffffffaa; }
+.product-art-monogram span { color: #ef5544; }
+.product-art-name { display: block; margin: 14px 0 10px; font-size: 19px; font-weight: 650; line-height: 1.3; }
+.product-art-caption { font-size: 10px; letter-spacing: .08em; color: #d5dfda; }
+.product-family { position: absolute; bottom: 10px; left: 12px; right: 12px; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: #fff; background: #18332ee8; padding: 4px 8px; border-radius: 3px; }
+.product-technical { margin-top: 14px; border-top: 1px solid #dde4e0; border-bottom: 1px solid #dde4e0; padding: 10px 0; font-size: 12px; }
+.product-technical summary { cursor: pointer; font-weight: 650; color: #18332e; padding: 4px 0; }
+.product-technical dl { margin: 12px 0; }
+.product-technical dl div { padding: 7px 0; border-bottom: 1px solid #edf0ed; }
+.product-technical dt { font-weight: 600; }
+.product-technical dd { margin: 3px 0 0; color: #596960; overflow-wrap: anywhere; }
+.product-technical p { font-size: 11px; color: #596960; }
+.product-actions { margin-top: auto; padding-top: 16px; }
+@media (prefers-reduced-motion: reduce) { .catalog-card { transition: none; } .catalog-card:hover { transform: none; } }

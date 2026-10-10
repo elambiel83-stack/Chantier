@@ -283,22 +283,32 @@
       (!selectedGroup || p.catalog_group === selectedGroup) &&
       ((p.name_fr + " " + p.name_en).toLowerCase().includes(q))
     );
-    grid.innerHTML = items.map(p => `
+    grid.innerHTML = items.map(p => {
+      const presentation = window.CHANTIER_PRODUCT_PRESENTATION.describe(p);
+      const title = lang === 'fr' ? p.name_fr : (p.name_en || p.name_fr);
+      const genericImage = !p.img || /(?:mesproduits\.png|chantier-mark\.svg)$/.test(p.img);
+      const technical = presentation.rows.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
+      return `
       <div class="catalog-card bg-white rounded-2xl shadow p-4 flex flex-col">
-        <img loading="lazy" src="${escapeHtml(p.img)}" alt="${escapeHtml(p.name_fr)}" class="h-32 sm:h-40 w-full object-cover rounded-xl">
+        <div class="product-art ${genericImage ? 'product-art-placeholder' : ''}">
+          ${genericImage ? `<span class="product-art-monogram" aria-hidden="true">C<span>.</span></span><span class="product-art-name">${escapeHtml(title)}</span><span class="product-art-caption">${lang === 'fr' ? 'Présentation illustrative' : 'Illustrative presentation'}</span>` : `<img loading="lazy" src="${escapeHtml(p.img)}" alt="${escapeHtml(title)}" class="h-32 sm:h-40 w-full object-cover rounded-xl">`}
+          <span class="product-family">${escapeHtml(presentation.group)}</span>
+        </div>
         <div class="mt-3 sm:mt-4 font-semibold text-sm sm:text-base">${escapeHtml(lang === "fr" ? p.name_fr : p.name_en)}</div>
         <div class="text-slate-500 text-xs sm:text-sm">${escapeHtml(p.id)} · ${escapeHtml(p.unit)}${p.stock ? ' · Stock: ' + escapeHtml(p.stock) : ''}</div>
         ${p.vendorName ? `<div class="text-xs text-red-600 mt-0.5">${lang === 'fr' ? 'Vendu par' : 'Sold by'} ${escapeHtml(p.vendorName)}</div>` : ''}
         ${p.launchOffer ? `<p class="offer-note">${lang === 'fr' ? 'Offre de lancement · disponibilité à confirmer' : 'Launch offer · availability to confirm'}</p><p class="text-sm">${lang === 'fr' ? 'Minimum' : 'Minimum'} : ${escapeHtml(p.minimumQuantity)} ${escapeHtml(p.unit)}</p><p class="text-sm">${lang === 'fr' ? 'Transport confirmé sur devis selon la destination.' : 'Delivery confirmed by destination quote.'}</p>` : ''}
         <div class="mt-2 text-lg sm:text-xl font-bold">${Number(p.price) > 0 ? money(p.price) : (lang === 'fr' ? 'Sur devis' : 'On request')}</div>
-        <div class="mt-3 sm:mt-4 flex gap-2">
+        <details class="product-technical"><summary>${lang === 'fr' ? 'Fiche technique' : 'Technical details'}</summary><dl>${technical}</dl><p>${lang === 'fr' ? 'Données du catalogue indicatives. Demandez la fiche fournisseur pour les performances et certifications.' : 'Indicative catalog data. Request the supplier sheet for performance and certifications.'}</p></details>
+        <div class="mt-3 sm:mt-4 flex gap-2 product-actions">
           ${!p.quoteOnly && Number(p.price) > 0 && Number(p.stock) > 0 ? `
             <input type="number" min="1" value="1" class="border rounded-lg px-2 py-1 w-16 sm:w-24 text-sm sm:text-base" id="qty-${escapeHtml(p.id)}">
             <button class="dark-button flex-1 px-2 sm:px-3 py-2 rounded-lg bg-slate-900 text-white hover:bg-black text-xs sm:text-sm" onclick="addToCart('${p.id}')">${lang==='fr'?'Ajouter':'Add'}</button>
           ` : `<a class="flex-1 px-3 py-2 rounded-lg bg-red-600 text-white text-center text-xs sm:text-sm" href="https://wa.me/243840468602?text=${encodeURIComponent('Bonjour Chantier.online, je souhaite un devis pour ' + p.name_fr + '. Quantité : ' + (p.minimumQuantity || '') + '. Destination : . Date souhaitée : .' )}">${lang === 'fr' ? 'Demander un devis' : 'Request a quote'}</a>`}
         </div>
       </div>
-    `).join("");
+    `;
+    }).join("");
   }
 
   // Catalog category tabs setup
