@@ -6,8 +6,12 @@ function installAccounting({app,database,requireAuthentication,requireRole,wrap,
   if(Math.abs(debit-credit)>0.005||debit<=0) fail(400,'Ecriture comptable non équilibrée');
   let e=(await client.query('INSERT INTO accounting_entry(reference,description,source_type,source_id,currency,created_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(source_type,source_id,reference) DO NOTHING RETURNING *',[reference,description,sourceType,sourceId,currency,createdBy])).rows[0];
   if(!e)e=(await client.query('SELECT * FROM accounting_entry WHERE source_type=$1 AND source_id=$2 AND reference=$3',[sourceType,sourceId,reference])).rows[0];
-  const existing=await client.query('SELECT 1 FROM accounting_line WHERE entry_id=$1 LIMIT 1',[e.id]);
-  if(!existing.rowCount) for(const l of lines) await client.query('INSERT INTO accounting_line(entry_id,account_code,description,debit,credit) VALUES($1,$2,$3,$4,$5)',[e.id,l.accountCode,l.description||null,l.debit||0,l.credit||0]);
+  const existing=await client.query('SELECT account_code,COALESCE(description,\'\') description,debit,credit FROM accounting_line WHERE entry_id=$1 ORDER BY id',[e.id]);
+  if(existing.rowCount){
+   const norm=xs=>xs.map(l=>({accountCode:String(l.account_code??l.accountCode),description:String(l.description||''),debit:Number(l.debit||0).toFixed(2),credit:Number(l.credit||0).toFixed(2)}));
+   const wanted=norm(lines),stored=norm(existing.rows);
+   if(e.currency!==currency||e.description!==description||JSON.stringify(stored)!==JSON.stringify(wanted)) fail(409,'Référence comptable déjà utilisée avec un contenu différent');
+  } else for(const l of lines) await client.query('INSERT INTO accounting_line(entry_id,account_code,description,debit,credit) VALUES($1,$2,$3,$4,$5)',[e.id,l.accountCode,l.description||null,l.debit||0,l.credit||0]);
   return e;
  }
  app.get('/api/accounting/accounts',requireAuthentication,allowed,wrap(async(req,res)=>res.json({success:true,accounts:(await database.query('SELECT * FROM accounting_account WHERE active=true ORDER BY code')).rows})));
