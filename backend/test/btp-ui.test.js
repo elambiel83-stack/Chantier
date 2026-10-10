@@ -7,7 +7,7 @@ const web=path.join(__dirname,'../../web');
 async function page(role){
  const dom=new JSDOM(fs.readFileSync(path.join(web,'operations.html'),'utf8'),{runScripts:'outside-only',url:'http://localhost/operations.html'});
  const calls=[];let accepted=false;
- const quote={id:'quote-1',revision:2,status:'sent',request:'<img src=x onerror=alert(1)>',destination:'Kolwezi',total_usd:163};
+ const quote={id:'quote-1',revision:2,status:'sent',created_at:'2026-10-10T10:00:00Z',request:'<img src=x onerror=alert(1)>',destination:'Kolwezi',total_usd:163};
  dom.window.apiCall=async (url,opts={})=>{calls.push({url,...opts});
  if(url==='/auth/me')return {user:{role}};
  if(url==='/btp/directory')return {customers:[{id:'c1',label:'Client RDC'}],vendors:[{id:'v1',label:'Transporteur'}],drivers:[]};
@@ -16,7 +16,7 @@ async function page(role){
  if(url==='/btp/quotes')return {quotes:[quote]};
  if(url==='/btp/missions')return {missions:[]};if(url==='/btp/settlements')return {settlements:[]};
  if(url==='/btp/quotes/quote-1/decision'){accepted=true;return {};}
- if(url==='/btp/quotes/quote-1')return {quote:{...quote,status:accepted?'accepted':'sent'},revisions:[{revision:2,lines:[{description:'Blocs',quantity:100,unit:'pcs'}],terms:'Livraison incluse',total_usd:163,transport_usd:20,valid_until:'2030-01-01'}]};
+ if(url==='/btp/quotes/quote-1')return {quote:{...quote,status:accepted?'accepted':'sent'},revisions:[{revision:2,lines:[{description:'Blocs',quantity:100,unit:'pcs',basePriceUsd:1.3}],terms:'Livraison incluse',subtotal_usd:130,commission_percent:10,commission_usd:13,total_usd:163,transport_usd:20,valid_until:'2030-01-01'}]};
  throw Error('Unexpected '+url);
  };
  dom.window.eval(fs.readFileSync(path.join(web,'operations.js'),'utf8'));
@@ -50,5 +50,15 @@ test('carrier interface opens assigned missions and hides quote creation',async(
  assert.equal(doc.querySelector('[data-tab="quotes"]').hidden,true);
  assert.equal(doc.getElementById('missions-panel').hidden,false);
  assert.equal(doc.getElementById('settlement-form').hidden,true);
+ }finally{dom.window.close();}
+});
+
+test('printable quote exposes A4 print/PDF action and invoice stays gated by order',async()=>{
+ const {dom,doc}=await page('customer');try{
+  doc.querySelector('[data-action="quote"]').click();await new Promise(r=>setTimeout(r,20));
+  assert.ok(doc.querySelector('[data-action="printQuote"]'));
+  assert.equal(doc.querySelector('[data-action="printInvoice"]'),null);
+  const source=fs.readFileSync(path.join(web,'operations.js'),'utf8');
+  assert.match(source,/window\.print\(\)/);assert.match(source,/@page\{size:A4/);assert.match(source,/FAC-/);assert.match(source,/DEV-/);
  }finally{dom.window.close();}
 });
