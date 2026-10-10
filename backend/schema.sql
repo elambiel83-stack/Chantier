@@ -69,7 +69,7 @@ ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
 -- matériaux...) — voir table vendor ci-dessous. Retirer/ajouter la contrainte avant de la
 -- recréer, sans quoi le second déploiement échouerait ("constraint already exists").
 ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_role_check;
-ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor'));
+ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor', 'accountant'));
 
 -- Profil partenaire (marketplace multi-vendeurs): un compte 'vendor' publie son propre
 -- catalogue (product.vendor_id) et gère la préparation de ses articles sur les commandes
@@ -418,3 +418,39 @@ CREATE INDEX IF NOT EXISTS vendor_public_profile_trades_idx ON vendor_public_pro
 ALTER TABLE btp_quote ADD COLUMN IF NOT EXISTS target_vendor_id UUID REFERENCES vendor(id);
 ALTER TABLE btp_quote ADD COLUMN IF NOT EXISTS requested_trade_id TEXT;
 CREATE INDEX IF NOT EXISTS btp_quote_target_idx ON btp_quote(target_vendor_id);
+
+
+-- Comptabilité générale: journal immuable en partie double.
+CREATE TABLE IF NOT EXISTS accounting_account (
+  code TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('asset','liability','equity','revenue','expense')),
+  active BOOLEAN NOT NULL DEFAULT true
+);
+INSERT INTO accounting_account(code,name,type) VALUES
+ ('1000','Caisse et banques','asset'),('1100','Créances clients','asset'),('2000','Dettes fournisseurs','liability'),
+ ('2100','TVA et taxes à payer','liability'),('3000','Capitaux propres','equity'),('4000','Ventes et commissions','revenue'),
+ ('4100','Transport facturé','revenue'),('5000','Achats et prestations partenaires','expense'),('5100','Frais de transport','expense'),
+ ('5200','Frais de paiement et bancaires','expense'),('5300','Autres charges','expense') ON CONFLICT(code) DO NOTHING;
+CREATE TABLE IF NOT EXISTS accounting_entry (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+ reference TEXT NOT NULL, description TEXT NOT NULL, source_type TEXT, source_id UUID,
+ currency CHAR(3) NOT NULL DEFAULT 'USD' CHECK(currency IN ('USD','CDF','EUR')),
+ status TEXT NOT NULL DEFAULT 'posted' CHECK(status IN ('draft','posted','reversed')),
+ created_by UUID REFERENCES user_account(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ UNIQUE(source_type,source_id,reference)
+);
+CREATE TABLE IF NOT EXISTS accounting_line (
+ id BIGSERIAL PRIMARY KEY, entry_id UUID NOT NULL REFERENCES accounting_entry(id) ON DELETE RESTRICT,
+ account_code TEXT NOT NULL REFERENCES accounting_account(code), description TEXT,
+ debit NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK(debit>=0), credit NUMERIC(16,2) NOT NULL DEFAULT 0 CHECK(credit>=0),
+ CHECK((debit>0 AND credit=0) OR (credit>0 AND debit=0))
+);
+CREATE INDEX IF NOT EXISTS accounting_line_entry_idx ON accounting_line(entry_id);
+CREATE INDEX IF NOT EXISTS accounting_entry_date_idx ON accounting_entry(entry_date);
+CREATE TABLE IF NOT EXISTS accounting_expense (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(), expense_date DATE NOT NULL DEFAULT CURRENT_DATE,
+ account_code TEXT NOT NULL REFERENCES accounting_account(code), description TEXT NOT NULL,
+ amount NUMERIC(16,2) NOT NULL CHECK(amount>0), currency CHAR(3) NOT NULL DEFAULT 'USD' CHECK(currency IN ('USD','CDF','EUR')),
+ payment_reference TEXT, created_by UUID NOT NULL REFERENCES user_account(id), created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
