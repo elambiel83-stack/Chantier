@@ -54,7 +54,8 @@ test('PostgreSQL engine: lifecycle, access control, stock, missions and settleme
   await check('staff',`/missions/${m.id}/status`,'PATCH',{status:'delivered',proof:'Bon signé BL001'},200);
   await check('staff',`/missions/${m.id}/status`,'PATCH',{status:'completed',proof:'Client BL001'},403);
   await check('admin',`/missions/${m.id}/status`,'PATCH',{status:'completed',proof:'Client BL001'},200);
-  const sb={orderId:o.id,vendorId:ids.vendor.vendorId,purpose:'Fourniture blocs',amountUsd:130};
+  // First partial settlement leaves $20 inside the validated $130 supplier ceiling.
+  const sb={orderId:o.id,vendorId:ids.vendor.vendorId,purpose:'Fourniture blocs',amountUsd:110};
   await check('admin','/settlements','POST',sb,409);await query("UPDATE orders SET status='completed' WHERE id=$1",[o.id]);
   const s=(await check('admin','/settlements','POST',sb,201)).settlement;
   await check('admin','/settlements','POST',sb,409);

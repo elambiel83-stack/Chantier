@@ -18,18 +18,7 @@ require('dotenv').config();
 // jetons, codes de vérification. Sentry capture le corps/les en-têtes de la requête en
 // cas d'erreur (Sentry.setupExpressErrorHandler) — sans ce filtre, une erreur survenant
 // pendant un login enverrait le mot de passe en clair à un tiers.
-const SENSITIVE_FIELDS = ['password', 'confirmpassword', 'idToken', 'identityToken', 'accessToken', 'refreshToken', 'token', 'code', 'authorization', 'cookie', 'cf-turnstile-response'];
-function scrubSensitiveData(value) {
-  if (Array.isArray(value)) return value.map(scrubSensitiveData);
-  if (value && typeof value === 'object') {
-    const scrubbed = {};
-    for (const [key, val] of Object.entries(value)) {
-      scrubbed[key] = SENSITIVE_FIELDS.includes(key.toLowerCase()) ? '[Filtered]' : scrubSensitiveData(val);
-    }
-    return scrubbed;
-  }
-  return value;
-}
+const { scrubSensitiveData, scrubSentryEvent } = require('./securityRedaction');
 // Sans SENTRY_DSN, Sentry.init n'est pas appelé: captureException reste un no-op sûr
 // (voir captureError plus bas), donc rien d'autre à garder conditionnel.
 if (process.env.SENTRY_DSN) {
@@ -39,12 +28,7 @@ if (process.env.SENTRY_DSN) {
     // Défense en profondeur: en plus du filtre ci-dessus sur nos propres appels,
     // corrige aussi ce que l'intégration Express capture automatiquement (corps et
     // en-têtes de requête) avant tout envoi à Sentry.
-    beforeSend(event) {
-      if (event.request?.data) event.request.data = scrubSensitiveData(event.request.data);
-      if (event.request?.headers?.authorization) event.request.headers.authorization = '[Filtered]';
-      if (event.request?.headers?.cookie) event.request.headers.cookie = '[Filtered]';
-      return event;
-    }
+    beforeSend: scrubSentryEvent
   });
 }
 
@@ -57,7 +41,7 @@ function captureError(error) {
 // exception) mais qu'on veut pouvoir repérer dans Sentry: CAPTCHA refusé, brute-force sur
 // un code de vérification, quota d'API dépassé...
 function captureSecurityEvent(message, extra) {
-  console.warn(`[sécurité] ${message}`, extra || '');
+  console.warn(`[sécurité] ${message}`, scrubSensitiveData(extra || {}));
   if (process.env.SENTRY_DSN) Sentry.captureMessage(message, { level: 'warning', extra: scrubSensitiveData(extra || {}) });
 }
 
@@ -1878,7 +1862,7 @@ app.post('/api/cinetpay/notify', express.urlencoded({ extended: false, limit: '1
   }
 });
 
-app.get('/api/orders', requireAuthentication, async (req, res, next) => {
+app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
   // Un partenaire ne voit que ses propres lignes de commande, jamais la commande entière
   // (qui peut contenir des articles d'autres partenaires concurrents): voir GET
   // /api/vendor/orders, qui applique ce périmètre réduit.
@@ -1920,7 +1904,7 @@ app.get('/api/orders', requireAuthentication, async (req, res, next) => {
 // Détail d'une commande (articles inclus) — même périmètre d'accès que la liste ci-dessus:
 // un customer ne voit que la sienne, un staff que celles qui lui sont affectées ou
 // disponibles, un admin toutes.
-app.get('/api/orders/:orderId', requireAuthentication, async (req, res, next) => {
+app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
   if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const filters = ['orders.id = $1'];
@@ -2074,7 +2058,7 @@ app.post('/api/import-requests', requireAuthentication, requireRole('customer'),
   }
 });
 
-app.get('/api/import-requests', requireAuthentication, async (req, res, next) => {
+app.get('/api/import-requests', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
   const status = z.enum(['submitted', 'quoted', 'compliance_cleared', 'ordered', 'delivered', 'rejected', 'cancelled']).safeParse(req.query.status);
   if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de demande invalide' });
   const filters = [];
@@ -2101,7 +2085,9 @@ app.get('/api/import-requests', requireAuthentication, async (req, res, next) =>
        ${filters.length ? `WHERE ${filters.join(' AND ')}` : ''} ORDER BY import_request.created_at DESC`,
       values
     );
-    res.json({ success: true, requests: result.rows });
+    res.json({ success: true, requests: req.auth.role === 'customer'
+      ? result.rows.map(({ staff_notes, ...request }) => request)
+      : result.rows });
   } catch (error) {
     next(error);
   }

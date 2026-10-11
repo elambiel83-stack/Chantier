@@ -20,7 +20,8 @@ jobs:
         run: npm ci
         working-directory: backend
       - name: Vérifier la syntaxe
-        run: node --check server.js
+        run: |
+          for file in *.js; do node --check "$file"; done
         working-directory: backend
       - name: Tests backend et comptables
         run: npm test
