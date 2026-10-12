@@ -69,7 +69,7 @@ ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
 -- matériaux...) — voir table vendor ci-dessous. Retirer/ajouter la contrainte avant de la
 -- recréer, sans quoi le second déploiement échouerait ("constraint already exists").
 ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_role_check;
-ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor', 'accountant'));
+ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor', 'accountant', 'site_manager', 'supplier', 'carrier', 'driver', 'support'));
 
 -- Profil partenaire (marketplace multi-vendeurs): un compte 'vendor' publie son propre
 -- catalogue (product.vendor_id) et gère la préparation de ses articles sur les commandes
