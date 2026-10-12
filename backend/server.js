@@ -777,7 +777,9 @@ function mapProductRow(row) {
     stock: row.stock_qty === null ? 0 : Number(row.stock_qty),
     // Absent (undefined) pour le catalogue MonChantier (mode sans base et produits sans
     // partenaire) — présent seulement quand product.vendor_id pointe vers un vendor actif.
-    vendorName: row.vendor_business_name || null
+    vendorName: row.vendor_business_name || null,
+    images: row.images || [],
+    specs: row.specs || []
   };
 }
 
@@ -828,7 +830,12 @@ async function findProduct(id) {
      WHERE product.id = $1 AND product.is_active = true AND (product.vendor_id IS NULL OR vendor.is_active = true)`,
     [id]
   );
-  return result.rowCount ? mapProductRow(result.rows[0]) : null;
+  if (!result.rowCount) return null;
+  const [imagesResult, specsResult] = await Promise.all([
+    database.query('SELECT url, alt_text AS alt, position FROM product_image WHERE product_id = $1 ORDER BY position, id', [id]),
+    database.query('SELECT label, value, position FROM product_spec WHERE product_id = $1 ORDER BY position, id', [id])
+  ]);
+  return mapProductRow({ ...result.rows[0], images: imagesResult.rows, specs: specsResult.rows });
 }
 
 // Regroupe les quantités demandées par produit (un même id peut apparaître plusieurs fois).
