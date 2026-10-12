@@ -25,9 +25,9 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
     if (req.auth.role === 'admin') return { sql: 'true', values: [] };
     if (type === 'quote' && req.auth.role === 'customer' && req.auth.customerId) return { sql: 'q.customer_id=$1', values: [req.auth.customerId] };
     if (type === 'mission' && req.auth.role === 'customer' && req.auth.customerId) return { sql: 'o.customer_id=$1', values: [req.auth.customerId] };
-    if (type === 'mission' && req.auth.role === 'staff') return { sql: 'm.driver_user_id=$1', values: [req.auth.userId] };
-    if (type === 'mission' && req.auth.role === 'vendor' && req.auth.vendorId) return { sql: 'm.carrier_vendor_id=$1', values: [req.auth.vendorId] };
-    if (type === 'settlement' && req.auth.role === 'vendor' && req.auth.vendorId) return { sql: 's.vendor_id=$1', values: [req.auth.vendorId] };
+    if (type === 'mission' && ['staff','driver'].includes(req.auth.role)) return { sql: 'm.driver_user_id=$1', values: [req.auth.userId] };
+    if (type === 'mission' && ['vendor','carrier','supplier'].includes(req.auth.role) && req.auth.vendorId) return { sql: 'm.carrier_vendor_id=$1', values: [req.auth.vendorId] };
+    if (type === 'settlement' && ['vendor','carrier','supplier'].includes(req.auth.role) && req.auth.vendorId) return { sql: 's.vendor_id=$1', values: [req.auth.vendorId] };
     fail(403, 'Droits insuffisants');
   };
   const publicRevision = row => row && ({ revision: row.revision, lines: row.lines.map(({ description, unit, quantity }) => ({ description, unit, quantity })), transport_usd: row.transport_usd, total_usd: row.total_usd, terms: row.terms, valid_until: row.valid_until });
@@ -159,11 +159,11 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
       const o=await queryOne(c,'SELECT * FROM orders WHERE id=$1 FOR UPDATE',[b.orderId],'Commande');
       if(!['confirmed','delivering'].includes(o.status)) fail(409,'Commande confirmée requise');
       await activeVendor(c,b.carrierVendorId);
-      if(b.driverUserId) await queryOne(c,"SELECT id FROM user_account WHERE id=$1 AND is_active=true AND role='staff'",[b.driverUserId],'Chauffeur staff actif');
+      if(b.driverUserId) await queryOne(c,"SELECT id FROM user_account WHERE id=$1 AND is_active=true AND role IN ('staff','driver')",[b.driverUserId],'Chauffeur staff actif');
       const m=(await c.query('INSERT INTO btp_mission(order_id,carrier_vendor_id,driver_user_id,vehicle,origin,destination,load_description,planned_at,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',[b.orderId,b.carrierVendorId,b.driverUserId||null,b.vehicle,b.origin,b.destination,b.loadDescription,b.plannedAt,req.auth.userId])).rows[0];await event(c,'mission',m.id,req,'assigned');return m;
     });res.status(201).json({success:true,mission});
   }));
-  app.patch('/api/btp/missions/:id/status',requireAuthentication,requireRole('admin','staff','vendor'),wrap(async(req,res)=>{
+  app.patch('/api/btp/missions/:id/status',requireAuthentication,requireRole('admin','staff','driver','vendor','carrier'),wrap(async(req,res)=>{
     const id=parse(uuid,req.params.id),b=parse(z.object({status:z.enum(['in_transit','delivered','completed','cancelled']),proof:text.optional()}).strict(),req.body);
     const mission=await transaction(async c=>{
       const f=scope(req,'mission');const m=await queryOne(c,`SELECT m.* FROM btp_mission m JOIN orders o ON o.id=m.order_id WHERE ${f.sql} AND m.id=$${f.values.length+1} FOR UPDATE OF m`,[...f.values,id],'Mission');
