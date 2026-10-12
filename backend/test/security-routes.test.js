@@ -114,3 +114,22 @@ test('specialized roles cannot cross privilege boundaries', async () => {
     assert.equal((await request(actor, '/api/import-requests')).status, 403);
   }
 });
+
+test('specialized operational roles receive only their natural read scopes', async () => {
+  // Site managers and drivers may inspect operational orders, but the fixture assigns none to them.
+  for (const actor of [9, 12]) {
+    const orders = await request(actor, '/api/orders');
+    assert.equal(orders.status, 200);
+    assert.deepEqual(orders.body.orders, []);
+  }
+  // Only site management, not drivers/support, participates in import operations.
+  assert.equal((await request(9, '/api/import-requests')).status, 200);
+  assert.equal((await request(12, '/api/import-requests')).status, 403);
+  assert.equal((await request(13, '/api/import-requests')).status, 403);
+  // Support owns the ticket workspace; operational roles do not.
+  assert.equal((await request(13, '/api/tickets')).status, 200);
+  assert.equal((await request(9, '/api/tickets')).status, 403);
+  assert.equal((await request(12, '/api/tickets')).status, 403);
+  // Support never inherits order operations.
+  assert.equal((await request(13, '/api/orders')).status, 403);
+});
