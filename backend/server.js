@@ -379,7 +379,7 @@ const appleAuthSchema = z.object({
 });
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']), reason: z.string().trim().min(5).max(500).optional() }).refine(x => x.status !== 'cancelled' || Boolean(x.reason), { message: 'Motif d’annulation requis', path: ['reason'] });
-const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor', 'accountant']) });
+const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor', 'accountant', 'site_manager', 'supplier', 'carrier', 'driver', 'support']) });
 const driverLocationSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180)
@@ -1425,7 +1425,7 @@ app.patch('/api/admin/vendors/:vendorId', requireAuthentication, requireRole('ad
 // Catalogue du partenaire (y compris ses annonces suspendues, contrairement à GET
 // /api/products): CRUD scopé à req.auth.vendorId, jamais aux produits d'un autre partenaire
 // ni au catalogue MonChantier.
-app.get('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.get('/api/vendor/products', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   try {
     const result = await database.query(
       'SELECT id, name_fr, name_en, unit, price_usd, submitted_price_usd, platform_fee_percent, pricing_status, image_url, category, stock_qty, is_active FROM product WHERE vendor_id = $1 ORDER BY id',
@@ -1437,7 +1437,7 @@ app.get('/api/vendor/products', requireAuthentication, requireRole('vendor'), re
   }
 });
 
-app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.post('/api/vendor/products', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   const parsed = vendorProductSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Produit invalide', errors: parsed.error.flatten().fieldErrors });
   try {
@@ -1456,7 +1456,7 @@ app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), r
   }
 });
 
-app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   const parsed = vendorProductUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Modification invalide', errors: parsed.error.flatten().fieldErrors });
   const fieldMap = { nameFr: 'name_fr', nameEn: 'name_en', unit: 'unit', price: 'submitted_price_usd', category: 'category', stockQty: 'stock_qty', imageUrl: 'image_url' };
@@ -1509,7 +1509,7 @@ app.patch('/api/admin/vendor-products/:productId/pricing', requireAuthentication
 // Lignes de commande à préparer par ce partenaire — jamais la commande entière (qui peut
 // contenir des articles d'autres partenaires ou de MonChantier): seuls le nécessaire pour
 // livrer (client, position) et le statut de préparation de SA ligne sont exposés.
-app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   try {
     const result = await database.query(
       `SELECT order_item.id, order_item.qty, order_item.unit_price_usd, order_item.vendor_status,
@@ -1531,7 +1531,7 @@ app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor'), requ
   }
 });
 
-app.patch('/api/vendor/order-items/:itemId/status', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.patch('/api/vendor/order-items/:itemId/status', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.itemId).success) return res.status(400).json({ success: false, message: 'Identifiant invalide' });
   const parsed = vendorItemStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
@@ -1960,7 +1960,7 @@ app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff
 // assigné (ou un admin) pendant que la commande est confirmée ou en livraison — jamais un
 // suivi permanent en arrière-plan. Chaque mise à jour efface delay_notified_at: le livreur
 // est de nouveau "vu", une éventuelle alerte de retard pourra se redéclencher plus tard.
-app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsed = driverLocationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Coordonnées invalides' });
@@ -1984,7 +1984,7 @@ app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('s
   }
 });
 
-app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsed = orderStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
@@ -2114,7 +2114,7 @@ function importRequestOwnership(req, values) {
   return ` AND assigned_to = $${values.length}`;
 }
 
-app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importQuoteSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Devis invalide', errors: parsed.error.flatten().fieldErrors });
@@ -2133,7 +2133,7 @@ app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('s
   }
 });
 
-app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importComplianceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Constat de conformité invalide : précisez les normes, le code douanier et les certificats fournisseur vérifiés', errors: parsed.error.flatten().fieldErrors });
@@ -2152,7 +2152,7 @@ app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRo
   }
 });
 
-app.patch('/api/import-requests/:id/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/import-requests/:id/status', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Transition invalide', errors: parsed.error.flatten().fieldErrors });
@@ -2382,7 +2382,7 @@ app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, ne
   }
 });
 
-app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
   try {
     const result = await database.query(
@@ -2400,7 +2400,7 @@ app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', '
 // (rouvrir un ticket fermé, le repasser 'pending'...): pas de pipeline strict à faire
 // respecter ici, et n'importe quel membre staff/admin peut agir, pas seulement l'agent
 // affecté — un ticket non réclamé doit rester traitable par toute l'équipe en attendant.
-app.patch('/api/tickets/:id/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/tickets/:id/status', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
   const parsed = ticketStatusUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
