@@ -6,7 +6,7 @@ const { PGlite } = require('@electric-sql/pglite');
   const pg = new PGlite();
   await pg.exec(fs.readFileSync(path.join(__dirname, '../../schema.sql'), 'utf8')
     .replace('CREATE EXTENSION IF NOT EXISTS pgcrypto;', ''));
-  const roles = ['customer', 'customer', 'staff', 'staff', 'admin', 'vendor', 'accountant', 'customer'];
+  const roles = ['customer', 'customer', 'staff', 'staff', 'admin', 'vendor', 'accountant', 'customer', 'site_manager', 'supplier', 'carrier', 'driver', 'support'];
   for (let i = 1; i <= roles.length; i++) {
     const suffix = String(i).padStart(12, '0');
     const customerId = `00000000-0000-4000-8000-${suffix}`;
