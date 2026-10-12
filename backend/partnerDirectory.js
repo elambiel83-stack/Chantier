@@ -10,7 +10,7 @@ const profileSchema=z.object({tradeIds:z.array(z.string().refine(x=>tradeIds.has
 function installPartnerDirectory(app,{database,requireAuthentication,requireRole}){
  const wrap=fn=>async(req,res,next)=>{try{if(!database)return res.status(503).json({message:'Base de données indisponible'});await fn(req,res);}catch(e){next(e);}};
  const publicColumns='v.id,v.business_name,v.category,p.trade_ids,p.specialties,p.zones,p.description,p.references_text,p.rate_notes,p.availability,p.updated_at';
- const visible="p.published=true AND v.is_active=true AND u.is_active=true AND u.role='vendor'";
+ const visible="p.published=true AND v.is_active=true AND u.is_active=true AND u.role IN ('vendor','supplier','carrier')";
  app.get('/api/trades',(req,res)=>res.json({success:true,trades:TRADES}));
  app.get('/api/partners',wrap(async(req,res)=>{
   const parsed=z.object({trade:z.string().refine(x=>tradeIds.has(x)).optional(),zone:z.string().trim().max(120).optional(),q:z.string().trim().max(120).optional(),availability:z.enum(['available','limited','unavailable']).optional(),page:z.coerce.number().int().min(1).max(10000).default(1)}).strict().safeParse(req.query);
@@ -30,20 +30,20 @@ function installPartnerDirectory(app,{database,requireAuthentication,requireRole
   const rows=(await database.query(`SELECT ${publicColumns} FROM vendor v JOIN vendor_public_profile p ON p.vendor_id=v.id JOIN user_account u ON u.id=v.user_id WHERE ${visible} AND v.id=$1`,[req.params.id])).rows;
   if(!rows.length)return res.status(404).json({message:'Partenaire introuvable'});res.json({success:true,partner:rows[0]});
  }));
- app.get('/api/vendor/profile',requireAuthentication,requireRole('vendor'),wrap(async(req,res)=>{
-  const v=(await database.query("SELECT v.id,v.business_name FROM vendor v JOIN user_account u ON u.id=v.user_id WHERE v.id=$1 AND v.is_active=true AND u.is_active=true AND u.role='vendor'",[req.auth.vendorId])).rows[0];
+ app.get('/api/vendor/profile',requireAuthentication,requireRole('vendor','supplier','carrier'),wrap(async(req,res)=>{
+  const v=(await database.query("SELECT v.id,v.business_name FROM vendor v JOIN user_account u ON u.id=v.user_id WHERE v.id=$1 AND v.is_active=true AND u.is_active=true AND u.role IN ('vendor','supplier','carrier')",[req.auth.vendorId])).rows[0];
   if(!v)return res.status(403).json({message:'Profil partenaire actif requis'});
   const profile=(await database.query('SELECT * FROM vendor_public_profile WHERE vendor_id=$1',[v.id])).rows[0]||null;res.json({success:true,vendor:v,profile});
  }));
- app.put('/api/vendor/profile',requireAuthentication,requireRole('vendor'),wrap(async(req,res)=>{
+ app.put('/api/vendor/profile',requireAuthentication,requireRole('vendor','supplier','carrier'),wrap(async(req,res)=>{
   const parsed=profileSchema.safeParse(req.body);if(!parsed.success)return res.status(400).json({message:'Fiche invalide : choisissez des métiers, une zone et une présentation de 20 caractères minimum'});
   const b=parsed.data;
   const result=await database.query(`INSERT INTO vendor_public_profile(vendor_id,trade_ids,specialties,zones,description,references_text,rate_notes,availability,published)
-  SELECT v.id,$2::text[],$3::text[],$4::text[],$5,$6,$7,$8,$9 FROM vendor v JOIN user_account u ON u.id=v.user_id WHERE v.id=$1 AND v.is_active=true AND u.is_active=true AND u.role='vendor'
+  SELECT v.id,$2::text[],$3::text[],$4::text[],$5,$6,$7,$8,$9 FROM vendor v JOIN user_account u ON u.id=v.user_id WHERE v.id=$1 AND v.is_active=true AND u.is_active=true AND u.role IN ('vendor','supplier','carrier')
   ON CONFLICT(vendor_id) DO UPDATE SET trade_ids=EXCLUDED.trade_ids,specialties=EXCLUDED.specialties,zones=EXCLUDED.zones,description=EXCLUDED.description,references_text=EXCLUDED.references_text,rate_notes=EXCLUDED.rate_notes,availability=EXCLUDED.availability,published=EXCLUDED.published,updated_at=now() RETURNING *`,[req.auth.vendorId,b.tradeIds,b.specialties,b.zones,b.description,b.references,b.rateNotes,b.availability,b.published]);
   if(!result.rows.length)return res.status(403).json({message:'Profil partenaire actif requis'});res.json({success:true,profile:result.rows[0]});
  }));
- app.get('/api/vendor/quote-requests',requireAuthentication,requireRole('vendor'),wrap(async(req,res)=>{
+ app.get('/api/vendor/quote-requests',requireAuthentication,requireRole('vendor','supplier','carrier'),wrap(async(req,res)=>{
   const rows=(await database.query("SELECT q.id,q.request,q.destination,q.status,q.requested_trade_id,q.created_at FROM btp_quote q JOIN vendor v ON v.id=q.target_vendor_id WHERE v.id=$1 AND v.is_active=true ORDER BY q.created_at DESC LIMIT 200",[req.auth.vendorId])).rows;
   res.json({success:true,requests:rows});
  }));
