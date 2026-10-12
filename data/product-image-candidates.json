@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Candidats photo uniquement. Aucun appariement produit, publication ou licence implicite. Validation humaine obligatoire.",
+  "description": "Candidats photo liés aux références réelles du catalogue de lancement. Aucun candidat n'est publié tant que approved=false et que la licence/correspondance n'est pas validée.",
   "items": [
     {
       "key": "briques-rouges",
@@ -11,7 +11,7 @@
       "status": "candidate",
       "note": "Type de brique à confirmer",
       "approved": false,
-      "product_id": null
+      "product_id": "CH-BRQ-ROUGE"
     },
     {
       "key": "blocs-15",
@@ -22,7 +22,7 @@
       "status": "needs_verification",
       "note": "Dimensions 15×20×40 cm non démontrées",
       "approved": false,
-      "product_id": null
+      "product_id": "CH-BLC-15"
     },
     {
       "key": "blocs-20",
@@ -33,7 +33,7 @@
       "status": "needs_verification",
       "note": "Photo de blocs 8×8×16 pouces, dimensions différentes",
       "approved": false,
-      "product_id": null
+      "product_id": "CH-BLC-20"
     },
     {
       "key": "sable-concasse",
@@ -44,7 +44,7 @@
       "status": "needs_verification",
       "note": "Vue de carrière, ne prouve pas sable concassé",
       "approved": false,
-      "product_id": null
+      "product_id": "CH-SABLE"
     },
     {
       "key": "moellons",
@@ -55,7 +55,7 @@
       "status": "missing",
       "note": "Photo de pierres de construction à sélectionner",
       "approved": false,
-      "product_id": null
+      "product_id": "CH-MOELLON"
     },
     {
       "key": "tout-venant",
@@ -66,7 +66,7 @@
       "status": "needs_verification",
       "note": "Granulométrie et composition du tout-venant non établies",
       "approved": false,
-      "product_id": null
+      "product_id": "CH-TOUT-VENANT"
     },
     {
       "key": "gravier",
@@ -77,7 +77,7 @@
       "status": "candidate",
       "note": "Granulométrie réelle à confirmer",
       "approved": false,
-      "product_id": null
+      "product_id": "CH-GRAVIER"
     }
   ]
 }
