@@ -1862,7 +1862,7 @@ app.post('/api/cinetpay/notify', express.urlencoded({ extended: false, limit: '1
   }
 });
 
-app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
+app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', 'site_manager', 'driver', 'admin'), async (req, res, next) => {
   // Un partenaire ne voit que ses propres lignes de commande, jamais la commande entière
   // (qui peut contenir des articles d'autres partenaires concurrents): voir GET
   // /api/vendor/orders, qui applique ce périmètre réduit.
@@ -1874,7 +1874,7 @@ app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', '
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`orders.customer_id = $${values.length}`);
-  } else if (req.auth.role === 'staff') {
+  } else if (['staff', 'site_manager', 'driver'].includes(req.auth.role)) {
     values.push(req.auth.userId);
     filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
   }
@@ -1904,7 +1904,7 @@ app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', '
 // Détail d'une commande (articles inclus) — même périmètre d'accès que la liste ci-dessus:
 // un customer ne voit que la sienne, un staff que celles qui lui sont affectées ou
 // disponibles, un admin toutes.
-app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
+app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', 'staff', 'site_manager', 'driver', 'admin'), async (req, res, next) => {
   if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const filters = ['orders.id = $1'];
@@ -1912,7 +1912,7 @@ app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', '
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`orders.customer_id = $${values.length}`);
-  } else if (req.auth.role === 'staff') {
+  } else if (['staff', 'site_manager', 'driver'].includes(req.auth.role)) {
     values.push(req.auth.userId);
     filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
   }
@@ -1945,7 +1945,7 @@ app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', '
   }
 });
 
-app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
+app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff', 'site_manager'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   try {
     const result = await database.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId]);
@@ -1960,13 +1960,13 @@ app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff
 // assigné (ou un admin) pendant que la commande est confirmée ou en livraison — jamais un
 // suivi permanent en arrière-plan. Chaque mise à jour efface delay_notified_at: le livreur
 // est de nouveau "vu", une éventuelle alerte de retard pourra se redéclencher plus tard.
-app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
+app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('staff', 'driver', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsed = driverLocationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Coordonnées invalides' });
   const values = [req.params.orderId, parsed.data.latitude, parsed.data.longitude];
   let ownership = '';
-  if (req.auth.role === 'staff') {
+  if (['staff', 'site_manager', 'driver'].includes(req.auth.role)) {
     values.push(req.auth.userId);
     ownership = ` AND assigned_to = $${values.length}`;
   }
@@ -1984,14 +1984,14 @@ app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('s
   }
 });
 
-app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
+app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('staff', 'site_manager', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsed = orderStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
   const allowedPreviousStatuses = { confirmed: ['pending'], delivering: ['confirmed'], completed: ['delivering'], cancelled: ['pending', 'confirmed'] };
   const values = [req.params.orderId, parsed.data.status, allowedPreviousStatuses[parsed.data.status]];
   let ownership = '';
-  if (req.auth.role === 'staff') {
+  if (['staff', 'site_manager', 'driver'].includes(req.auth.role)) {
     values.push(req.auth.userId);
     ownership = ` AND assigned_to = $${values.length}`;
   }
@@ -2058,7 +2058,7 @@ app.post('/api/import-requests', requireAuthentication, requireRole('customer'),
   }
 });
 
-app.get('/api/import-requests', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
+app.get('/api/import-requests', requireAuthentication, requireRole('customer', 'staff', 'site_manager', 'admin'), async (req, res, next) => {
   const status = z.enum(['submitted', 'quoted', 'compliance_cleared', 'ordered', 'delivered', 'rejected', 'cancelled']).safeParse(req.query.status);
   if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de demande invalide' });
   const filters = [];
@@ -2066,7 +2066,7 @@ app.get('/api/import-requests', requireAuthentication, requireRole('customer', '
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`import_request.customer_id = $${values.length}`);
-  } else if (req.auth.role === 'staff') {
+  } else if (['staff', 'site_manager', 'driver'].includes(req.auth.role)) {
     values.push(req.auth.userId);
     filters.push(`(import_request.assigned_to = $${values.length} OR (import_request.assigned_to IS NULL AND import_request.status = 'submitted'))`);
   }
@@ -2093,7 +2093,7 @@ app.get('/api/import-requests', requireAuthentication, requireRole('customer', '
   }
 });
 
-app.post('/api/import-requests/:id/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
+app.post('/api/import-requests/:id/claim', requireAuthentication, requireRole('staff', 'site_manager'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   try {
     const result = await database.query(
@@ -2114,7 +2114,7 @@ function importRequestOwnership(req, values) {
   return ` AND assigned_to = $${values.length}`;
 }
 
-app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
+app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'site_manager', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importQuoteSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Devis invalide', errors: parsed.error.flatten().fieldErrors });
@@ -2133,7 +2133,7 @@ app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('s
   }
 });
 
-app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
+app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRole('staff', 'site_manager', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importComplianceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Constat de conformité invalide : précisez les normes, le code douanier et les certificats fournisseur vérifiés', errors: parsed.error.flatten().fieldErrors });
@@ -2152,7 +2152,7 @@ app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRo
   }
 });
 
-app.patch('/api/import-requests/:id/status', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
+app.patch('/api/import-requests/:id/status', requireAuthentication, requireRole('staff', 'site_manager', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Transition invalide', errors: parsed.error.flatten().fieldErrors });
@@ -2207,7 +2207,7 @@ app.post('/api/tickets', attachOptionalAuth, async (req, res, next) => {
   // sans CAPTCHA ce point d'entrée public deviendrait un formulaire de spam ouvert.
   if (!req.auth && !(await checkTurnstile(req, res, parsed.data['cf-turnstile-response']))) return;
 
-  const isStaff = req.auth && ['staff', 'admin'].includes(req.auth.role);
+  const isStaff = req.auth && ['staff', 'support', 'admin'].includes(req.auth.role);
   let channel = 'web';
   let customerId = null;
   let contactName = null;
@@ -2278,7 +2278,7 @@ app.get('/api/tickets', requireAuthentication, async (req, res, next) => {
     if (!req.auth.customerId) return res.json({ success: true, tickets: [] });
     values.push(req.auth.customerId);
     filters.push(`ticket.customer_id = $${values.length}`);
-  } else if (!['staff', 'admin'].includes(req.auth.role)) {
+  } else if (!['staff', 'support', 'admin'].includes(req.auth.role)) {
     return res.status(403).json({ success: false, message: 'Droits insuffisants' });
   } else if (req.query.assigned === 'me') {
     values.push(req.auth.userId);
@@ -2317,7 +2317,7 @@ app.get('/api/tickets/:id', requireAuthentication, async (req, res, next) => {
     );
     const ticket = ticketResult.rows[0];
     const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
-    const isStaff = ['staff', 'admin'].includes(req.auth.role);
+    const isStaff = ['staff', 'support', 'admin'].includes(req.auth.role);
     if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
     const messagesResult = await database.query(
       'SELECT id, author_type, author_user_id, body, sent_via_channel, created_at FROM ticket_message WHERE ticket_id = $1 ORDER BY created_at ASC',
@@ -2341,7 +2341,7 @@ app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, ne
     );
     const ticket = ticketResult.rows[0];
     const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
-    const isStaff = ['staff', 'admin'].includes(req.auth.role);
+    const isStaff = ['staff', 'support', 'admin'].includes(req.auth.role);
     if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
 
     // Une réponse staff sur un ticket 'email'/'whatsapp'/'phone' part réellement vers le
@@ -2382,7 +2382,7 @@ app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, ne
   }
 });
 
-app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
+app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
   try {
     const result = await database.query(
@@ -2424,7 +2424,7 @@ app.patch('/api/tickets/:id/assign', requireAuthentication, requireRole('admin')
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Affectation invalide' });
   try {
     if (parsed.data.assigneeUserId) {
-      const staffCheck = await database.query("SELECT id FROM user_account WHERE id = $1 AND role IN ('staff', 'admin')", [parsed.data.assigneeUserId]);
+      const staffCheck = await database.query("SELECT id FROM user_account WHERE id = $1 AND role IN ('staff', 'support', 'admin')", [parsed.data.assigneeUserId]);
       if (!staffCheck.rowCount) return res.status(400).json({ success: false, message: 'Agent introuvable' });
     }
     const result = await database.query(
