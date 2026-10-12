@@ -525,3 +525,23 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_released_at TIMESTAMPTZ;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS accounting_credit_note_order_unique ON accounting_credit_note(order_id) WHERE status <> 'cancelled';
+
+
+-- Gestionnaire de catalogue administrateur: plusieurs photos et fiche technique structurée.
+CREATE TABLE IF NOT EXISTS product_image (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id TEXT NOT NULL REFERENCES product(id) ON DELETE CASCADE,
+  url TEXT NOT NULL CHECK (url ~* '^https://'),
+  alt_text TEXT,
+  position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0)
+);
+CREATE INDEX IF NOT EXISTS product_image_product_idx ON product_image(product_id, position);
+
+CREATE TABLE IF NOT EXISTS product_spec (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id TEXT NOT NULL REFERENCES product(id) ON DELETE CASCADE,
+  label TEXT NOT NULL CHECK (length(trim(label)) > 0),
+  value TEXT NOT NULL CHECK (length(trim(value)) > 0),
+  position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0)
+);
+CREATE INDEX IF NOT EXISTS product_spec_product_idx ON product_spec(product_id, position);
