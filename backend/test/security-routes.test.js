@@ -5,7 +5,7 @@ const path = require('node:path');
 const net = require('node:net');
 const jwt = require('jsonwebtoken');
 const SECRET = 'local-security-test-secret-with-at-least-32-characters';
-const roles = ['customer', 'customer', 'staff', 'staff', 'admin', 'vendor', 'accountant', 'customer'];
+const roles = ['customer', 'customer', 'staff', 'staff', 'admin', 'vendor', 'accountant', 'customer', 'site_manager', 'supplier', 'carrier', 'driver', 'support'];
 const id = (prefix, n) => `${prefix}0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 let server, base, logs = '';
 
@@ -98,5 +98,19 @@ test('accountant keeps accounting access; compliance module starts and enforces 
   for (const route of ['/api/compliance', '/api/compliance/documents', '/api/compliance/events']) {
     assert.equal((await request(5, route)).status, 200);
     assert.equal((await request(7, route)).status, 403);
+  }
+});
+
+test('specialized roles cannot cross privilege boundaries', async () => {
+  // site_manager, supplier, carrier, driver and support must never inherit admin/accounting/compliance/catalog powers.
+  for (const actor of [9, 10, 11, 12, 13]) {
+    assert.equal((await request(actor, '/api/accounting/summary')).status, 403);
+    assert.equal((await request(actor, '/api/compliance')).status, 403);
+    assert.equal((await request(actor, '/api/admin/catalog')).status, 403);
+  }
+  // Supplier/carrier do not gain access to the global order or import back office.
+  for (const actor of [10, 11]) {
+    assert.equal((await request(actor, '/api/orders')).status, 403);
+    assert.equal((await request(actor, '/api/import-requests')).status, 403);
   }
 });
