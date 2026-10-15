@@ -37,11 +37,11 @@ matériaux,construction,agrégats,sable,gravier,ciment,chantier,BTP,RDC,Congo,Ki
 
 ## URLs
 
-- **Site web (marketing)** : https://monchantier.net
-- **URL de support** : https://monchantier.net (ou une page de contact dédiée si vous en créez
+- **Site web (marketing)** : https://chantier.online
+- **URL de support** : https://chantier.online (ou une page de contact dédiée si vous en créez
   une — Apple exige une page web accessible, pas seulement une adresse e-mail)
-- **Politique de confidentialité** (obligatoire) : https://monchantier.net/privacy.html
-- **Contact support** : contact@monchantier.net
+- **Politique de confidentialité** (obligatoire) : https://chantier.online/privacy.html
+- **Contact support** : contact@chantier.online
 
 ## Copyright
 
