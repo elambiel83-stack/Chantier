@@ -69,7 +69,7 @@ ALTER TABLE user_account ADD COLUMN IF NOT EXISTS apple_sub TEXT UNIQUE;
 -- matériaux...) — voir table vendor ci-dessous. Retirer/ajouter la contrainte avant de la
 -- recréer, sans quoi le second déploiement échouerait ("constraint already exists").
 ALTER TABLE user_account DROP CONSTRAINT IF EXISTS user_account_role_check;
-ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor', 'accountant'));
+ALTER TABLE user_account ADD CONSTRAINT user_account_role_check CHECK (role IN ('customer', 'staff', 'admin', 'vendor', 'accountant', 'site_manager', 'supplier', 'carrier', 'driver', 'support'));
 
 -- Profil partenaire (marketplace multi-vendeurs): un compte 'vendor' publie son propre
 -- catalogue (product.vendor_id) et gère la préparation de ses articles sur les commandes
@@ -525,3 +525,23 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS stock_released_at TIMESTAMPTZ;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS accounting_credit_note_order_unique ON accounting_credit_note(order_id) WHERE status <> 'cancelled';
+
+
+-- Gestionnaire de catalogue administrateur: plusieurs photos et fiche technique structurée.
+CREATE TABLE IF NOT EXISTS product_image (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id TEXT NOT NULL REFERENCES product(id) ON DELETE CASCADE,
+  url TEXT NOT NULL CHECK (url ~* '^https://'),
+  alt_text TEXT,
+  position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0)
+);
+CREATE INDEX IF NOT EXISTS product_image_product_idx ON product_image(product_id, position);
+
+CREATE TABLE IF NOT EXISTS product_spec (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id TEXT NOT NULL REFERENCES product(id) ON DELETE CASCADE,
+  label TEXT NOT NULL CHECK (length(trim(label)) > 0),
+  value TEXT NOT NULL CHECK (length(trim(value)) > 0),
+  position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0)
+);
+CREATE INDEX IF NOT EXISTS product_spec_product_idx ON product_spec(product_id, position);

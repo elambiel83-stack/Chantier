@@ -8,7 +8,7 @@ const DEFAULT_API_BASE_URL = 'http://localhost:3000/api';
 export const API_CONFIG = {
   baseURL: process.env.EXPO_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL,
   timeout: 10000,
-  whatsappNumber: process.env.EXPO_PUBLIC_WHATSAPP_NUMBER || '+243999972466',
+  whatsappNumber: process.env.EXPO_PUBLIC_WHATSAPP_NUMBER || '+243840468602',
 };
 
 // Client OAuth Google: expo-auth-session accepte un identifiant par plateforme.

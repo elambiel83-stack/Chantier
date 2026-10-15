@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "description": "Audit de validation photographique : license_verified indique uniquement une licence vérifiée. approved reste false tant que la conformité produit et les crédits affichés ne sont pas confirmés. Aucune publication automatique.",
+  "items": [
+    {
+      "key": "briques-rouges",
+      "label": "Briques rouges",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Red_Brick_Wall_and_Stacked_Bricks.jpg",
+      "author": "Prince Mathew",
+      "license": "CC BY 3.0",
+      "status": "license_verified_product_pending",
+      "note": "Photographie de briques rouges; origine, format et aspect du produit réellement vendu à confirmer.",
+      "approved": false,
+      "product_id": "CH-BRQ-ROUGE",
+      "license_verified": true
+    },
+    {
+      "key": "blocs-15",
+      "label": "Blocs creux 15 cm",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Concrete_blocks_(5268484067).jpg",
+      "author": "SuSanA Secretariat",
+      "license": "à vérifier sur la page source",
+      "status": "needs_verification",
+      "note": "Dimensions 15×20×40 cm non démontrées",
+      "approved": false,
+      "product_id": "CH-BLC-15",
+      "license_verified": false
+    },
+    {
+      "key": "blocs-20",
+      "label": "Blocs creux 20 cm",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Concreteblocks.jpg",
+      "author": "Justanother",
+      "license": "CC BY-SA 3.0",
+      "status": "rejected_product_mismatch",
+      "note": "La source précise 8×8×16 pouces; ne pas présenter comme bloc 20×20×40 cm.",
+      "approved": false,
+      "product_id": "CH-BLC-20",
+      "license_verified": true
+    },
+    {
+      "key": "sable-concasse",
+      "label": "Sable concassé",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Heaps_of_aggregate_at_the_Nar_Valley_sand_and_gravel_quarry_-_geograph.org.uk_-_6169239.jpg",
+      "author": "Geograph contributor",
+      "license": "à vérifier sur la page source",
+      "status": "needs_verification",
+      "note": "Vue de carrière, ne prouve pas sable concassé",
+      "approved": false,
+      "product_id": "CH-SABLE",
+      "license_verified": false
+    },
+    {
+      "key": "moellons",
+      "label": "Moellons",
+      "source_page": "",
+      "author": "",
+      "license": "",
+      "status": "missing",
+      "note": "Photo de pierres de construction à sélectionner",
+      "approved": false,
+      "product_id": "CH-MOELLON",
+      "license_verified": false
+    },
+    {
+      "key": "tout-venant",
+      "label": "Tout-venant",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Crushed_limestone_gravel_piles_(Maxville_Limestone%2C_Mississippian%3B_quarry_near_East_Fultonham%2C_Muskingum_County%2C_Ohio%2C_USA)_3_(43229437320).jpg",
+      "author": "James St. John",
+      "license": "CC BY 2.0",
+      "status": "rejected_product_mismatch",
+      "note": "Photographie de gravier calcaire concassé; ne prouve pas la composition du tout-venant proposé.",
+      "approved": false,
+      "product_id": "CH-TOUT-VENANT",
+      "license_verified": true
+    },
+    {
+      "key": "gravier",
+      "label": "Gravier",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Gravel_pile_at_the_Old_Stone_Quarry%2C_Sevastopol%2C_Door_County%2C_Wisconsin.jpg",
+      "author": "BobbbyLight",
+      "license": "CC BY 2.0",
+      "status": "license_verified_product_pending",
+      "note": "Gravier réel photographié; calibre et nature des granulats vendus à confirmer.",
+      "approved": false,
+      "product_id": "CH-GRAVIER",
+      "license_verified": true
+    }
+  ]
+}

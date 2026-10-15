@@ -288,6 +288,7 @@
     // Créer/suspendre des partenaires reste une décision admin: le staff ne gère que les
     // commandes qui lui sont assignées, pas la marketplace elle-même.
     if (me.role === 'admin') {
+      document.getElementById('catalog-admin-link').classList.remove('hidden');
       document.getElementById('vendors-section').classList.remove('hidden');
       await loadVendors();
     }

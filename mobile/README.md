@@ -190,7 +190,7 @@ captures d'écran.
 
 ## 📞 Support
 
-WhatsApp : +243 999 972 466
+WhatsApp : +243 840 468 602
 
 ---
 

@@ -379,7 +379,7 @@ const appleAuthSchema = z.object({
 });
 const paypalCaptureSchema = z.object({ confirmationToken: z.string().min(20).max(256) });
 const orderStatusSchema = z.object({ status: z.enum(['confirmed', 'delivering', 'completed', 'cancelled']), reason: z.string().trim().min(5).max(500).optional() }).refine(x => x.status !== 'cancelled' || Boolean(x.reason), { message: 'Motif d’annulation requis', path: ['reason'] });
-const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor', 'accountant']) });
+const userRoleSchema = z.object({ role: z.enum(['customer', 'staff', 'admin', 'vendor', 'accountant', 'site_manager', 'supplier', 'carrier', 'driver', 'support']) });
 const driverLocationSchema = z.object({
   latitude: z.number().min(-90).max(90),
   longitude: z.number().min(-180).max(180)
@@ -777,7 +777,9 @@ function mapProductRow(row) {
     stock: row.stock_qty === null ? 0 : Number(row.stock_qty),
     // Absent (undefined) pour le catalogue MonChantier (mode sans base et produits sans
     // partenaire) — présent seulement quand product.vendor_id pointe vers un vendor actif.
-    vendorName: row.vendor_business_name || null
+    vendorName: row.vendor_business_name || null,
+    images: row.images || [],
+    specs: row.specs || []
   };
 }
 
@@ -828,7 +830,12 @@ async function findProduct(id) {
      WHERE product.id = $1 AND product.is_active = true AND (product.vendor_id IS NULL OR vendor.is_active = true)`,
     [id]
   );
-  return result.rowCount ? mapProductRow(result.rows[0]) : null;
+  if (!result.rowCount) return null;
+  const [imagesResult, specsResult] = await Promise.all([
+    database.query('SELECT url, alt_text AS alt, position FROM product_image WHERE product_id = $1 ORDER BY position, id', [id]),
+    database.query('SELECT label, value, position FROM product_spec WHERE product_id = $1 ORDER BY position, id', [id])
+  ]);
+  return mapProductRow({ ...result.rows[0], images: imagesResult.rows, specs: specsResult.rows });
 }
 
 // Regroupe les quantités demandées par produit (un même id peut apparaître plusieurs fois).
@@ -1425,7 +1432,7 @@ app.patch('/api/admin/vendors/:vendorId', requireAuthentication, requireRole('ad
 // Catalogue du partenaire (y compris ses annonces suspendues, contrairement à GET
 // /api/products): CRUD scopé à req.auth.vendorId, jamais aux produits d'un autre partenaire
 // ni au catalogue MonChantier.
-app.get('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.get('/api/vendor/products', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   try {
     const result = await database.query(
       'SELECT id, name_fr, name_en, unit, price_usd, submitted_price_usd, platform_fee_percent, pricing_status, image_url, category, stock_qty, is_active FROM product WHERE vendor_id = $1 ORDER BY id',
@@ -1437,7 +1444,7 @@ app.get('/api/vendor/products', requireAuthentication, requireRole('vendor'), re
   }
 });
 
-app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.post('/api/vendor/products', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   const parsed = vendorProductSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Produit invalide', errors: parsed.error.flatten().fieldErrors });
   try {
@@ -1456,7 +1463,7 @@ app.post('/api/vendor/products', requireAuthentication, requireRole('vendor'), r
   }
 });
 
-app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.patch('/api/vendor/products/:productId', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   const parsed = vendorProductUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Modification invalide', errors: parsed.error.flatten().fieldErrors });
   const fieldMap = { nameFr: 'name_fr', nameEn: 'name_en', unit: 'unit', price: 'submitted_price_usd', category: 'category', stockQty: 'stock_qty', imageUrl: 'image_url' };
@@ -1509,7 +1516,7 @@ app.patch('/api/admin/vendor-products/:productId/pricing', requireAuthentication
 // Lignes de commande à préparer par ce partenaire — jamais la commande entière (qui peut
 // contenir des articles d'autres partenaires ou de MonChantier): seuls le nécessaire pour
 // livrer (client, position) et le statut de préparation de SA ligne sont exposés.
-app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   try {
     const result = await database.query(
       `SELECT order_item.id, order_item.qty, order_item.unit_price_usd, order_item.vendor_status,
@@ -1531,7 +1538,7 @@ app.get('/api/vendor/orders', requireAuthentication, requireRole('vendor'), requ
   }
 });
 
-app.patch('/api/vendor/order-items/:itemId/status', requireAuthentication, requireRole('vendor'), requireVendorProfile, async (req, res, next) => {
+app.patch('/api/vendor/order-items/:itemId/status', requireAuthentication, requireRole('vendor', 'supplier', 'carrier'), requireVendorProfile, async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.itemId).success) return res.status(400).json({ success: false, message: 'Identifiant invalide' });
   const parsed = vendorItemStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
@@ -1862,7 +1869,7 @@ app.post('/api/cinetpay/notify', express.urlencoded({ extended: false, limit: '1
   }
 });
 
-app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
+app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', 'site_manager', 'driver', 'admin'), async (req, res, next) => {
   // Un partenaire ne voit que ses propres lignes de commande, jamais la commande entière
   // (qui peut contenir des articles d'autres partenaires concurrents): voir GET
   // /api/vendor/orders, qui applique ce périmètre réduit.
@@ -1874,9 +1881,12 @@ app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', '
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`orders.customer_id = $${values.length}`);
-  } else if (req.auth.role === 'staff') {
+  } else if (req.auth.role === 'driver') {
     values.push(req.auth.userId);
-    filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
+    filters.push(`orders.assigned_to = ${values.length}`);
+  } else if (['staff', 'site_manager'].includes(req.auth.role)) {
+    values.push(req.auth.userId);
+    filters.push(`(orders.assigned_to = ${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
   }
   if (status.success) {
     values.push(status.data);
@@ -1904,7 +1914,7 @@ app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', '
 // Détail d'une commande (articles inclus) — même périmètre d'accès que la liste ci-dessus:
 // un customer ne voit que la sienne, un staff que celles qui lui sont affectées ou
 // disponibles, un admin toutes.
-app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
+app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', 'staff', 'site_manager', 'driver', 'admin'), async (req, res, next) => {
   if (req.auth.role === 'vendor') return res.status(403).json({ success: false, message: 'Utilisez /api/vendor/orders' });
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const filters = ['orders.id = $1'];
@@ -1912,9 +1922,12 @@ app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', '
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`orders.customer_id = $${values.length}`);
-  } else if (req.auth.role === 'staff') {
+  } else if (req.auth.role === 'driver') {
     values.push(req.auth.userId);
-    filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
+    filters.push(`orders.assigned_to = ${values.length}`);
+  } else if (['staff', 'site_manager'].includes(req.auth.role)) {
+    values.push(req.auth.userId);
+    filters.push(`(orders.assigned_to = ${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
   }
   try {
     const orderResult = await database.query(
@@ -1945,7 +1958,7 @@ app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', '
   }
 });
 
-app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
+app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff', 'site_manager'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   try {
     const result = await database.query("UPDATE orders SET assigned_to = $1, updated_at = now() WHERE id = $2 AND assigned_to IS NULL AND status = 'confirmed' RETURNING id, status, assigned_to", [req.auth.userId, req.params.orderId]);
@@ -1960,13 +1973,13 @@ app.post('/api/orders/:orderId/claim', requireAuthentication, requireRole('staff
 // assigné (ou un admin) pendant que la commande est confirmée ou en livraison — jamais un
 // suivi permanent en arrière-plan. Chaque mise à jour efface delay_notified_at: le livreur
 // est de nouveau "vu", une éventuelle alerte de retard pourra se redéclencher plus tard.
-app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('staff', 'driver', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsed = driverLocationSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Coordonnées invalides' });
   const values = [req.params.orderId, parsed.data.latitude, parsed.data.longitude];
   let ownership = '';
-  if (req.auth.role === 'staff') {
+  if (['staff', 'site_manager', 'driver'].includes(req.auth.role)) {
     values.push(req.auth.userId);
     ownership = ` AND assigned_to = $${values.length}`;
   }
@@ -1984,14 +1997,14 @@ app.patch('/api/orders/:orderId/location', requireAuthentication, requireRole('s
   }
 });
 
-app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/orders/:orderId/status', requireAuthentication, requireRole('staff', 'site_manager', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
   const parsed = orderStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut de commande invalide' });
   const allowedPreviousStatuses = { confirmed: ['pending'], delivering: ['confirmed'], completed: ['delivering'], cancelled: ['pending', 'confirmed'] };
   const values = [req.params.orderId, parsed.data.status, allowedPreviousStatuses[parsed.data.status]];
   let ownership = '';
-  if (req.auth.role === 'staff') {
+  if (['staff', 'site_manager', 'driver'].includes(req.auth.role)) {
     values.push(req.auth.userId);
     ownership = ` AND assigned_to = $${values.length}`;
   }
@@ -2058,7 +2071,7 @@ app.post('/api/import-requests', requireAuthentication, requireRole('customer'),
   }
 });
 
-app.get('/api/import-requests', requireAuthentication, requireRole('customer', 'staff', 'admin'), async (req, res, next) => {
+app.get('/api/import-requests', requireAuthentication, requireRole('customer', 'staff', 'site_manager', 'admin'), async (req, res, next) => {
   const status = z.enum(['submitted', 'quoted', 'compliance_cleared', 'ordered', 'delivered', 'rejected', 'cancelled']).safeParse(req.query.status);
   if (req.query.status && !status.success) return res.status(400).json({ success: false, message: 'Statut de demande invalide' });
   const filters = [];
@@ -2066,7 +2079,7 @@ app.get('/api/import-requests', requireAuthentication, requireRole('customer', '
   if (req.auth.role === 'customer') {
     values.push(req.auth.customerId);
     filters.push(`import_request.customer_id = $${values.length}`);
-  } else if (req.auth.role === 'staff') {
+  } else if (['staff', 'site_manager', 'driver'].includes(req.auth.role)) {
     values.push(req.auth.userId);
     filters.push(`(import_request.assigned_to = $${values.length} OR (import_request.assigned_to IS NULL AND import_request.status = 'submitted'))`);
   }
@@ -2093,7 +2106,7 @@ app.get('/api/import-requests', requireAuthentication, requireRole('customer', '
   }
 });
 
-app.post('/api/import-requests/:id/claim', requireAuthentication, requireRole('staff'), async (req, res, next) => {
+app.post('/api/import-requests/:id/claim', requireAuthentication, requireRole('staff', 'site_manager'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   try {
     const result = await database.query(
@@ -2114,7 +2127,7 @@ function importRequestOwnership(req, values) {
   return ` AND assigned_to = $${values.length}`;
 }
 
-app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('staff', 'site_manager', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importQuoteSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Devis invalide', errors: parsed.error.flatten().fieldErrors });
@@ -2133,7 +2146,7 @@ app.post('/api/import-requests/:id/quote', requireAuthentication, requireRole('s
   }
 });
 
-app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRole('staff', 'site_manager', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importComplianceSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Constat de conformité invalide : précisez les normes, le code douanier et les certificats fournisseur vérifiés', errors: parsed.error.flatten().fieldErrors });
@@ -2152,7 +2165,7 @@ app.post('/api/import-requests/:id/compliance', requireAuthentication, requireRo
   }
 });
 
-app.patch('/api/import-requests/:id/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/import-requests/:id/status', requireAuthentication, requireRole('staff', 'site_manager', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de demande invalide' });
   const parsed = importStatusSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Transition invalide', errors: parsed.error.flatten().fieldErrors });
@@ -2207,7 +2220,7 @@ app.post('/api/tickets', attachOptionalAuth, async (req, res, next) => {
   // sans CAPTCHA ce point d'entrée public deviendrait un formulaire de spam ouvert.
   if (!req.auth && !(await checkTurnstile(req, res, parsed.data['cf-turnstile-response']))) return;
 
-  const isStaff = req.auth && ['staff', 'admin'].includes(req.auth.role);
+  const isStaff = req.auth && ['staff', 'support', 'admin'].includes(req.auth.role);
   let channel = 'web';
   let customerId = null;
   let contactName = null;
@@ -2278,7 +2291,7 @@ app.get('/api/tickets', requireAuthentication, async (req, res, next) => {
     if (!req.auth.customerId) return res.json({ success: true, tickets: [] });
     values.push(req.auth.customerId);
     filters.push(`ticket.customer_id = $${values.length}`);
-  } else if (!['staff', 'admin'].includes(req.auth.role)) {
+  } else if (!['staff', 'support', 'admin'].includes(req.auth.role)) {
     return res.status(403).json({ success: false, message: 'Droits insuffisants' });
   } else if (req.query.assigned === 'me') {
     values.push(req.auth.userId);
@@ -2317,7 +2330,7 @@ app.get('/api/tickets/:id', requireAuthentication, async (req, res, next) => {
     );
     const ticket = ticketResult.rows[0];
     const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
-    const isStaff = ['staff', 'admin'].includes(req.auth.role);
+    const isStaff = ['staff', 'support', 'admin'].includes(req.auth.role);
     if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
     const messagesResult = await database.query(
       'SELECT id, author_type, author_user_id, body, sent_via_channel, created_at FROM ticket_message WHERE ticket_id = $1 ORDER BY created_at ASC',
@@ -2341,7 +2354,7 @@ app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, ne
     );
     const ticket = ticketResult.rows[0];
     const isOwner = Boolean(ticket) && req.auth.role === 'customer' && ticket.customer_id === req.auth.customerId;
-    const isStaff = ['staff', 'admin'].includes(req.auth.role);
+    const isStaff = ['staff', 'support', 'admin'].includes(req.auth.role);
     if (!ticket || (!isOwner && !isStaff)) return res.status(404).json({ success: false, message: 'Ticket introuvable' });
 
     // Une réponse staff sur un ticket 'email'/'whatsapp'/'phone' part réellement vers le
@@ -2382,7 +2395,7 @@ app.post('/api/tickets/:id/messages', requireAuthentication, async (req, res, ne
   }
 });
 
-app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
   try {
     const result = await database.query(
@@ -2400,7 +2413,7 @@ app.post('/api/tickets/:id/claim', requireAuthentication, requireRole('staff', '
 // (rouvrir un ticket fermé, le repasser 'pending'...): pas de pipeline strict à faire
 // respecter ici, et n'importe quel membre staff/admin peut agir, pas seulement l'agent
 // affecté — un ticket non réclamé doit rester traitable par toute l'équipe en attendant.
-app.patch('/api/tickets/:id/status', requireAuthentication, requireRole('staff', 'admin'), async (req, res, next) => {
+app.patch('/api/tickets/:id/status', requireAuthentication, requireRole('staff', 'site_manager', 'driver', 'support', 'admin'), async (req, res, next) => {
   if (!z.string().uuid().safeParse(req.params.id).success) return res.status(400).json({ success: false, message: 'Identifiant de ticket invalide' });
   const parsed = ticketStatusUpdateSchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Statut invalide' });
@@ -2424,7 +2437,7 @@ app.patch('/api/tickets/:id/assign', requireAuthentication, requireRole('admin')
   if (!parsed.success) return res.status(400).json({ success: false, message: 'Affectation invalide' });
   try {
     if (parsed.data.assigneeUserId) {
-      const staffCheck = await database.query("SELECT id FROM user_account WHERE id = $1 AND role IN ('staff', 'admin')", [parsed.data.assigneeUserId]);
+      const staffCheck = await database.query("SELECT id FROM user_account WHERE id = $1 AND role IN ('staff', 'support', 'admin')", [parsed.data.assigneeUserId]);
       if (!staffCheck.rowCount) return res.status(400).json({ success: false, message: 'Agent introuvable' });
     }
     const result = await database.query(
@@ -2443,6 +2456,7 @@ if (process.env.SENTRY_DSN) Sentry.setupExpressErrorHandler(app);
 // Gestionnaire d'erreurs
 const accounting=require('./accounting').installAccounting({ app, database, requireAuthentication, requireRole, wrap: (fn)=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next), fail: (status,message)=>{const e=new Error(message);e.status=status;throw e;} });
 require('./btpOperations').installBtpOperations(app, { database, requireAuthentication, requireRole, accounting });
+require('./adminCatalog').installAdminCatalog(app, { database, requireAuthentication, requireRole });
 require('./partnerDirectory').installPartnerDirectory(app, { database, requireAuthentication, requireRole });
 require('./compliance').installCompliance(app, { database, requireAuthentication, requireRole });
 
