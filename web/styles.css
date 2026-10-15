@@ -150,3 +150,36 @@ footer a.text-red-600 { color: #FFAD6B !important; }
   .catalog-card, .product-art-placeholder::after, .product-technical[open] dl { animation: none !important; }
   .product-art img { transition: none; }
 }
+
+
+/* Shared shell: consistent navigation, spacing and footer across Chantier.online pages. */
+.chantier-shell-page { min-height: 100vh; display: flex; flex-direction: column; }
+.chantier-shell-page > main, .chantier-shell-page > .page-surface { flex: 1 0 auto; width: 100%; }
+.chantier-global-header { position: sticky; top: 0; z-index: 40; background: rgba(255,255,255,.97); backdrop-filter: blur(10px); }
+.chantier-global-header__inner { max-width: 72rem; margin: 0 auto; padding: 12px 16px; display: flex; align-items: center; gap: 18px; }
+.chantier-global-header .site-brand { width: 205px; }
+.chantier-global-nav { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chantier-global-nav a { padding: 9px 10px; color: var(--brand-navy); font-size: 14px; font-weight: 650; }
+.chantier-global-nav a:hover { background: #eef1f0; }
+.chantier-header-whatsapp { padding: 10px 14px; background: var(--brand-orange); color: var(--brand-navy); font-weight: 800; white-space: nowrap; }
+.chantier-legacy-header { display: none !important; }
+.chantier-global-footer { margin-top: 56px; padding: 32px 16px; background: var(--brand-navy); color: #fff; }
+.chantier-global-footer__inner { max-width: 72rem; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap; }
+.chantier-footer-tagline { margin-left: 12px; color: #D0D9E1; font-size: 14px; }
+.chantier-footer-links { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.chantier-footer-links a { color: #D0D9E1; font-size: 14px; }
+.chantier-footer-links a:hover { color: #fff; }
+.chantier-shell-page main { margin-left: auto; margin-right: auto; }
+@media (max-width: 900px) {
+  .chantier-global-header__inner { flex-wrap: wrap; }
+  .chantier-global-nav { order: 3; width: 100%; margin-left: 0; overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+  .chantier-global-nav a { white-space: nowrap; }
+  .chantier-header-whatsapp { margin-left: auto; }
+}
+@media (max-width: 520px) {
+  .chantier-global-header .site-brand { width: 175px; }
+  .chantier-global-header__inner { gap: 10px; }
+  .chantier-header-whatsapp { padding: 8px 10px; font-size: 13px; }
+  .chantier-global-footer__inner { align-items: flex-start; flex-direction: column; }
+  .chantier-footer-tagline { display: block; margin: 6px 0 0; }
+}
