@@ -34,7 +34,7 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
 
   app.get('/api/btp/directory', requireAuthentication, requireRole('admin'), wrap(async(req,res)=>{
     const customers=(await database.query("SELECT customer.id,COALESCE(customer.full_name,user_account.email) AS label FROM customer JOIN user_account ON user_account.customer_id=customer.id WHERE user_account.role='customer' AND user_account.is_active=true ORDER BY label LIMIT 500")).rows;
-    const drivers=(await database.query("SELECT id,email AS label FROM user_account WHERE role='staff' AND is_active=true ORDER BY email LIMIT 500")).rows;
+    const drivers=(await database.query("SELECT id,email AS label FROM user_account WHERE role IN ('staff','driver') AND is_active=true ORDER BY email LIMIT 500")).rows;
     const vendors=(await database.query('SELECT id,business_name AS label FROM vendor WHERE is_active=true ORDER BY business_name LIMIT 500')).rows;
     res.json({success:true,customers,drivers,vendors});
   }));
@@ -52,7 +52,7 @@ function installBtpOperations(app, { database, requireAuthentication, requireRol
       await queryOne(c, 'SELECT id FROM customer WHERE id=$1', [customerId], 'Client');
       if(b.requestedTradeId&&!b.targetVendorId) fail(400,'Partenaire requis pour un métier ciblé');
       if(b.targetVendorId){
-        const target=await queryOne(c,"SELECT p.trade_ids FROM vendor v JOIN vendor_public_profile p ON p.vendor_id=v.id JOIN user_account u ON u.id=v.user_id WHERE v.id=$1 AND v.is_active=true AND p.published=true AND u.is_active=true AND u.role='vendor' FOR SHARE OF v,p,u",[b.targetVendorId],'Partenaire publié');
+        const target=await queryOne(c,"SELECT p.trade_ids FROM vendor v JOIN vendor_public_profile p ON p.vendor_id=v.id JOIN user_account u ON u.id=v.user_id WHERE v.id=$1 AND v.is_active=true AND p.published=true AND u.is_active=true AND u.role IN ('vendor','supplier','carrier') FOR SHARE OF v,p,u",[b.targetVendorId],'Partenaire publié');
         if(b.requestedTradeId&&!target.trade_ids.includes(b.requestedTradeId)) fail(400,'Métier non proposé par ce partenaire');
       }
       const q = (await c.query('INSERT INTO btp_quote(customer_id,request,destination,created_by,target_vendor_id,requested_trade_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING *', [customerId,b.request,b.destination,req.auth.userId,b.targetVendorId||null,b.requestedTradeId||null])).rows[0];
