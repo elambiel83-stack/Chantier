@@ -5,7 +5,7 @@
 - **Nom de l'application** : MonChantier
 - **Nom du package** : `net.monchantier.app`
 - **Catégorie** : Shopping
-- **Coordonnées** : contact@monchantier.net
+- **Coordonnées** : contact@chantier.online
 
 ## Description courte (80 caractères max)
 
@@ -38,8 +38,8 @@ simplifie l'approvisionnement de votre chantier, du bon de commande à la livrai
 
 ## URLs
 
-- **Site web** : https://monchantier.net
-- **Politique de confidentialité** (obligatoire) : https://monchantier.net/privacy.html
+- **Site web** : https://chantier.online
+- **Politique de confidentialité** (obligatoire) : https://chantier.online/privacy.html
 
 ## Formulaire « Sécurité des données » (Data safety)
 
@@ -59,7 +59,7 @@ Basé sur ce que le backend collecte réellement (`backend/server.js`, `web/priv
 
 Répondre **Oui** à « Les données sont-elles chiffrées en transit ? » (HTTPS partout) et **Oui** à
 « Les utilisateurs peuvent-ils demander la suppression de leurs données ? » (voir
-`web/privacy.html` : contact@monchantier.net).
+`web/privacy.html` : contact@chantier.online).
 
 Aucun SDK publicitaire ni analytics tiers dans le code actuel — répondre **Non** aux questions
 sur le partage à des fins publicitaires/analytiques tant que ça reste le cas.
