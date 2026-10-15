@@ -21,6 +21,8 @@ const { PGlite } = require('@electric-sql/pglite');
     const staff = i === 3 ? null : `10000000-0000-4000-8000-${String(i === 1 ? 3 : 4).padStart(12, '0')}`;
     await pg.query('INSERT INTO orders(id,customer_id,status,assigned_to,delivery_latitude,delivery_longitude) VALUES($1,$2,$3,$4,-10,25)',
       [`20000000-0000-4000-8000-${suffix}`, customerId, 'confirmed', staff]);
+    await pg.query("INSERT INTO payment(order_id,provider,amount,currency,status) VALUES($1,'airtel_money',0,'USD','pending')",
+      [`20000000-0000-4000-8000-${suffix}`]);
     await pg.query('INSERT INTO import_request(id,customer_id,description,target_qty,assigned_to,staff_notes) VALUES($1,$2,$3,1,$4,$5)',
       [`30000000-0000-4000-8000-${suffix}`, customerId, `Synthetic import ${i}`, staff, 'Internal synthetic note']);
   }
