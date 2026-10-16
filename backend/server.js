@@ -87,6 +87,8 @@ const MOBILE_MONEY_PROVIDERS = {
 };
 // CinetPay (paiement Mobile Money automatisé) ne prend en charge que USD et CDF ici.
 const CINETPAY_SUPPORTED_CURRENCIES = ['USD', 'CDF'];
+const MALIPO_SUPPORTED_CURRENCIES = process.env.MALIPO_ENV === 'live' ? ['USD'] : ['USD', 'CDF'];
+const { createMalipoCharge, retrieveMalipoCharge } = require('./paymentProviders');
 const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET;
 const ACCESS_TOKEN_TTL = '15m';
 const REFRESH_TOKEN_DAYS = 30;
@@ -337,7 +339,7 @@ const orderSchema = z.object({
     email: z.string().trim().email().max(254).optional()
   }),
   currency: z.enum(['USD', 'CDF', 'EUR']),
-  paymentProvider: z.enum(['paypal', 'cinetpay', 'airtel_money', 'orange_money']),
+  paymentProvider: z.enum(['paypal', 'cinetpay', 'malipo', 'airtel_money', 'orange_money']),
   items: z.array(z.object({
     id: z.string().min(1).max(32),
     qty: z.number().int().min(1).max(10000)
@@ -1779,6 +1781,74 @@ app.post('/api/orders/:orderId/paypal/capture', async (req, res, next) => {
     if (error.status === 503) return res.status(503).json({ success: false, message: 'PayPal n’est pas configuré. Contactez-nous.' });
     next(error);
   }
+});
+
+app.post('/api/orders/:orderId/malipo', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  if (!z.string().uuid().safeParse(req.params.orderId).success) return res.status(400).json({ success: false, message: 'Identifiant de commande invalide' });
+  const network = z.enum(['VODACOM_MPESA', 'ORANGE_MONEY', 'AIRTEL_MONEY']).safeParse(req.body?.network);
+  if (!network.success) return res.status(400).json({ success: false, message: 'Réseau Mobile Money invalide' });
+  try {
+    const paymentResult = await database.query(
+      `SELECT payment.id, payment.amount, payment.currency, customer.phone
+       FROM payment JOIN orders ON orders.id = payment.order_id
+       JOIN customer ON customer.id = orders.customer_id
+       WHERE payment.order_id = $1 AND orders.customer_id = $2 AND payment.provider = 'malipo' AND payment.status = 'pending'`,
+      [req.params.orderId, req.auth.customerId]
+    );
+    if (paymentResult.rowCount !== 1) return res.status(404).json({ success: false, message: 'Paiement Malipo introuvable ou déjà traité' });
+    const payment = paymentResult.rows[0];
+    const currency = payment.currency.trim();
+    if (!MALIPO_SUPPORTED_CURRENCIES.includes(currency)) return res.status(400).json({ success: false, message: 'Devise non disponible pour Malipo dans cet environnement' });
+    const charge = await createMalipoCharge({
+      orderId: req.params.orderId,
+      amount: Number(payment.amount),
+      currency,
+      phone: payment.phone,
+      network: network.data,
+      description: `Commande Chantier ${req.params.orderId}`
+    });
+    await database.query('UPDATE payment SET provider_reference = $1, updated_at = now() WHERE id = $2', [charge.id, payment.id]);
+    res.json({ success: true, chargeId: charge.id, status: charge.status });
+  } catch (error) {
+    if (error.status === 503) return res.status(503).json({ success: false, message: 'Malipo n’est pas configuré. Contactez-nous.' });
+    next(error);
+  }
+});
+
+app.post('/api/orders/:orderId/malipo/check', requireAuthentication, requireRole('customer'), async (req, res, next) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const paymentResult = await database.query(
+      `SELECT payment.id, payment.provider_reference, payment.amount, payment.currency, payment.status
+       FROM payment JOIN orders ON orders.id = payment.order_id
+       WHERE payment.order_id = $1 AND orders.customer_id = $2 AND payment.provider = 'malipo'`,
+      [req.params.orderId, req.auth.customerId]
+    );
+    const payment = paymentResult.rows[0];
+    if (!payment?.provider_reference) return res.status(404).json({ success: false, message: 'Paiement Malipo introuvable' });
+    if (payment.status === 'paid') return res.json({ success: true, status: 'confirmed' });
+    const charge = await retrieveMalipoCharge(payment.provider_reference);
+    if (charge.status === 'succeeded') {
+      if (String(charge.currency).trim() !== payment.currency.trim() || Number(charge.amount) !== Number(payment.amount)) {
+        return res.status(409).json({ success: false, message: 'Le montant confirmé par Malipo ne correspond pas à la commande' });
+      }
+      const client = await database.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("UPDATE payment SET status='paid', updated_at=now() WHERE id=$1 AND status='pending'", [payment.id]);
+        await client.query("UPDATE orders SET status='confirmed', updated_at=now() WHERE id=$1", [req.params.orderId]);
+        await accounting.postPayment(client,{paymentId:payment.id,orderId:req.params.orderId,amount:Number(payment.amount),currency:payment.currency.trim(),createdBy:null});
+        await client.query('COMMIT');
+      } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+      return res.json({ success: true, status: 'confirmed' });
+    }
+    if (['failed','declined','expired'].includes(charge.status)) {
+      await database.query("UPDATE payment SET status='failed', updated_at=now() WHERE id=$1 AND status='pending'", [payment.id]);
+      return res.status(400).json({ success: false, status: charge.status, message: 'Le paiement Malipo n’a pas abouti' });
+    }
+    res.json({ success: true, status: charge.status || 'pending' });
+  } catch (error) { next(error); }
 });
 
 app.post('/api/orders/:orderId/cinetpay', requireAuthentication, requireRole('customer'), async (req, res, next) => {
