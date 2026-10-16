@@ -1576,6 +1576,12 @@ app.post('/api/orders', requireAuthentication, requireRole('customer'), async (r
       message: 'CinetPay ne prend pas en charge l’EUR. Sélectionnez USD ou CDF.'
     });
   }
+  if (paymentProvider === 'malipo' && !MALIPO_SUPPORTED_CURRENCIES.includes(currency)) {
+    return res.status(400).json({
+      success: false,
+      message: process.env.MALIPO_ENV === 'live' ? 'Malipo Live accepte actuellement les paiements en USD.' : 'Malipo Sandbox accepte USD ou CDF.'
+    });
+  }
   const mobileMoneyProvider = MOBILE_MONEY_PROVIDERS[paymentProvider];
   if (mobileMoneyProvider && !mobileMoneyProvider.payoutNumber) {
     return res.status(503).json({
