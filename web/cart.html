@@ -43,11 +43,18 @@
         <legend class="block text-sm font-medium mb-1">Moyen de paiement</legend>
         <div class="flex flex-wrap gap-4">
           <label><input type="radio" name="paymentProvider" value="paypal" checked> PayPal</label>
-          <label><input type="radio" name="paymentProvider" value="cinetpay"> Mobile Money (CinetPay)</label>
+          <label><input type="radio" name="paymentProvider" value="malipo"> Mobile Money RDC (Malipo)</label>
+          <label><input type="radio" name="paymentProvider" value="cinetpay"> Mobile Money (CinetPay — secours)</label>
           <label><input type="radio" name="paymentProvider" value="airtel_money"> Airtel Money</label>
           <label><input type="radio" name="paymentProvider" value="orange_money"> Orange Money</label>
         </div>
       </fieldset>
+      <div class="md:col-span-2">
+        <label class="block text-sm font-medium mb-1" for="malipo-network">Réseau Malipo</label>
+        <select id="malipo-network" name="malipoNetwork" class="w-full border rounded-lg px-3 py-2">
+          <option value="VODACOM_MPESA">Vodacom M-Pesa</option><option value="ORANGE_MONEY">Orange Money</option><option value="AIRTEL_MONEY">Airtel Money</option>
+        </select>
+      </div>
       <label class="md:col-span-2 flex gap-2 text-sm text-slate-600"><input type="checkbox" id="consent-checkbox" required> J'accepte les <a class="text-red-600 underline" href="terms.html">conditions de vente</a> et la <a class="text-red-600 underline" href="privacy.html">politique de confidentialité</a>.</label>
       <div class="md:col-span-2">
         <label class="block text-sm font-medium mb-1">Position de livraison (optionnel)</label>
