@@ -235,7 +235,7 @@ ALTER TABLE payment ADD COLUMN IF NOT EXISTS confirmation_token_hash TEXT;
 
 -- CinetPay: agrégateur Mobile Money automatisé (voir POST /orders/{orderId}/cinetpay).
 ALTER TABLE payment DROP CONSTRAINT IF EXISTS payment_provider_check;
-ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('paypal', 'cinetpay', 'airtel_money', 'orange_money'));
+ALTER TABLE payment ADD CONSTRAINT payment_provider_check CHECK (provider IN ('paypal', 'cinetpay', 'malipo', 'airtel_money', 'orange_money'));
 
 -- Code de vérification (e-mail, SMS ou WhatsApp, au choix du client). Stocké haché comme
 -- refresh_token; expire et se limite en tentatives pour résister au brute-force.
