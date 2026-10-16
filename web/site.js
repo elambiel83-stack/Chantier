@@ -442,6 +442,26 @@
           }
         });
         localStorage.setItem("lastOrderId", orderResponse.order.id);
+        if (paymentProvider === "malipo") {
+          status.textContent = lang === "fr" ? "Demande Mobile Money envoyée. Validez-la sur votre téléphone..." : "Mobile Money request sent. Approve it on your phone...";
+          const network = formData.get("malipoNetwork");
+          await window.apiCall(`/orders/${orderResponse.order.id}/malipo`, { method: "POST", body: { network } });
+          let finalStatus = "pending";
+          for (let attempt = 0; attempt < 20 && !["confirmed", "failed", "declined", "expired"].includes(finalStatus); attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            try {
+              const check = await window.apiCall(`/orders/${orderResponse.order.id}/malipo/check`, { method: "POST" });
+              finalStatus = check.status || "pending";
+            } catch (error) {
+              if (/abouti|failed|declined|expired/i.test(error.message)) throw error;
+            }
+          }
+          if (finalStatus !== "confirmed") throw new Error(lang === "fr" ? "Paiement encore en attente. Consultez Mes commandes pour vérifier son statut." : "Payment is still pending. Check My orders for its status.");
+          persistCart([]);
+          renderCart();
+          status.textContent = lang === "fr" ? `Paiement confirmé. Commande ${orderResponse.order.id} validée.` : `Payment confirmed. Order ${orderResponse.order.id} validated.`;
+          return;
+        }
         if (paymentProvider === "paypal" || paymentProvider === "cinetpay") {
           const providerLabel = paymentProvider === "paypal" ? "PayPal" : "CinetPay";
           status.textContent = lang === "fr" ? `Redirection sécurisée vers ${providerLabel}...` : `Redirecting securely to ${providerLabel}...`;
