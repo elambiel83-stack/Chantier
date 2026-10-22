@@ -1,0 +1,58 @@
+name: Import provisional product images
+
+on:
+  push:
+    branches: [feat/admin-catalog-manager]
+    paths:
+      - '.github/workflows/import-product-images.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  import-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/admin-catalog-manager
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --quiet pillow requests
+      - name: Download and normalize CC0 illustrations
+        run: |
+          cat > /tmp/import_images.py <<'PY'
+          from pathlib import Path
+          from io import BytesIO
+          import requests
+          from PIL import Image, ImageOps
+
+          OUT=Path("web/assets/products")
+          OUT.mkdir(parents=True, exist_ok=True)
+          images={
+            "briques-rouges.webp":"https://commons.wikimedia.org/wiki/Special:Redirect/file/Red_bricks_2025.jpg",
+            "blocs-beton.webp":"https://commons.wikimedia.org/wiki/Special:Redirect/file/Close-Up_of_Stacked_Concrete_Blocks_in_Sunlight.jpg",
+            "sable-construction.webp":"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sand_as_building_materials.jpg",
+            "moellons.webp":"https://commons.wikimedia.org/wiki/Special:Redirect/file/Piles_of_stones.jpg",
+            "tout-venant.webp":"https://commons.wikimedia.org/wiki/Special:Redirect/file/Sand_and_Gravel.jpg",
+            "gravier.webp":"https://commons.wikimedia.org/wiki/Special:Redirect/file/Gravel_Stones.jpg",
+          }
+          headers={"User-Agent":"Chantier.online catalog importer/1.0 (contact@chantier.online)"}
+          for name,url in images.items():
+              r=requests.get(url,headers=headers,timeout=90)
+              r.raise_for_status()
+              im=Image.open(BytesIO(r.content)).convert("RGB")
+              im=ImageOps.fit(im,(800,600),method=Image.Resampling.LANCZOS)
+              im.save(OUT/name,"WEBP",quality=84,method=6)
+              print(name, len(r.content))
+          PY
+          python /tmp/import_images.py
+      - name: Commit local catalog images
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/assets/products/
+          git diff --cached --quiet && exit 0
+          git commit -m "assets(catalog): host provisional CC0 product images locally"
+          git push origin HEAD:feat/admin-catalog-manager
