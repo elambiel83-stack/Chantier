@@ -1883,10 +1883,10 @@ app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', '
     filters.push(`orders.customer_id = $${values.length}`);
   } else if (req.auth.role === 'driver') {
     values.push(req.auth.userId);
-    filters.push(`orders.assigned_to = ${values.length}`);
+    filters.push(`orders.assigned_to = $${values.length}`);
   } else if (['staff', 'site_manager'].includes(req.auth.role)) {
     values.push(req.auth.userId);
-    filters.push(`(orders.assigned_to = ${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
+    filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
   }
   if (status.success) {
     values.push(status.data);
@@ -1924,10 +1924,10 @@ app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', '
     filters.push(`orders.customer_id = $${values.length}`);
   } else if (req.auth.role === 'driver') {
     values.push(req.auth.userId);
-    filters.push(`orders.assigned_to = ${values.length}`);
+    filters.push(`orders.assigned_to = $${values.length}`);
   } else if (['staff', 'site_manager'].includes(req.auth.role)) {
     values.push(req.auth.userId);
-    filters.push(`(orders.assigned_to = ${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
+    filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
   }
   try {
     const orderResult = await database.query(
