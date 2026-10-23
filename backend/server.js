@@ -1884,9 +1884,12 @@ app.get('/api/orders', requireAuthentication, requireRole('customer', 'staff', '
   } else if (req.auth.role === 'driver') {
     values.push(req.auth.userId);
     filters.push(`orders.assigned_to = $${values.length}`);
-  } else if (['staff', 'site_manager'].includes(req.auth.role)) {
+  } else if (req.auth.role === 'staff') {
     values.push(req.auth.userId);
     filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
+  } else if (req.auth.role === 'site_manager') {
+    values.push(req.auth.userId);
+    filters.push(`orders.assigned_to = $${values.length}`);
   }
   if (status.success) {
     values.push(status.data);
@@ -1925,9 +1928,12 @@ app.get('/api/orders/:orderId', requireAuthentication, requireRole('customer', '
   } else if (req.auth.role === 'driver') {
     values.push(req.auth.userId);
     filters.push(`orders.assigned_to = $${values.length}`);
-  } else if (['staff', 'site_manager'].includes(req.auth.role)) {
+  } else if (req.auth.role === 'staff') {
     values.push(req.auth.userId);
     filters.push(`(orders.assigned_to = $${values.length} OR (orders.assigned_to IS NULL AND orders.status IN ('confirmed', 'delivering')))`);
+  } else if (req.auth.role === 'site_manager') {
+    values.push(req.auth.userId);
+    filters.push(`orders.assigned_to = $${values.length}`);
   }
   try {
     const orderResult = await database.query(
