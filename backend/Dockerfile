@@ -5,16 +5,16 @@
 # Étage de build: python3/make/g++ ne servent qu'à compiler d'éventuels modules natifs
 # (argon2...) si aucun binaire précompilé ne correspond à cette plateforme (musl/Alpine).
 # Absents de l'image finale.
-FROM node:22-alpine AS builder
+FROM node:22.23.4-alpine AS builder
 RUN apk add --no-cache python3 make g++
 WORKDIR /app/backend
 COPY backend/package.json backend/package-lock.json ./
 RUN npm ci --omit=dev
 
-FROM node:22-alpine
+FROM node:22.23.4-alpine
 # psql: rejoue schema.sql à chaque démarrage (voir docker-entrypoint.sh). schema.sql est
 # idempotent et conçu pour ça — voir la note du README sur les migrations manuelles.
-RUN apk add --no-cache postgresql-client
+RUN apk add --no-cache ca-certificates postgresql-client
 
 WORKDIR /app/backend
 COPY --from=builder /app/backend/node_modules ./node_modules
