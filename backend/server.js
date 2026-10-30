@@ -133,6 +133,12 @@ app.use(helmet({
     }
   }
 }));
+// Webhook Meta: corps brut requis pour vérifier X-Hub-Signature-256.
+const { createWhatsAppWebhook } = require('./whatsappWebhook');
+app.use('/webhooks/whatsapp', createWhatsAppWebhook({
+  verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
+  appSecret: process.env.WHATSAPP_APP_SECRET
+}));
 app.use(express.json({ limit: '100kb' }));
 
 // Sonde de santé pour l'orchestrateur/monitoring: hors quota et hors authentification.
